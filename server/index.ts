@@ -479,7 +479,7 @@ app.post('/api/complete-therapist-profile', async (req, res) => {
     // Send data to n8n webhook
     console.log('🔔 Sending data to webhook...');
     try {
-      const webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/e7daacaf-fc75-4842-82d8-bb7ba392d178';
+      const webhookUrl = process.env.N8N_WEBHOOK_ISSUE_REPORT;
       const webhookPayload = {
         id: details.id,
         request_id: details.request_id,
@@ -2666,7 +2666,7 @@ app.post('/api/cancel-booking', async (req, res) => {
     const bookingDetails = bookingResult.rows[0];
 
     // 2. Forward everything to the n8n cancellation webhook
-    const n8nWebhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/23f4ee75-55b4-4a65-8e5b-47838e816899';
+    const n8nWebhookUrl = process.env.N8N_WEBHOOK_CANCEL_BOOKING;
 
     const webhookResponse = await fetch(n8nWebhookUrl, {
       method: 'POST',
@@ -2789,7 +2789,7 @@ app.post('/api/reschedule-booking', async (req, res) => {
     );
 
     // 3. Forward to n8n reschedule webhook
-    const n8nWebhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/9508e1da-b3b0-47d3-8c83-8a793281c1e2';
+    const n8nWebhookUrl = process.env.N8N_WEBHOOK_RESCHEDULE_BOOKING;
 
     const webhookResponse = await fetch(n8nWebhookUrl, {
       method: 'POST',
@@ -4946,7 +4946,7 @@ app.post('/api/send-booking-link', async (req, res) => {
 
     try {
       // Send to n8n webhook
-      const webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/f1ee71f4-65e3-4246-baea-372e822faed7';
+      const webhookUrl = process.env.N8N_WEBHOOK_SOS_EMAIL;
 
       const response = await fetch(webhookUrl, {
         method: 'POST',
@@ -5000,13 +5000,13 @@ app.post('/api/fetch-slots', async (req, res) => {
     console.log('Payload:', JSON.stringify(req.body, null, 2));
 
     // Updated to dynamic webhook selection provided by user
-    let webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/324275f9-00bd-4609-bdb0-307c301b322c'; // Default: Public
+    let webhookUrl = process.env.N8N_WEBHOOK_FETCH_SLOTS_PUBLIC; // Default: Public
 
     if (payload.isAdmin) {
       if (payload.isDirectBooking) {
-        webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/ebc7a183-926b-4cdb-ad3b-27f335a02e17'; // Admin Direct Slots
+        webhookUrl = process.env.N8N_WEBHOOK_FETCH_SLOTS_ADMIN_DIRECT; // Admin Direct Slots
       } else {
-        webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/b5ab584c-1203-41c0-b296-3107e2e6035e'; // Admin With Payment Slots
+        webhookUrl = process.env.N8N_WEBHOOK_FETCH_SLOTS_ADMIN_PAYMENT; // Admin With Payment Slots
       }
     }
     const response = await fetch(webhookUrl, {
@@ -5089,10 +5089,10 @@ app.post('/api/create-booking', async (req, res) => {
     try {
       // Send to n8n webhook
       // Updated to dynamic webhook selection provided by user
-      let webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/d7194a23-689f-4d95-bb35-d30fca3f15f9'; // Default: Public
+      let webhookUrl = process.env.N8N_WEBHOOK_CREATE_BOOKING_PUBLIC; // Default: Public
 
       if (payload.isAdmin && payload.skipPayment) {
-        webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/568038fa-d320-47da-8001-ea1ffeabde00'; // Admin Direct Create
+        webhookUrl = process.env.N8N_WEBHOOK_CREATE_BOOKING_ADMIN_DIRECT; // Admin Direct Create
       }
 
       const response = await fetch(webhookUrl, {

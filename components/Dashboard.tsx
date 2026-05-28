@@ -871,7 +871,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           </div>
             )
           } />
-          <Route path="*" element={<Navigate to="dashboard" replace />} />
+          <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
         </Routes>
       </div>
       {isModalOpen && <SendBookingModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />}
