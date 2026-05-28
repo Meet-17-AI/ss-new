@@ -1,0 +1,33 @@
+name: Semgrep Vibe Check Auditor
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  semgrep:
+    name: Scan and Ship Telemetry
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Semgrep Engine
+        run: python3 -m pip install semgrep
+
+      - name: Run OWASP Top 10 & Session Vulnerability Scan
+        # The scan evaluates your code and compiles errors into a local JSON payload
+        run: |
+          semgrep scan --config auto --json --json-output=semgrep-results.json || true
+
+      - name: Broadcast Scan Analytics to n8n Brain
+        env:
+          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
+        run: |
+          # Ships the generated vulnerabilities data payload across your ngrok tunnel
+          curl -X POST "$N8N_WEBHOOK_URL" \
+          -H "Content-Type: application/json" \
+          -d @semgrep-results.json
