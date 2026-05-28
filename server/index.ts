@@ -4,6 +4,8 @@ import fetch from 'node-fetch';
 import multer from 'multer';
 import { randomUUID } from 'crypto';
 import pool from '../lib/db';
+import { createServer } from 'http';
+import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from '../lib/timezone';
 import { startDashboardApiBookingSync } from './dashboardApiBookingSync';
 import { uploadFile } from '../lib/minio';
@@ -2021,10 +2023,10 @@ app.get('/api/live-sessions-count', async (req, res) => {
     let liveCount = 0;
 
     result.rows.forEach(row => {
-      const timeMatch = row.booking_invitee_time.match(/at\s+(\d+:\d+\s+[AP]M)\s+-\s+(\d+:\d+\s+[AP]M)/);
+      const timeMatch = (row.booking_invitee_time || '').match(/at\s+(\d+:\d+\s+[AP]M)\s+-\s+(\d+:\d+\s+[AP]M)/);
 
       if (timeMatch) {
-        const dateStr = row.booking_invitee_time.match(/(\w+,\s+\w+\s+\d+,\s+\d+)/)?.[1];
+        const dateStr = (row.booking_invitee_time || '').match(/(\w+,\s+\w+\s+\d+,\s+\d+)/)?.[1];
         const startTimeStr = timeMatch[1];
         const endTimeStr = timeMatch[2];
 
@@ -2242,14 +2244,14 @@ app.get('/api/dashboard/bookings', async (req, res) => {
     const nowUTC = new Date();
     const upcomingBookings = result.rows.filter(row => {
       try {
-        const timeMatch = row.booking_invitee_time.match(/at\s+(\d+):(\d+)\s+([AP]M)\s+-\s+(\d+):(\d+)\s+([AP]M)/);
+        const timeMatch = (row.booking_invitee_time || '').match(/at\s+(\d+):(\d+)\s+([AP]M)\s+-\s+(\d+):(\d+)\s+([AP]M)/);
 
         if (!timeMatch) {
           console.log('No time match for:', row.booking_invitee_time);
           return false;
         }
 
-        const dateStr = row.booking_invitee_time.match(/(\w+),\s+(\w+)\s+(\d+),\s+(\d+)/);
+        const dateStr = (row.booking_invitee_time || '').match(/(\w+),\s+(\w+)\s+(\d+),\s+(\d+)/);
 
         if (!dateStr) {
           console.log('No date match for:', row.booking_invitee_time);
@@ -2270,7 +2272,7 @@ app.get('/api/dashboard/bookings', async (req, res) => {
         if (endPeriod === 'AM' && endHour === 12) endHour = 0;
 
         // Parse timezone offset
-        const timezoneMatch = row.booking_invitee_time.match(/GMT([+-])(\d+):(\d+)/);
+        const timezoneMatch = (row.booking_invitee_time || '').match(/GMT([+-])(\d+):(\d+)/);
         let timezoneOffset = 330; // Default to IST (+5:30)
 
         if (timezoneMatch) {
@@ -3027,10 +3029,10 @@ app.get('/api/therapists-live-status', async (req, res) => {
     const liveStatus: { [key: string]: boolean } = {};
 
     result.rows.forEach(row => {
-      const timeMatch = row.booking_invitee_time.match(/at\s+(\d+:\d+\s+[AP]M)\s+-\s+(\d+:\d+\s+[AP]M)/);
+      const timeMatch = (row.booking_invitee_time || '').match(/at\s+(\d+:\d+\s+[AP]M)\s+-\s+(\d+:\d+\s+[AP]M)/);
 
       if (timeMatch) {
-        const dateStr = row.booking_invitee_time.match(/(\w+,\s+\w+\s+\d+,\s+\d+)/)?.[1];
+        const dateStr = (row.booking_invitee_time || '').match(/(\w+,\s+\w+\s+\d+,\s+\d+)/)?.[1];
         const startTimeStr = timeMatch[1];
         const endTimeStr = timeMatch[2];
 
@@ -3489,10 +3491,10 @@ app.get('/api/therapist-stats', async (req, res) => {
     // Filter upcoming sessions based on booking_invitee_time
     const nowUTC = new Date();
     const upcomingBookings = upcomingResult.rows.filter(row => {
-      const timeMatch = row.session_timings.match(/at\s+(\d+):(\d+)\s+([AP]M)\s+-\s+(\d+):(\d+)\s+([AP]M)/);
+      const timeMatch = (row.session_timings || '').match(/at\s+(\d+):(\d+)\s+([AP]M)\s+-\s+(\d+):(\d+)\s+([AP]M)/);
 
       if (timeMatch) {
-        const dateStr = row.session_timings.match(/(\w+),\s+(\w+)\s+(\d+),\s+(\d+)/);
+        const dateStr = (row.session_timings || '').match(/(\w+),\s+(\w+)\s+(\d+),\s+(\d+)/);
 
         if (dateStr) {
           const month = dateStr[2];
@@ -3509,7 +3511,7 @@ app.get('/api/therapist-stats', async (req, res) => {
           if (endPeriod === 'AM' && endHour === 12) endHour = 0;
 
           // Parse timezone offset
-          const timezoneMatch = row.session_timings.match(/GMT([+-])(\d+):(\d+)/);
+          const timezoneMatch = (row.session_timings || '').match(/GMT([+-])(\d+):(\d+)/);
           let timezoneOffset = 330; // Default to IST (+5:30)
 
           if (timezoneMatch) {
@@ -5020,6 +5022,51 @@ app.post('/api/fetch-slots', async (req, res) => {
       let jsonResponse;
       try {
         jsonResponse = JSON.parse(responseText);
+
+        // FILTER LOGIC: Remove slots on days the therapist is unavailable according to DaySchedule
+        if (Array.isArray(jsonResponse) && jsonResponse[0] && jsonResponse[0]["Available Slots"]) {
+          const therapistName = payload.therapistName;
+          
+          if (therapistName) {
+            const therapistResult = await pool.query(
+              'SELECT t.therapist_id, tr.schedule_id FROM therapists t LEFT JOIN therapist_resources tr ON t.therapist_id = tr.therapist_id WHERE t.name ILIKE $1 ORDER BY tr.schedule_id DESC NULLS LAST LIMIT 1',
+              [`%${therapistName.split(' ')[0]}%`]
+            );
+            
+            if (therapistResult.rows.length > 0 && therapistResult.rows[0].schedule_id) {
+              const scheduleId = therapistResult.rows[0].schedule_id;
+              
+              try {
+                const scheduleRes = await fetch(`https://n8n.srv1169280.hstgr.cloud/webhook/424780e4-8e10-4308-84fd-5925450cc123?scheduleId=${scheduleId}`);
+                if (scheduleRes.ok) {
+                  const scheduleData = await scheduleRes.json();
+                  if (Array.isArray(scheduleData) && scheduleData[0] && Array.isArray(scheduleData[0].availability)) {
+                    const availabilityRules = scheduleData[0].availability;
+                    
+                    const daysMap = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+                    
+                    const originalSlots = jsonResponse[0]["Available Slots"];
+                    const filteredSlots = originalSlots.filter((slotISO: string) => {
+                      const d = new Date(slotISO);
+                      const dayString = daysMap[d.getDay()];
+                      
+                      const rule = availabilityRules.find((r: any) => r.day === dayString);
+                      if (rule && rule.is_available === false) {
+                        return false; // Remove this slot
+                      }
+                      return true;
+                    });
+                    
+                    console.log(`[Fetch Slots Filter] Original slots: ${originalSlots.length}, Filtered slots: ${filteredSlots.length}`);
+                    jsonResponse[0]["Available Slots"] = filteredSlots;
+                  }
+                }
+              } catch (err) {
+                console.error('[Fetch Slots Filter] Failed to apply availability rules:', err);
+              }
+            }
+          }
+        }
       } catch (e) {
         jsonResponse = responseText;
       }
@@ -6312,14 +6359,25 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 });
 
 const PORT = 3002;
-app.listen(PORT, () => {
-  console.log(`\n✓ API server running on http://localhost:${PORT}`);
+const httpServer = createServer(app);
+
+export const io = new SocketIOServer(httpServer, {
+  cors: { origin: '*', methods: ['GET', 'POST'] }
+});
+
+io.on('connection', (socket) => {
+  console.log('[Socket.io] Client connected:', socket.id);
+  socket.on('join_room', (data) => {
+    if (data?.role === 'admin') socket.join('admin_room');
+    else if (data?.role === 'therapist' && data?.userId) socket.join('therapist_room_' + data.userId);
+  });
+});
+
+httpServer.listen(PORT, () => {
+  console.log(`\nAPI server running on http://localhost:${PORT}`);
   startDashboardApiBookingSync();
-}).on('error', (err: any) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`\n✗ Port ${PORT} is already in use. Please stop other processes or change the port.`);
-  } else {
-    console.error('\n✗ Server error:', err);
-  }
+}).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') console.error('Port is in use.');
+  else console.error('Server error', err);
   process.exit(1);
 });

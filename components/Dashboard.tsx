@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, UserCog, Calendar, CreditCard, LogOut, PieChart, MessageCircle, ChevronUp, ChevronDown, FileText, Bell, Copy, Send, Plus, User, Eye, AlertCircle, X, RefreshCw } from 'lucide-react';
+import { LayoutDashboard, Users, UserCog, Calendar, CreditCard, LogOut, PieChart, MessageCircle, ChevronUp, ChevronDown, FileText, Bell, Copy, Send, Plus, User, Eye, AlertCircle, X, RefreshCw, Settings } from 'lucide-react';
 import { Logo } from './Logo';
 import { AllClients } from './AllClients';
 import { AllTherapists } from './AllTherapists';
 import { Appointments } from './Appointments';
 import { RefundsCancellations } from './RefundsCancellations';
+import { useSocket } from '../context/SocketContext';
 import { SendBookingModal } from './SendBookingModal';
 import { CreateBooking } from './CreateBooking';
 import { CreatePage } from './CreatePage';
@@ -17,7 +18,8 @@ import { ChangePassword } from './ChangePassword';
 import { AdminEditProfile } from './AdminEditProfile';
 import { CountUpNumber } from './CountUpNumber';
 import { ReportIssuePage } from './ReportIssuePage';
-import { useUrlState } from '../hooks/useUrlState';
+import SettingsPage from './SettingsPage';
+import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { NotificationBell } from './NotificationBell';
 
 interface DashboardProps {
@@ -26,10 +28,14 @@ interface DashboardProps {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
-  // Use URL state for view and tabs
-  const [activeView, setActiveView] = useUrlState<string>('view', 'dashboard', 'adminActiveView');
-  const [appointmentTab, setAppointmentTab] = useUrlState<string>('tab', 'scheduled', undefined);
-  const [refundTab, setRefundTab] = useUrlState<string>('refundTab', 'all_payments', undefined);
+  const { socket } = useSocket();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const activeView = location.pathname.split('/')[2] || 'dashboard';
+  
+  // Keep tab states as local state since they were URL params but are now handled by component state or we can just use state
+  const [appointmentTab, setAppointmentTab] = useState<string>('scheduled');
+  const [refundTab, setRefundTab] = useState<string>('all_payments');
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedClientForView, setSelectedClientForView] = useState<any>(() => {
@@ -41,6 +47,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
   });
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [profilePictureUrl, setProfilePictureUrl] = useState<string>('');
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('googleAuth') === 'success') {
+      const newUrl = window.location.pathname + window.location.search.replace(/[?&]googleAuth=success/, '').replace(/^&/, '?');
+      window.history.replaceState({}, '', newUrl);
+      navigate('/admin/appSettings');
+      alert('Google Calendar connected successfully!');
+    }
+  }, [navigate]);
 
   useEffect(() => {
     if (activeView !== 'therapists') {
@@ -261,9 +277,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
     };
 
     fetchLiveCount();
-    const interval = setInterval(fetchLiveCount, 60000); // Update every minute
-    return () => clearInterval(interval);
   }, []);
+
+  // Socket.io Real-time Updates
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleBookingUpdate = () => {
+      console.log('[Socket] Booking updated, refreshing dashboard data...');
+      fetchDashboardData();
+    };
+
+    socket.on('booking_updated', handleBookingUpdate);
+
+    return () => {
+      socket.off('booking_updated', handleBookingUpdate);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -356,7 +387,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             style={{ backgroundColor: '#21615D' }}
             onClick={() => {
               resetAllStates();
-              setActiveView('create');
+              navigate('/admin/create');
             }}
           >
             <Plus size={20} className="text-white" />
@@ -367,7 +398,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             style={{ backgroundColor: activeView === 'dashboard' ? '#2D75795C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
-              setActiveView('dashboard');
+              navigate('/admin/dashboard');
             }}
           >
             <LayoutDashboard size={20} className={activeView === 'dashboard' ? 'text-teal-700' : 'text-gray-700'} />
@@ -378,7 +409,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             style={{ backgroundColor: (activeView === 'clients' || (activeView === 'therapists' && clientViewSource === 'clients')) ? '#2D75795C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
-              setActiveView('clients');
+              navigate('/admin/clients');
             }}
           >
             <Users size={20} className={(activeView === 'clients' || (activeView === 'therapists' && clientViewSource === 'clients')) ? 'text-teal-700' : 'text-gray-700'} />
@@ -389,7 +420,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             style={{ backgroundColor: (activeView === 'therapists' && (!selectedClientForView || clientViewSource === 'therapists')) ? '#2D75795C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
-              setActiveView('therapists');
+              navigate('/admin/therapists');
             }}
           >
             <UserCog size={20} className={(activeView === 'therapists' && (!selectedClientForView || clientViewSource === 'therapists')) ? 'text-teal-700' : 'text-gray-700'} />
@@ -400,7 +431,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             style={{ backgroundColor: (activeView === 'appointments' || (activeView === 'therapists' && clientViewSource === 'appointments')) ? '#2D75795C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
-              setActiveView('appointments');
+              navigate('/admin/appointments');
             }}
           >
             <Calendar size={20} className={(activeView === 'appointments' || (activeView === 'therapists' && clientViewSource === 'appointments')) ? 'text-teal-700' : 'text-gray-700'} />
@@ -411,7 +442,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             style={{ backgroundColor: activeView === 'refunds' ? '#2D75795C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
-              setActiveView('refunds');
+              navigate('/admin/refunds');
             }}
           >
             <CreditCard size={20} className={activeView === 'refunds' ? 'text-teal-700' : 'text-gray-700'} />
@@ -422,7 +453,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             style={{ backgroundColor: activeView === 'notifications' ? '#2D75795C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
-              setActiveView('notifications');
+              navigate('/admin/notifications');
             }}
           >
             <Bell size={20} className={activeView === 'notifications' ? 'text-teal-700' : 'text-gray-700'} />
@@ -433,27 +464,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
 
         <div className="px-4 mb-4 pt-4 border-t">
           <div
-            className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'reportIssue' ? '#2D75795C' : 'transparent' }}
-            onClick={() => {
-              resetAllStates();
-              setActiveView('reportIssue');
-            }}
-          >
-            <AlertCircle size={20} className={activeView === 'reportIssue' ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={activeView === 'reportIssue' ? 'text-teal-700' : 'text-gray-700'}>Report an Issue</span>
-          </div>
-
-          <div
             className="rounded-lg px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'audit' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'appSettings' ? '#2D75795C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
-              setActiveView('audit');
+              navigate('/admin/appSettings');
             }}
           >
-            <FileText size={20} className={activeView === 'audit' ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={activeView === 'audit' ? 'text-teal-700' : 'text-gray-700'}>Audit Logs</span>
+            <Settings size={20} className={activeView === 'appSettings' ? 'text-teal-700' : 'text-gray-700'} />
+            <span className={activeView === 'appSettings' ? 'text-teal-700' : 'text-gray-700'}>Settings</span>
           </div>
         </div>
 
@@ -464,7 +483,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               <button
                 onClick={() => {
                   setShowProfileMenu(false);
-                  setActiveView('settings');
+                  navigate('/admin/settings');
                 }}
                 className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 border-b"
               >
@@ -474,7 +493,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               <button
                 onClick={() => {
                   setShowProfileMenu(false);
-                  setActiveView('changePassword');
+                  navigate('/admin/changePassword');
                 }}
                 className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3"
               >
@@ -515,82 +534,71 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
 
       {/* Main Content */}
       <div className="flex-1 overflow-auto relative">
-        {activeView === 'settings' ? (
-          <AdminEditProfile user={user} onBack={() => setActiveView('dashboard')} />
-        ) : activeView === 'changePassword' ? (
-          <ChangePassword user={user} onBack={() => setActiveView('dashboard')} />
-        ) : activeView === 'reportIssue' ? (
-          <ReportIssuePage
-            onBack={() => setActiveView('dashboard')}
-            userInfo={{
-              username: user?.full_name || user?.username || 'Admin',
-              role: 'Admin'
-            }}
-          />
-        ) : activeView === 'create' ? (
-          <CreatePage
-            onCreateBooking={() => setActiveView('createBooking')}
-            onCreateDirectBooking={() => setActiveView('createBookingDirect')}
-            onSendBookingLink={() => setIsModalOpen(true)}
-            onAddNewTherapist={() => setActiveView('newTherapist')}
-          />
-        ) : activeView === 'createBooking' ? (
-          <CreateBooking onBack={() => setActiveView('create')} />
-        ) : activeView === 'createBookingDirect' ? (
-          <CreateBooking onBack={() => setActiveView('create')} isDirectBooking={true} />
-        ) : activeView === 'newTherapist' ? (
-          <NewTherapist onBack={() => setActiveView('create')} />
-        ) : activeView === 'clients' ? (
-          <AllClients onClientClick={(client) => {
-            setSelectedClientForView(client);
-            setClientViewSource('clients');
-            setActiveView('therapists');
-          }} onCreateBooking={() => setActiveView('createBooking')} />
-        ) : activeView === 'therapists' ? (
-          <AllTherapists
-            selectedClientProp={selectedClientForView}
-            onBack={() => {
-              const sourceView = clientViewSource || 'therapists';
-              setSelectedClientForView(null);
-              setClientViewSource('');
-              localStorage.removeItem('selectedClientForView');
-              localStorage.removeItem('clientViewSource');
-              setActiveView(sourceView);
-            }}
-          />
-        ) : activeView === 'appointments' ? (
-          <Appointments
-            initialTab={appointmentTab}
-            onClientClick={(client) => {
+        <Routes>
+          <Route path="appSettings/*" element={<SettingsPage onBack={() => navigate('/admin/dashboard')} user={user} />} />
+          <Route path="settings" element={<AdminEditProfile user={user} onBack={() => navigate('/admin/dashboard')} />} />
+          <Route path="changePassword" element={<ChangePassword user={user} onBack={() => navigate('/admin/dashboard')} />} />
+          <Route path="create" element={
+            <CreatePage
+              onCreateBooking={() => navigate('/admin/createBooking')}
+              onCreateDirectBooking={() => navigate('/admin/createBookingDirect')}
+              onSendBookingLink={() => setIsModalOpen(true)}
+              onAddNewTherapist={() => navigate('/admin/newTherapist')}
+            />
+          } />
+          <Route path="createBooking" element={<CreateBooking onBack={() => navigate('/admin/create')} />} />
+          <Route path="createBookingDirect" element={<CreateBooking onBack={() => navigate('/admin/create')} isDirectBooking={true} />} />
+          <Route path="newTherapist" element={<NewTherapist onBack={() => navigate('/admin/create')} />} />
+          <Route path="clients" element={
+            <AllClients onClientClick={(client) => {
               setSelectedClientForView(client);
-              setClientViewSource('appointments');
-              setActiveView('therapists');
-            }}
-            onCreateBooking={() => setActiveView('createBooking')}
-          />
-        ) : activeView === 'refunds' ? (
-          <RefundsCancellations initialTab={refundTab} />
-        ) : activeView === 'audit' ? (
-          <AuditLogs />
-        ) : activeView === 'notifications' ? (
-          <Notifications userRole="admin" userId={user?.id} />
-        ) : loading ? (
-          <Loader />
-        ) : (
-          <div className="p-8">
-            {/* Header */}
-            <div className="flex justify-between items-start mb-8">
-              <div>
-                <h1 className="text-3xl font-bold mb-1">Dashboard</h1>
-                <p className="text-gray-600">Welcome Back, {user?.full_name || user?.username}!</p>
-              </div>
-              <div className="flex items-center gap-4">
-                <NotificationBell
-                  userId={user?.id}
-                  userRole="admin"
-                  onViewAll={() => { resetAllStates(); setActiveView('notifications'); }}
-                />
-                <button className="flex items-center gap-2 border rounded-lg px-4 py-2 bg-white hover:bg-gray-50">
+              setClientViewSource('clients');
+              navigate('/admin/therapists');
+            }} onCreateBooking={() => navigate('/admin/createBooking')} />
+          } />
+          <Route path="therapists" element={
+            <AllTherapists
+              selectedClientProp={selectedClientForView}
+              onBack={() => {
+                const sourceView = clientViewSource || 'therapists';
+                setSelectedClientForView(null);
+                setClientViewSource('');
+                localStorage.removeItem('selectedClientForView');
+                localStorage.removeItem('clientViewSource');
+                navigate('/admin/' + sourceView);
+              }}
+            />
+          } />
+          <Route path="appointments" element={
+            <Appointments
+              initialTab={appointmentTab}
+              onClientClick={(client) => {
+                setSelectedClientForView(client);
+                setClientViewSource('appointments');
+                navigate('/admin/therapists');
+              }}
+              onCreateBooking={() => navigate('/admin/createBooking')}
+            />
+          } />
+          <Route path="refunds" element={<RefundsCancellations initialTab={refundTab} />} />
+          <Route path="notifications" element={<Notifications userRole="admin" userId={user?.id} />} />
+          
+          <Route path="dashboard" element={
+            loading ? <Loader /> : (
+              <div className="p-8">
+                {/* Header */}
+                <div className="flex justify-between items-start mb-8">
+                  <div>
+                    <h1 className="text-3xl font-bold mb-1">Dashboard</h1>
+                    <p className="text-gray-600">Welcome Back, {user?.full_name || user?.username}!</p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <NotificationBell
+                      userId={user?.id}
+                      userRole="admin"
+                      onViewAll={() => { resetAllStates(); navigate('/admin/notifications'); }}
+                    />
+                    <button className="flex items-center gap-2 border rounded-lg px-4 py-2 bg-white hover:bg-gray-50">
                   <span className="w-2 h-2 bg-green-500 rounded-full"></span>
                   <span className="text-sm font-medium">Live Sessions: {liveSessionsCount}</span>
                 </button>
@@ -692,7 +700,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                   onClick={() => {
                     if (stat.clickable) {
                       resetAllStates();
-                      setActiveView(stat.targetView);
+                      navigate(`/admin/${stat.targetView}`);
                       if (stat.targetView === 'appointments' && stat.targetTab) {
                         setAppointmentTab(stat.targetTab);
                       } else if (stat.targetView === 'refunds' && stat.targetTab) {
@@ -752,7 +760,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                                     invitee_phone: booking.client_phone
                                   });
                                   setClientViewSource('dashboard');
-                                  setActiveView('therapists');
+                                  navigate('/admin/therapists');
                                 }}
                                 className="text-teal-700 hover:underline font-medium"
                               >
@@ -861,7 +869,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             </div>
 
           </div>
-        )}
+            )
+          } />
+          <Route path="*" element={<Navigate to="dashboard" replace />} />
+        </Routes>
       </div>
       {isModalOpen && <SendBookingModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}

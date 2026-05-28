@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { LoginForm } from './components/LoginForm';
 import { HeroPanel } from './components/HeroPanel';
 import { Logo } from './components/Logo';
@@ -12,121 +13,25 @@ import { BookingConfirmation } from './components/BookingConfirmation';
 import { SessionNotesPage } from './components/SessionNotesPage';
 import CRMApp from './src/crm/App';
 import { Monitor } from 'lucide-react';
+import { useAuth } from './context/AuthContext';
+import { ProtectedRoute } from './context/ProtectedRoute';
 
-// Public routes — no auth needed
-const renderPublicRoute = (path: string) => {
-  const sosMatch = path.match(/^\/sos-view\/(.+)$/);
-  if (sosMatch) return <SOSDocumentationView token={sosMatch[1]} />;
-
-  const bookMatch = path.match(/^\/book\/(.+)$/);
-  if (bookMatch) return <PublicBookingContainer slug={bookMatch[1]} />;
-
-  const confirmMatch = path.match(/^\/booking-confirmation\/(.+)$/);
-  if (confirmMatch) return <BookingConfirmation bookingId={confirmMatch[1]} />;
-
-  const notesMatch = path.match(/^\/session-notes\/(.+)$/);
-  if (notesMatch) return <SessionNotesPage bookingId={notesMatch[1]} />;
-
-  return null;
-};
-
-const getPathForRole = (user: any): string => {
-  if (user?.role === 'sales') return '/crm';
-  if (user?.role === 'therapist') return '/therapist';
-  return '/';
-};
-
-const loadSavedUser = () => {
-  try {
-    const raw = localStorage.getItem('user');
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    // Clear stale sessions with old sales_role field
-    if ('sales_role' in parsed) {
-      localStorage.clear();
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-};
-
-const App: React.FC = () => {
-  const path = window.location.pathname;
-
-  // Handle public routes before any state
-  const publicRoute = renderPublicRoute(path);
-  if (publicRoute) return publicRoute;
-
-  // Maintenance mode (Vercel/production)
-  if (import.meta.env.VITE_VERCEL === '1') return <MaintenancePage />;
-
-  const [user, setUser] = useState<any>(loadSavedUser);
-  const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    return !!loadSavedUser() && localStorage.getItem('isLoggedIn') === 'true';
-  });
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+const LoginPage = () => {
+  const { login, isLoggedIn, user } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+    if (isLoggedIn && user) {
+      const dest = (location.state as any)?.from?.pathname || getPathForRole(user);
+      navigate(dest, { replace: true });
+    }
+  }, [isLoggedIn, user, navigate, location]);
 
   const handleLogin = (userData: any) => {
-    setUser(userData);
-    setIsLoggedIn(true);
-    localStorage.setItem('user', JSON.stringify(userData));
-    localStorage.setItem('isLoggedIn', 'true');
-    const dest = getPathForRole(userData);
-    if (window.location.pathname !== dest) {
-      window.history.pushState({}, '', dest);
-    }
+    login(userData);
   };
 
-  const handleLogout = () => {
-    setUser(null);
-    setIsLoggedIn(false);
-    localStorage.removeItem('user');
-    localStorage.removeItem('isLoggedIn');
-    window.history.pushState({}, '', '/');
-  };
-
-  if (isMobile) {
-    return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-teal-50 to-teal-100 p-6">
-        <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md text-center">
-          <div className="mb-6 flex justify-center">
-            <div className="w-20 h-20 bg-teal-100 rounded-full flex items-center justify-center">
-              <Monitor size={40} className="text-teal-700" />
-            </div>
-          </div>
-          <h1 className="text-2xl font-bold text-gray-800 mb-4">Desktop View Required</h1>
-          <p className="text-gray-600 mb-2">Mobile view is not available yet.</p>
-          <p className="text-gray-600">Please view this application on a desktop or laptop for the best experience.</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (isLoggedIn && user) {
-    const role = user.role?.toLowerCase();
-
-    // Keep URL in sync with role
-    const correctPath = getPathForRole(user);
-    if (path !== correctPath) {
-      window.history.replaceState({}, '', correctPath);
-    }
-
-    if (role === 'sales') {
-      return <CRMApp user={user} onLogout={handleLogout} />;
-    }
-    if (role === 'therapist') return <TherapistDashboard onLogout={handleLogout} user={user} />;
-    return <Dashboard onLogout={handleLogout} user={user} />;
-  }
-
-  // Login page
   return (
     <div className="min-h-screen w-full flex flex-col md:flex-row bg-white overflow-hidden">
       <div className="w-full md:w-1/2 flex flex-col justify-between p-8 md:p-12 lg:p-16 relative">
@@ -147,6 +52,124 @@ const App: React.FC = () => {
       </div>
     </div>
   );
+};
+
+const getPathForRole = (user: any): string => {
+  if (user?.role === 'sales') return '/crm';
+  if (user?.role === 'therapist') return '/therapist';
+  return '/admin';
+};
+
+const App: React.FC = () => {
+  const { logout, user } = useAuth();
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  if (import.meta.env.VITE_VERCEL === '1') return <MaintenancePage />;
+
+  if (isMobile) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-teal-50 to-teal-100 p-6">
+        <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md text-center">
+          <div className="mb-6 flex justify-center">
+            <div className="w-20 h-20 bg-teal-100 rounded-full flex items-center justify-center">
+              <Monitor size={40} className="text-teal-700" />
+            </div>
+          </div>
+          <h1 className="text-2xl font-bold text-gray-800 mb-4">Desktop View Required</h1>
+          <p className="text-gray-600 mb-2">Mobile view is not available yet.</p>
+          <p className="text-gray-600">Please view this application on a desktop or laptop for the best experience.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Routes>
+      {/* Public Routes */}
+      <Route path="/login" element={<LoginPage />} />
+      {/* Dynamic Route wrappers for public pages since react-router passes params differently */}
+      <Route path="/sos-view/*" element={<SOSRouterWrapper />} />
+      <Route path="/book/*" element={<BookRouterWrapper />} />
+      <Route path="/booking-confirmation/*" element={<ConfirmationRouterWrapper />} />
+      <Route path="/session-notes/*" element={<NotesRouterWrapper />} />
+
+      {/* Protected Routes */}
+      <Route 
+        path="/admin/*" 
+        element={
+          <ProtectedRoute allowedRoles={['admin', 'superadmin']}>
+            <Dashboard onLogout={logout} user={user} />
+          </ProtectedRoute>
+        } 
+      />
+      <Route 
+        path="/therapist/*" 
+        element={
+          <ProtectedRoute allowedRoles={['therapist']}>
+            <TherapistDashboard onLogout={logout} user={user} />
+          </ProtectedRoute>
+        } 
+      />
+      <Route 
+        path="/crm/*" 
+        element={
+          <ProtectedRoute allowedRoles={['sales']}>
+            <CRMApp user={user} onLogout={logout} />
+          </ProtectedRoute>
+        } 
+      />
+
+      {/* Root Redirect */}
+      <Route 
+        path="/" 
+        element={
+          <ProtectedRoute>
+            <RootRedirect />
+          </ProtectedRoute>
+        } 
+      />
+      
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+};
+
+const RootRedirect = () => {
+  const { user } = useAuth();
+  return <Navigate to={getPathForRole(user)} replace />;
+};
+
+// Wrappers to extract wildcards and pass them as props for backward compatibility
+import { useParams } from 'react-router-dom';
+
+const SOSRouterWrapper = () => {
+  const params = useParams();
+  const token = params['*'] || '';
+  return <SOSDocumentationView token={token} />;
+};
+
+const BookRouterWrapper = () => {
+  const params = useParams();
+  const slug = params['*'] || '';
+  return <PublicBookingContainer slug={slug} />;
+};
+
+const ConfirmationRouterWrapper = () => {
+  const params = useParams();
+  const bookingId = params['*'] || '';
+  return <BookingConfirmation bookingId={bookingId} />;
+};
+
+const NotesRouterWrapper = () => {
+  const params = useParams();
+  const bookingId = params['*'] || '';
+  return <SessionNotesPage bookingId={bookingId} />;
 };
 
 export default App;

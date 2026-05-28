@@ -4,6 +4,49 @@ import fetch from 'node-fetch';
 import multer from 'multer';
 import { randomUUID } from 'crypto';
 import pool from './_lib/db.js';
+
+// Create client_logs table if it doesn't exist
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS client_logs (
+        log_id SERIAL PRIMARY KEY,
+        booking_id VARCHAR(50),
+        client_name VARCHAR(255),
+        activity_type VARCHAR(100) NOT NULL,
+        description TEXT,
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log('✅ client_logs table verified/created successfully.');
+  } catch (err) {
+    console.error('❌ Failed to initialize client_logs table:', err);
+  }
+})();
+
+// Reusable Client Activity Logging Helper
+async function logClientActivity(
+  bookingId: string | null,
+  clientName: string | null,
+  activityType: string,
+  description: string,
+  req: any
+) {
+  try {
+    const ip = (req.headers['x-forwarded-for'] as string) || req.socket?.remoteAddress || '';
+    const userAgent = (req.headers['user-agent'] as string) || '';
+
+    await pool.query(`
+      INSERT INTO client_logs (booking_id, client_name, activity_type, description, ip_address, user_agent)
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [bookingId, clientName, activityType, description, ip, userAgent]);
+  } catch (error) {
+    console.error('❌ Failed to write client log:', error);
+  }
+}
+
 import { convertToIST, formatISOToIST } from './_lib/timezone.js';
 import { startDashboardApiBookingSync } from './_lib/dashboardApiBookingSync.js';
 import { uploadFile } from './_lib/minio.js';
@@ -67,6 +110,232 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+
+// ==================== GOOGLE CALENDAR OAUTH CONFIG & ENDPOINTS ====================
+import { google } from 'googleapis';
+import * as dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '168173993649-2v0jpmi1c4mdkjg70agbret556r7uarm.apps.googleusercontent.com';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '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';
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3004/api/auth/google/callback';
+
+const getOAuth2Client = () => {
+  return new google.auth.OAuth2(
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI
+  );
+};
+
+// Helper function to get authenticated Google API client for a therapist
+async function getAuthenticatedClient(therapist: any) {
+  const oauth2Client = getOAuth2Client();
+  oauth2Client.setCredentials({
+    refresh_token: therapist.google_refresh_token,
+    access_token: therapist.google_access_token,
+    expiry_date: therapist.google_token_expiry ? new Date(therapist.google_token_expiry).getTime() : undefined
+  });
+
+  // Force refresh to get a fresh access token and ensure it's valid
+  try {
+    const { credentials } = await oauth2Client.refreshAccessToken();
+    if (credentials.access_token) {
+      const expiryDate = credentials.expiry_date ? new Date(credentials.expiry_date) : new Date(Date.now() + 3500 * 1000);
+      
+      // Update database
+      await pool.query(
+        `UPDATE therapists 
+         SET google_access_token = $1, google_token_expiry = $2 
+         WHERE therapist_id = $3`,
+        [credentials.access_token, expiryDate, therapist.therapist_id]
+      );
+      
+      oauth2Client.setCredentials(credentials);
+    }
+  } catch (err) {
+    console.error('Error refreshing Google access token:', err);
+  }
+
+  return oauth2Client;
+}
+
+app.get('/api/auth/google', (req, res) => {
+  const therapistId = (req.query.therapistId as string) || 'SafeStories';
+  const adminRedirect = req.query.adminRedirect === 'true';
+  const oauth2Client = getOAuth2Client();
+  
+  const scopes = [
+    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/userinfo.email'
+  ];
+  
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: scopes,
+    state: JSON.stringify({ therapistId, adminRedirect })
+  });
+  
+  res.redirect(authUrl);
+});
+
+app.get('/api/auth/google/callback', async (req, res) => {
+  const { code, state } = req.query;
+  
+  if (!code) {
+    return res.status(400).send('Authorization code missing.');
+  }
+
+  let therapistId = 'SafeStories';
+  let adminRedirect = false;
+  try {
+    if (state) {
+      const parsedState = JSON.parse(state as string);
+      therapistId = parsedState.therapistId || 'SafeStories';
+      adminRedirect = !!parsedState.adminRedirect;
+    }
+  } catch (e) {
+    console.error('Error parsing OAuth state:', e);
+  }
+
+  try {
+    const oauth2Client = getOAuth2Client();
+    const { tokens } = await oauth2Client.getToken(code as string);
+    oauth2Client.setCredentials(tokens);
+
+    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const userInfo = await oauth2.userinfo.get();
+    const userEmail = userInfo.data.email || '';
+
+    if (therapistId === 'SafeStories') {
+      const checkTherapist = await pool.query(
+        'SELECT * FROM therapists WHERE therapist_id = $1',
+        ['SafeStories']
+      );
+      if (checkTherapist.rows.length === 0) {
+        await pool.query(
+          `INSERT INTO therapists (therapist_id, name, specialization, contact_info)
+           VALUES ('SafeStories', 'SafeStories', 'Platform Calendar', $1)`,
+          [userEmail || 'admin@safestories.in']
+        );
+      }
+    }
+
+    const expiryDate = tokens.expiry_date ? new Date(tokens.expiry_date) : new Date(Date.now() + 3500 * 1000);
+    
+    await pool.query(
+      `UPDATE therapists 
+       SET google_refresh_token = $1, google_access_token = $2, google_token_expiry = $3, contact_info = COALESCE(NULLIF($4, ''), contact_info)
+       WHERE therapist_id = $5`,
+      [tokens.refresh_token, tokens.access_token, expiryDate, userEmail, therapistId]
+    );
+
+    console.log(`✓ Connected Google Calendar successfully for therapist: ${therapistId} (${userEmail})`);
+
+    // Redirect to the frontend app
+    if (adminRedirect || therapistId === 'SafeStories') {
+      res.redirect('http://localhost:3004/?googleAuth=success');
+    } else {
+      res.redirect('http://localhost:3004/therapist?googleAuth=success');
+    }
+  } catch (error) {
+    console.error('❌ Error in Google OAuth callback:', error);
+    res.status(500).send('Authentication failed. Please check logs.');
+  }
+});
+
+app.post('/api/auth/google/disconnect', async (req, res) => {
+  try {
+    const { therapistId } = req.body;
+    if (!therapistId) {
+      return res.status(400).json({ error: 'Therapist ID is required' });
+    }
+
+    await pool.query(
+      `UPDATE therapists 
+       SET google_refresh_token = NULL, google_access_token = NULL, google_token_expiry = NULL 
+       WHERE therapist_id = $1`,
+      [therapistId]
+    );
+
+    res.json({ success: true, message: 'Google Calendar disconnected successfully.' });
+  } catch (error) {
+    console.error('❌ Error disconnecting calendar:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/auth/google/status', async (req, res) => {
+  try {
+    const therapistId = (req.query.therapistId as string) || 'SafeStories';
+    const result = await pool.query(
+      'SELECT google_refresh_token, contact_info FROM therapists WHERE therapist_id = $1',
+      [therapistId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ connected: false });
+    }
+
+    const therapist = result.rows[0];
+    res.json({
+      connected: !!therapist.google_refresh_token,
+      email: therapist.google_refresh_token ? therapist.contact_info : null
+    });
+  } catch (error) {
+    console.error('❌ Error checking Google connection status:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/admin/therapists-calendars', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT therapist_id, name, contact_info, profile_picture_url, 
+              google_refresh_token IS NOT NULL AS connected,
+              CASE WHEN google_refresh_token IS NOT NULL THEN contact_info ELSE NULL END AS google_email
+       FROM therapists
+       WHERE therapist_id != 'SafeStories'
+       ORDER BY name ASC`
+    );
+    
+    const list = result.rows;
+    
+    // Fetch SafeStories from DB or default
+    const ssResult = await pool.query(
+      "SELECT google_refresh_token IS NOT NULL AS connected, contact_info FROM therapists WHERE therapist_id = 'SafeStories'"
+    );
+    if (ssResult.rows.length > 0) {
+      list.unshift({
+        therapist_id: 'SafeStories',
+        name: 'SafeStories (Platform)',
+        contact_info: ssResult.rows[0].contact_info || 'admin@safestories.in',
+        profile_picture_url: '',
+        connected: ssResult.rows[0].connected,
+        google_email: ssResult.rows[0].connected ? ssResult.rows[0].contact_info : null
+      });
+    } else {
+      list.unshift({
+        therapist_id: 'SafeStories',
+        name: 'SafeStories (Platform)',
+        contact_info: 'admin@safestories.in',
+        profile_picture_url: '',
+        connected: false,
+        google_email: null
+      });
+    }
+    
+    res.json(list);
+  } catch (error) {
+    console.error('Error fetching therapist calendar list:', error);
+    res.status(500).json({ error: 'Failed to fetch therapist calendars' });
+  }
+});
+
+// ==================== END GOOGLE CALENDAR OAUTH CONFIG & ENDPOINTS ====================
+
 
 // Login endpoint
 app.post('/api/login', async (req, res) => {
@@ -2480,36 +2749,105 @@ const DAYSCHEDULE_API_KEY = 'g1NeHQjuCwM9hDTmP9Jz5GflNSRNwCL4';
 
 // DaySchedule Proxy Endpoints
 app.get('/api/dayschedule/schedules/:id', async (req, res) => {
-  console.log(`[DEBUG Proxy API] Fetching from n8n for schedule: ${req.params.id}`);
+  const { id } = req.params;
+  console.log(`[DEBUG Proxy API] Fetching schedule: ${id}`);
   try {
-    const { id } = req.params;
-    const response = await fetch(`https://n8n.srv1169280.hstgr.cloud/webhook/424780e4-8e10-4308-84fd-5925450cc123?scheduleId=${id}`);
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[DEBUG Proxy API] Webhook returned error ${response.status}:`, errorText);
-      return res.status(502).json({ error: 'N8N Webhook Error', status: response.status });
+    const isNumericId = /^\d+$/.test(id);
+    let therapistResult;
+    if (isNumericId) {
+      therapistResult = await pool.query(
+        `SELECT * FROM therapists 
+         WHERE therapist_id = $1 
+            OR therapist_id = (SELECT therapist_id FROM therapist_resources WHERE schedule_id = $2::integer LIMIT 1)`,
+        [id, parseInt(id, 10)]
+      );
+    } else {
+      therapistResult = await pool.query(
+        `SELECT * FROM therapists WHERE therapist_id = $1`,
+        [id]
+      );
     }
-    
-    const data = await response.json();
-    res.json(data);
+
+    const therapist = therapistResult.rows[0];
+    let dbAvail: any = {};
+    if (therapist) {
+      if (therapist.availability) {
+        dbAvail = typeof therapist.availability === 'string' ? JSON.parse(therapist.availability) : therapist.availability;
+      } else {
+        const defaultAvail = {
+          name: `${therapist.name}'s Schedule`,
+          time_zone: 'Asia/Calcutta',
+          availability: [
+            { "day": "sunday", "is_available": false, "times": [] },
+            { "day": "monday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+            { "day": "tuesday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+            { "day": "wednesday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+            { "day": "thursday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+            { "day": "friday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+            { "day": "saturday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] }
+          ],
+          date_overrides: [],
+          exclusions: []
+        };
+        console.log(`[GET Schedule API] Auto-initializing default availability for ${therapist.name} in DB.`);
+        try {
+          await pool.query(
+            'UPDATE therapists SET availability = $1 WHERE therapist_id = $2',
+            [JSON.stringify(defaultAvail), therapist.therapist_id]
+          );
+          dbAvail = defaultAvail;
+        } catch (dbErr) {
+          console.error('Error auto-storing availability in DB during GET API:', dbErr);
+          dbAvail = defaultAvail;
+        }
+      }
+    }
+
+    const responsePayload = {
+      id: id,
+      name: dbAvail.name || (therapist ? `${therapist.name}'s Schedule` : `Schedule`),
+      time_zone: dbAvail.time_zone || 'Asia/Calcutta',
+      availability: dbAvail.availability || [
+        { "day": "sunday", "is_available": false, "times": [] },
+        { "day": "monday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+        { "day": "tuesday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+        { "day": "wednesday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+        { "day": "thursday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+        { "day": "friday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+        { "day": "saturday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] }
+      ],
+      date_overrides: dbAvail.date_overrides || [],
+      exclusions: dbAvail.exclusions || []
+    };
+    return res.json(responsePayload);
   } catch (error: any) {
-    console.error('[DEBUG Proxy API] Internal Error during fetch/json:', error);
-    res.status(500).json({ error: 'Failed to fetch schedule from n8n webhook', detail: error.message });
+    console.error('[DEBUG Proxy API] Internal Error during fetch schedule:', error);
+    res.status(500).json({ error: 'Failed to fetch schedule', detail: error.message });
   }
 });
 
 app.put('/api/dayschedule/schedules/:id', async (req, res) => {
-  console.log(`[DEBUG Proxy API] Sending to n8n for schedule: ${req.params.id}`);
+  const { id } = req.params;
+  const body = req.body;
+  console.log(`[DEBUG Proxy API] Updating schedule: ${id}`);
   try {
-    const { id } = req.params;
-    const body = req.body;
-    
-    const response = await fetch(`https://n8n.srv1169280.hstgr.cloud/webhook/93c3afe0-88d2-47d0-8872-ab61c988bf20?scheduleId=${id}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...body, scheduleId: id })
-    });
+    const isNumericId = /^\d+$/.test(id);
+    let therapistResult;
+    if (isNumericId) {
+      therapistResult = await pool.query(
+        `SELECT * FROM therapists 
+         WHERE therapist_id = $1 
+            OR therapist_id = (SELECT therapist_id FROM therapist_resources WHERE schedule_id = $2::integer LIMIT 1)`,
+        [id, parseInt(id, 10)]
+      );
+    } else {
+      therapistResult = await pool.query(
+        `SELECT * FROM therapists WHERE therapist_id = $1`,
+        [id]
+      );
+    }
+
+    const therapist = therapistResult.rows[0];
 
     const notifyScheduleUpdate = async () => {
       try {
@@ -2526,43 +2864,37 @@ app.put('/api/dayschedule/schedules/:id', async (req, res) => {
       } catch (e) { /* non-critical */ }
     };
 
-    if (response.status === 204) {
+    if (therapist) {
+      console.log(`[DEBUG Proxy API] Saving availability to DB.`);
+      const scheduleConfig = {
+        name: body.name || `${therapist.name}'s Schedule`,
+        time_zone: body.time_zone || 'Asia/Calcutta',
+        availability: body.availability || [],
+        date_overrides: body.date_overrides || [],
+        exclusions: body.exclusions || []
+      };
+
+      await pool.query(
+        'UPDATE therapists SET availability = $1 WHERE therapist_id = $2',
+        [JSON.stringify(scheduleConfig), therapist.therapist_id]
+      );
+
       notifyScheduleUpdate();
-      return res.status(204).send();
+      return res.status(200).json({ success: true, scheduleId: id });
     }
 
-    let responseData: any = null;
-    try {
-      const text = await response.text();
-      responseData = text ? JSON.parse(text) : null;
-    } catch { /* ignore parse errors */ }
-
-    if (!response.ok) {
-      if (responseData?.code === 0) {
-        console.log(`[DEBUG Proxy API] n8n updated schedule ${id} successfully (no respond node configured)`);
-        notifyScheduleUpdate();
-        return res.json({ success: true, scheduleId: id });
-      }
-      console.error(`[DEBUG Proxy API] Webhook PUT returned error ${response.status}:`, responseData);
-      return res.status(502).json({ 
-        error: 'N8N Webhook Update Error', 
-        status: response.status,
-        detail: responseData?.message || JSON.stringify(responseData)
-      });
-    }
-
-    notifyScheduleUpdate();
-    res.json(responseData || { success: true });
+    res.status(404).json({ error: `Therapist schedule with ID ${id} not found.` });
   } catch (error: any) {
-    console.error('[DEBUG Proxy API] Internal Error during PUT fetch/json:', error);
-    res.status(500).json({ error: 'Failed to update schedule via n8n webhook', detail: error.message });
+    console.error('[DEBUG Proxy API] Internal Error during PUT:', error);
+    res.status(500).json({ error: 'Failed to update schedule', detail: error.message });
   }
 });
+
 
 // Cancel Booking Backend
 app.post('/api/cancel-booking', async (req, res) => {
   const { booking_id, reason, notify } = req.body;
-  
+
   if (!booking_id) {
     return res.status(400).json({ error: 'booking_id is required' });
   }
@@ -2572,36 +2904,149 @@ app.post('/api/cancel-booking', async (req, res) => {
   try {
     // 1. Fetch current booking details from database
     const bookingResult = await pool.query('SELECT * FROM bookings WHERE booking_id = $1', [booking_id]);
-    
+
     if (bookingResult.rows.length === 0) {
       console.warn(`[Cancel Booking] Booking ${booking_id} not found in database.`);
       return res.status(404).json({ error: 'Booking not found' });
     }
-    
+
     const bookingDetails = bookingResult.rows[0];
 
-    // 2. Forward everything to the n8n cancellation webhook
-    const n8nWebhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/23f4ee75-55b4-4a65-8e5b-47838e816899';
-    
-    const webhookResponse = await fetch(n8nWebhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...bookingDetails,
-        cancellation_reason: reason || 'No reason provided',
-        notify_participants: notify !== undefined ? notify : true,
-        cancelled_at: new Date().toISOString()
-      })
-    });
+    // 2. Perform 24-hour cancellation refund policy check
+    const start = new Date(bookingDetails.booking_start_at);
+    const now = new Date();
+    const hoursDiff = (start.getTime() - now.getTime()) / (1000 * 60 * 60);
 
-    if (!webhookResponse.ok) {
-      const errorText = await webhookResponse.text();
-      console.error(`[Cancel Booking] Webhook error (${webhookResponse.status}):`, errorText);
-      return res.status(502).json({ error: 'Failed to process cancellation via downstream webhook' });
+    let refundStatus = 'N/A';
+    let refundAmount = 0;
+    let refundId = null;
+
+    if (hoursDiff < 24) {
+      console.log(`[Cancel Booking] Cancellation within 24 hours (${hoursDiff.toFixed(2)} hrs). No refund.`);
+      refundStatus = 'No Refund';
+      refundAmount = 0;
+    } else {
+      console.log(`[Cancel Booking] Cancellation outside 24 hours (${hoursDiff.toFixed(2)} hrs). Eligible for full refund.`);
+      const paymentId = bookingDetails.invitee_payment_reference_id;
+      const paymentAmount = parseFloat(bookingDetails.invitee_payment_amount) || 0;
+
+      if (paymentId && paymentAmount > 0) {
+        console.log(`[Cancel Booking] Triggering Razorpay refund for payment: ${paymentId}`);
+        const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_test_G751156172c7';
+        const keySecret = process.env.RAZORPAY_KEY_SECRET || 'placeholder_secret';
+
+        try {
+          const rzpResponse = await fetch(`https://api.razorpay.com/v1/payments/${paymentId}/refund`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Basic ' + Buffer.from(keyId + ':' + keySecret).toString('base64')
+            },
+            body: JSON.stringify({}) // Empty body triggers full refund
+          });
+
+          if (rzpResponse.ok) {
+            const rzpData = await rzpResponse.json();
+            console.log(`[Cancel Booking] ✅ Razorpay Refund Succeeded! Refund ID: ${rzpData.id}`);
+            refundStatus = 'Completed';
+            refundAmount = paymentAmount;
+            refundId = rzpData.id;
+          } else {
+            const errorText = await rzpResponse.text();
+            console.error('[Cancel Booking] ❌ Razorpay Refund Failed:', errorText);
+            refundStatus = 'Failed';
+          }
+        } catch (rzpError) {
+          console.error('[Cancel Booking] ❌ Razorpay Refund Request error:', rzpError);
+          refundStatus = 'Failed';
+        }
+      } else {
+        console.log('[Cancel Booking] No payment reference or amount found. Marking refund as N/A.');
+        refundStatus = 'N/A';
+      }
     }
 
-    console.log(`[Cancel Booking] Successfully forwarded cancellation to webhook: ${booking_id}`);
+    // 3. Update bookings table
+    await pool.query(
+      `UPDATE bookings 
+       SET booking_status = 'cancelled', 
+           refund_status = $1, 
+           refund_amount = $2 
+       WHERE booking_id = $3`,
+      [refundStatus, refundAmount, booking_id]
+    );
 
+    // Log the client cancellation activity in client_logs
+    await logClientActivity(
+      booking_id,
+      bookingDetails.invitee_name,
+      'client_cancellation',
+      `Client cancelled their session from the check-in URL. Reason: ${reason || 'No reason provided'}. Refund policy: ${refundStatus === 'Completed' ? 'Full Refund Processed' : refundStatus === 'No Refund' ? 'No Refund (Under 24h)' : 'N/A'}`,
+      req
+    );
+
+    // 4. Log in refund_cancellation_table
+    try {
+      await pool.query(
+        `INSERT INTO refund_cancellation_table (
+          client_name, session_id, session_name, session_timings, payment_id, refund_status, refund_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          bookingDetails.invitee_name,
+          booking_id,
+          bookingDetails.booking_resource_name || 'Therapy Session',
+          bookingDetails.booking_start_at,
+          bookingDetails.invitee_payment_reference_id || null,
+          refundStatus,
+          refundId
+        ]
+      );
+      console.log(`[Cancel Booking] ✅ refund_cancellation_table logged successfully.`);
+    } catch (dbErr) {
+      console.error('[Cancel Booking] Failed inserting cancellation log:', dbErr);
+    }
+
+    // 5. Log in audit logs
+    try {
+      await pool.query(
+        `INSERT INTO audit_logs (therapist_id, therapist_name, action_type, action_description, client_name, timestamp)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          bookingDetails.therapist_id || null,
+          bookingDetails.booking_host_name || 'SafeStories',
+          'booking_cancel',
+          `Cancelled session${refundStatus === 'Completed' ? ' with Full Refund' : refundStatus === 'No Refund' ? ' without refund (under 24h)' : ''}${reason ? ': ' + reason : ''}`,
+          bookingDetails.invitee_name,
+          new Date()
+        ]
+      );
+    } catch (auditErr) {
+      console.error('[Cancel Booking] Failed writing audit log:', auditErr);
+    }
+
+    // 6. Forward everything to the n8n cancellation webhook
+    const n8nWebhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/23f4ee75-55b4-4a65-8e5b-47838e816899';
+
+    try {
+      await fetch(n8nWebhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...bookingDetails,
+          cancellation_reason: reason || 'No reason provided',
+          notify_participants: notify !== undefined ? notify : true,
+          cancelled_at: new Date().toISOString(),
+          refund_status: refundStatus,
+          refund_amount: refundAmount,
+          refund_id: refundId
+        })
+      });
+      console.log(`[Cancel Booking] Successfully forwarded cancellation to webhook: ${booking_id}`);
+    } catch (webhookErr) {
+      console.error('[Cancel Booking] Webhook error:', webhookErr);
+    }
+
+    // Notify all admins about cancellation
     const adminsForCancel = await pool.query("SELECT id FROM users WHERE role = 'admin'");
     for (const admin of adminsForCancel.rows) {
       await pool.query(
@@ -2632,11 +3077,10 @@ app.post('/api/cancel-booking', async (req, res) => {
       }
     }
 
-    res.json({ success: true, message: 'Booking cancellation forwarded successfully' });
-
-  } catch (error: any) {
-    console.error('[Cancel Booking] Error:', error);
-    res.status(500).json({ error: 'Internal server error', detail: error.message });
+    res.json({ success: true, message: 'Booking cancellation completed successfully', refund_status: refundStatus, refund_amount: refundAmount });
+  } catch (error) {
+    console.error('❌ Error in cancel-booking endpoint:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -2867,6 +3311,143 @@ app.get('/api/appointments', async (req, res) => {
   }
 });
 
+// Get all therapies
+app.get('/api/therapies', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT DISTINCT specialization FROM therapists WHERE specialization IS NOT NULL');
+    const therapySet = new Set<string>();
+    result.rows.forEach(row => {
+      const specializations = row.specialization.split(',').map((s: string) => s.trim());
+      specializations.forEach((spec: string) => therapySet.add(spec));
+    });
+    const therapies = Array.from(therapySet).sort().map(therapy => ({ therapy_name: therapy }));
+    res.json(therapies);
+  } catch (error) {
+    console.error('Error fetching therapies:', error);
+    res.status(500).json({ error: 'Failed to fetch therapies' });
+  }
+});
+
+// GET all services (Admin View)
+app.get('/api/services', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM therapy_services ORDER BY id ASC');
+    res.json(result.rows);
+  } catch (error: any) {
+    console.error('Error fetching therapy services:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET public service details by slug
+app.get('/api/public/services/:slug', async (req, res) => {
+  try {
+    let { slug } = req.params;
+    if (!slug.startsWith('/')) {
+      slug = '/' + slug;
+    }
+    const result = await pool.query('SELECT * FROM therapy_services WHERE slug = $1 AND is_active = true', [slug]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+    const service = result.rows[0];
+    res.json({
+      title: service.title,
+      duration: service.duration,
+      type: service.type,
+      description: service.description,
+      detailedDescription: service.detailed_description,
+      editViewDescription: service.edit_view_description,
+      charges: service.charges,
+      slug: service.slug,
+      label: service.label,
+      owner: service.therapist_name,
+      therapist_id: service.therapist_id,
+      schedule_id: service.schedule_id
+    });
+  } catch (error: any) {
+    console.error('Error fetching public service:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST new service
+app.post('/api/services', async (req, res) => {
+  try {
+    const { title, duration, type, description, detailed_description, edit_view_description, charges, slug, label, therapist_id, therapist_name, schedule_id } = req.body;
+    
+    if (!title || !duration || !type || !charges || !slug || !therapist_id || !therapist_name) {
+      return res.status(400).json({ error: 'Missing required service fields' });
+    }
+
+    const formattedSlug = slug.startsWith('/') ? slug : '/' + slug;
+
+    const result = await pool.query(
+      `INSERT INTO therapy_services (
+        title, duration, type, description, detailed_description, 
+        edit_view_description, charges, slug, label, therapist_id, therapist_name, schedule_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING *`,
+      [
+        title, duration, type, description || '', detailed_description || '',
+        edit_view_description || '', charges, formattedSlug, label || '',
+        therapist_id, therapist_name, schedule_id || null
+      ]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error: any) {
+    console.error('Error creating service:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT update service by ID
+app.put('/api/services/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, duration, type, description, detailed_description, edit_view_description, charges, slug, label, therapist_id, therapist_name, schedule_id, is_active } = req.body;
+    
+    const formattedSlug = slug.startsWith('/') ? slug : '/' + slug;
+
+    const result = await pool.query(
+      `UPDATE therapy_services SET
+        title = $1, duration = $2, type = $3, description = $4, detailed_description = $5,
+        edit_view_description = $6, charges = $7, slug = $8, label = $9, therapist_id = $10,
+        therapist_name = $11, schedule_id = $12, is_active = $13
+      WHERE id = $14
+      RETURNING *`,
+      [
+        title, duration, type, description, detailed_description,
+        edit_view_description, charges, formattedSlug, label, therapist_id,
+        therapist_name, schedule_id, is_active !== false, id
+      ]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error: any) {
+    console.error('Error updating service:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE service by ID
+app.delete('/api/services/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query('DELETE FROM therapy_services WHERE id = $1 RETURNING *', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+    res.json({ message: 'Service deleted successfully', deletedService: result.rows[0] });
+  } catch (error: any) {
+    console.error('Error deleting service:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get therapists by therapy
 app.get('/api/therapists-by-therapy', async (req, res) => {
   try {
@@ -2969,6 +3550,24 @@ app.get('/api/therapists-live-status', async (req, res) => {
   } catch (error) {
     console.error('Error fetching therapists live status:', error);
     res.status(500).json({ error: 'Failed to fetch therapists live status' });
+  }
+});
+
+// Get resources/schedules for a specific therapist
+app.get('/api/therapist-resources', async (req, res) => {
+  try {
+    const { therapist_id } = req.query;
+    if (!therapist_id) {
+      return res.status(400).json({ success: false, error: 'therapist_id is required' });
+    }
+    const result = await pool.query(
+      'SELECT schedule_id, resource_name, therapy_name FROM therapist_resources WHERE therapist_id = $1 ORDER BY schedule_id ASC',
+      [therapist_id]
+    );
+    res.json({ success: true, resources: result.rows });
+  } catch (error: any) {
+    console.error('Error fetching therapist resources:', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -4333,26 +4932,126 @@ app.post('/api/session-notes', async (req, res) => {
 app.post('/api/bookings/cancel', async (req, res) => {
   try {
     const { booking_id, therapist_id, therapist_name, client_name, reason } = req.body;
-    
+
     if (!booking_id) {
       return res.status(400).json({ error: 'Booking ID is required' });
     }
 
-    // Update booking status
+    // Fetch booking details for refund calculation
+    const bookingResult = await pool.query('SELECT * FROM bookings WHERE booking_id = $1', [booking_id]);
+    if (bookingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+    const bookingDetails = bookingResult.rows[0];
+
+    // Perform 24-hour cancellation refund policy check
+    const start = new Date(bookingDetails.booking_start_at);
+    const now = new Date();
+    const hoursDiff = (start.getTime() - now.getTime()) / (1000 * 60 * 60);
+
+    let refundStatus = 'N/A';
+    let refundAmount = 0;
+    let refundId = null;
+
+    if (hoursDiff < 24) {
+      console.log(`[Cancel Booking Admin] Cancellation within 24 hours (${hoursDiff.toFixed(2)} hrs). No refund.`);
+      refundStatus = 'No Refund';
+      refundAmount = 0;
+    } else {
+      console.log(`[Cancel Booking Admin] Cancellation outside 24 hours (${hoursDiff.toFixed(2)} hrs). Eligible for full refund.`);
+      const paymentId = bookingDetails.invitee_payment_reference_id;
+      const paymentAmount = parseFloat(bookingDetails.invitee_payment_amount) || 0;
+
+      if (paymentId && paymentAmount > 0) {
+        console.log(`[Cancel Booking Admin] Triggering Razorpay refund for payment: ${paymentId}`);
+        const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_test_G751156172c7';
+        const keySecret = process.env.RAZORPAY_KEY_SECRET || 'placeholder_secret';
+
+        try {
+          const rzpResponse = await fetch(`https://api.razorpay.com/v1/payments/${paymentId}/refund`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Basic ' + Buffer.from(keyId + ':' + keySecret).toString('base64')
+            },
+            body: JSON.stringify({}) // Empty body triggers full refund
+          });
+
+          if (rzpResponse.ok) {
+            const rzpData = await rzpResponse.json();
+            console.log(`[Cancel Booking Admin] ✅ Razorpay Refund Succeeded! Refund ID: ${rzpData.id}`);
+            refundStatus = 'Completed';
+            refundAmount = paymentAmount;
+            refundId = rzpData.id;
+          } else {
+            const errorText = await rzpResponse.text();
+            console.error('[Cancel Booking Admin] ❌ Razorpay Refund Failed:', errorText);
+            refundStatus = 'Failed';
+          }
+        } catch (rzpError) {
+          console.error('[Cancel Booking Admin] ❌ Razorpay Refund Request error:', rzpError);
+          refundStatus = 'Failed';
+        }
+      } else {
+        console.log('[Cancel Booking Admin] No payment reference or amount found. Marking refund as N/A.');
+        refundStatus = 'N/A';
+      }
+    }
+
+    // Update bookings table
     await pool.query(
-      'UPDATE bookings SET booking_status = $1 WHERE booking_id = $2',
-      ['cancelled', booking_id]
+      `UPDATE bookings 
+       SET booking_status = 'cancelled', 
+           refund_status = $1, 
+           refund_amount = $2 
+       WHERE booking_id = $3`,
+      [refundStatus, refundAmount, booking_id]
     );
 
-    // Log cancellation
+    // Log the admin cancellation activity in client_logs
+    await logClientActivity(
+      booking_id,
+      bookingDetails.invitee_name || client_name,
+      'admin_cancellation',
+      `Admin/Therapist cancelled this booking from the dashboard. Reason: ${reason || 'No reason provided'}. Refund policy: ${refundStatus === 'Completed' ? 'Full Refund Processed' : refundStatus === 'No Refund' ? 'No Refund (Under 24h)' : 'N/A'}`,
+      req
+    );
+
+    // Log in refund_cancellation_table
+    try {
+      await pool.query(
+        `INSERT INTO refund_cancellation_table (
+          client_name, session_id, session_name, session_timings, payment_id, refund_status, refund_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          bookingDetails.invitee_name || client_name,
+          booking_id,
+          bookingDetails.booking_resource_name || 'Therapy Session',
+          bookingDetails.booking_start_at,
+          bookingDetails.invitee_payment_reference_id || null,
+          refundStatus,
+          refundId
+        ]
+      );
+    } catch (dbErr) {
+      console.error('[Cancel Booking Admin] Failed inserting cancellation log:', dbErr);
+    }
+
+    // Log in audit logs
     await pool.query(
       `INSERT INTO audit_logs (therapist_id, therapist_name, action_type, action_description, client_name, timestamp)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [therapist_id, therapist_name, 'booking_cancel', 
-       `Cancelled booking for ${client_name}${reason ? ': ' + reason : ''}`, client_name, getCurrentISTTimestamp()]
+      [
+        therapist_id || bookingDetails.therapist_id || null,
+        therapist_name || bookingDetails.booking_host_name || 'SafeStories',
+        'booking_cancel',
+        `Cancelled booking for ${client_name || bookingDetails.invitee_name}${reason ? ': ' + reason : ''}${refundStatus === 'Completed' ? ' with Full Refund' : refundStatus === 'No Refund' ? ' without refund (under 24h)' : ''}`,
+        client_name || bookingDetails.invitee_name,
+        getCurrentISTTimestamp()
+      ]
     );
 
-    res.json({ success: true });
+    res.json({ success: true, refund_status: refundStatus, refund_amount: refundAmount });
   } catch (error) {
     console.error('Error cancelling booking:', error);
     res.status(500).json({ error: 'Failed to cancel booking' });
@@ -4869,106 +5568,567 @@ app.post('/api/send-booking-link', async (req, res) => {
 app.post('/api/fetch-slots', async (req, res) => {
   try {
     const payload = req.body;
-    
+
     if (!payload.selectedDate || !payload.timezone) {
       return res.status(400).json({ error: 'Missing required fields: date and timezone' });
     }
 
     console.log('--- FETCH SLOTS DEBUG ---');
     console.log('Payload:', JSON.stringify(req.body, null, 2));
-    
-    // Updated to dynamic webhook selection provided by user
-    let webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/324275f9-00bd-4609-bdb0-307c301b322c'; // Default: Public
-    
-    if (payload.isAdmin) {
-      if (payload.isDirectBooking) {
-        webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/ebc7a183-926b-4cdb-ad3b-27f335a02e17'; // Admin Direct Slots
-      } else {
-        webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/b5ab584c-1203-41c0-b296-3107e2e6035e'; // Admin With Payment Slots
+
+    // Check if therapist has Google Calendar connected
+    let therapist = null;
+    if (payload.therapistId) {
+      const result = await pool.query('SELECT * FROM therapists WHERE therapist_id = $1', [payload.therapistId]);
+      therapist = result.rows[0];
+    } else if (payload.selectedTherapist === 'SafeStories') {
+      const result = await pool.query('SELECT * FROM therapists WHERE therapist_id = $1', ['SafeStories']);
+      therapist = result.rows[0];
+    } else if (payload.selectedTherapist) {
+      const result = await pool.query('SELECT * FROM therapists WHERE name = $1', [payload.selectedTherapist]);
+      therapist = result.rows[0];
+    }
+
+    // Try partial name matches if not found
+    if (!therapist && payload.selectedTherapist) {
+      const result = await pool.query('SELECT * FROM therapists WHERE name ILIKE $1', [payload.selectedTherapist]);
+      therapist = result.rows[0];
+      if (!therapist) {
+        const firstName = payload.selectedTherapist.split(' ')[0];
+        if (firstName) {
+          const result2 = await pool.query('SELECT * FROM therapists WHERE name ILIKE $1', [`%${firstName}%`]);
+          therapist = result2.rows[0];
+        }
       }
     }
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
 
-    const responseText = await response.text();
-    console.log('📥 Webhook Response Text:', responseText);
-
-    if (response.ok) {
-      let jsonResponse;
+    // Auto-initialize default availability in database if it is null/empty
+    if (therapist && !therapist.availability) {
+      const defaultAvail = {
+        name: `${therapist.name}'s Schedule`,
+        time_zone: 'Asia/Calcutta',
+        availability: [
+          { "day": "sunday", "is_available": false, "times": [] },
+          { "day": "monday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+          { "day": "tuesday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+          { "day": "wednesday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+          { "day": "thursday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+          { "day": "friday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] },
+          { "day": "saturday", "is_available": true, "times": [{ "start": "09:00", "end": "17:00" }] }
+        ],
+        date_overrides: [],
+        exclusions: []
+      };
+      console.log(`[Fetch Slots] Auto-initializing default availability for ${therapist.name} in DB.`);
       try {
-        jsonResponse = JSON.parse(responseText);
-      } catch (e) {
-        jsonResponse = responseText;
+        await pool.query(
+          'UPDATE therapists SET availability = $1 WHERE therapist_id = $2',
+          [JSON.stringify(defaultAvail), therapist.therapist_id]
+        );
+        therapist.availability = defaultAvail;
+      } catch (dbErr) {
+        console.error('Error auto-storing availability in DB during fetch-slots:', dbErr);
+        therapist.availability = defaultAvail;
       }
-      res.status(200).json(jsonResponse);
-    } else {
-      console.error('❌ Slots Webhook failed:', response.status, response.statusText);
-      res.status(response.status).json({ error: 'Webhook failed', details: responseText });
     }
+
+    // Default slot generator if no therapist found
+    const getAvailableTimeRanges = (availabilityData: any, dateStr: string) => {
+      if (!availabilityData) {
+        // default weekly: Sunday off, Monday-Saturday 09:00 to 21:00
+        const dateObj = new Date(dateStr);
+        if (dateObj.getDay() === 0) return [];
+        return [{ start: '09:00', end: '21:00' }];
+      }
+
+      // Try parsing availability if it is a string
+      let parsed = availabilityData;
+      if (typeof availabilityData === 'string') {
+        try {
+          parsed = JSON.parse(availabilityData);
+        } catch (e) {
+          parsed = {};
+        }
+      }
+
+      const availability = parsed.availability || [];
+      const dateOverrides = parsed.date_overrides || [];
+      const exclusions = parsed.exclusions || [];
+
+      // 1. Check exclusions
+      const isExcluded = exclusions.some((ex: any) => ex.start === dateStr || ex.date === dateStr);
+      const customExcluded = availability.some((av: any) => av.day === dateStr && av.is_available === false);
+      if (isExcluded || customExcluded) {
+        return [];
+      }
+
+      // 2. Check date overrides
+      const override = dateOverrides.find((ov: any) => ov.date === dateStr);
+      const customOverride = availability.find((av: any) => av.day === dateStr && av.is_available === true);
+      
+      if (override) {
+        return override.availability || [];
+      }
+      if (customOverride) {
+        return customOverride.times || [];
+      }
+
+      // 3. Check standard weekly availability
+      const dateObj = new Date(dateStr);
+      const weekdays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const weekdayName = weekdays[dateObj.getDay()];
+
+      const weeklyAvail = availability.find((av: any) => {
+        const day = (av.day || '').toLowerCase();
+        return day === weekdayName || day.startsWith(weekdayName.substring(0, 3));
+      });
+
+      if (weeklyAvail && weeklyAvail.is_available) {
+        return weeklyAvail.times || [];
+      }
+
+      // Default fallback if no availability object exists at all
+      if (availability.length === 0) {
+        return [{ start: '09:00', end: '21:00' }];
+      }
+
+      return [];
+    };
+
+    // Generate slots based on availability config
+    const therapistSlots = [];
+    const baseDate = payload.selectedDate; // "YYYY-MM-DD"
+    const availConfig = therapist ? therapist.availability : null;
+    const ranges = getAvailableTimeRanges(availConfig, baseDate);
+
+    for (const range of ranges) {
+      const [startH] = range.start.split(':').map(Number);
+      const [endH] = range.end.split(':').map(Number);
+      for (let hour = startH; hour < endH; hour++) {
+        const startStr = `${baseDate}T${String(hour).padStart(2, '0')}:00:00+05:30`;
+        const endStr = `${baseDate}T${String(hour).padStart(2, '0')}:50:00+05:30`;
+        therapistSlots.push({ start: new Date(startStr), end: new Date(endStr), isoString: startStr });
+      }
+    }
+
+    let busySlots: { start: Date; end: Date }[] = [];
+
+    if (therapist && therapist.google_refresh_token) {
+      console.log(`[Fetch Slots] Therapist ${therapist.name} has Google Calendar connected. Querying FreeBusy API.`);
+      try {
+        const oauth2Client = await getAuthenticatedClient(therapist);
+        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+        
+        // Define day start & end in Asia/Kolkata (IST)
+        const timeMin = new Date(`${payload.selectedDate}T00:00:00+05:30`).toISOString();
+        const timeMax = new Date(`${payload.selectedDate}T23:59:59+05:30`).toISOString();
+
+        const freeBusyResponse = await calendar.freebusy.query({
+          requestBody: {
+            timeMin,
+            timeMax,
+            timeZone: 'Asia/Kolkata',
+            items: [{ id: 'primary' }]
+          }
+        });
+
+        const busyList = freeBusyResponse.data.calendars?.primary?.busy || [];
+        const googleBusy = busyList.map(b => ({
+          start: new Date(b.start!),
+          end: new Date(b.end!)
+        }));
+        busySlots.push(...googleBusy);
+        console.log(`[Fetch Slots] Google Calendar busy slots:`, googleBusy);
+      } catch (calendarError) {
+        console.error('❌ Failed fetching slots from Google Calendar:', calendarError);
+      }
+    }
+
+    // Always query local bookings table as well and combine them
+    if (therapist) {
+      console.log(`[Fetch Slots] Querying local bookings for therapist ${therapist.name}.`);
+      const bookingsResult = await pool.query(
+        `SELECT booking_start_at, booking_end_at FROM bookings
+         WHERE therapist_id = $1
+           AND booking_status NOT IN ('cancelled', 'canceled', 'no_show', 'no show')
+           AND booking_start_at >= ($2::timestamp - INTERVAL '1 day')
+           AND booking_start_at <= ($2::timestamp + INTERVAL '2 days')`,
+        [therapist.therapist_id, payload.selectedDate]
+      );
+      const dbBusy = bookingsResult.rows.map(row => ({
+        start: new Date(row.booking_start_at),
+        end: new Date(row.booking_end_at)
+      }));
+      busySlots.push(...dbBusy);
+      console.log(`[Fetch Slots] Local DB busy slots:`, dbBusy);
+    } else if (payload.selectedTherapist) {
+      // If therapist not found but name is provided
+      console.log(`[Fetch Slots] Therapist not found. Querying local bookings by name ${payload.selectedTherapist}.`);
+      const bookingsResult = await pool.query(
+        `SELECT booking_start_at, booking_end_at FROM bookings
+         WHERE (booking_host_name ILIKE $1 OR booking_host_name ILIKE $2)
+           AND booking_status NOT IN ('cancelled', 'canceled', 'no_show', 'no show')
+           AND booking_start_at >= ($3::timestamp - INTERVAL '1 day')
+           AND booking_start_at <= ($3::timestamp + INTERVAL '2 days')`,
+        [`%${payload.selectedTherapist}%`, `%${payload.selectedTherapist.split(' ')[0]}%`, payload.selectedDate]
+      );
+      const dbBusy = bookingsResult.rows.map(row => ({
+        start: new Date(row.booking_start_at),
+        end: new Date(row.booking_end_at)
+      }));
+      busySlots.push(...dbBusy);
+      console.log(`[Fetch Slots] Local DB busy slots (by name):`, dbBusy);
+    }
+
+    // Filter out overlapping slots
+    const availableSlots = therapistSlots
+      .filter(s => {
+        const isBusy = busySlots.some(b => {
+          return s.start < b.end && s.end > b.start;
+        });
+        return !isBusy;
+      })
+      .map(s => s.isoString);
+
+    // Determine session charges from database or specialization
+    let charges = 1700; // Default
+    if (payload.isFreeConsultation) {
+      charges = 0;
+    } else if (therapist && therapist.specialization_details) {
+      try {
+        const details = typeof therapist.specialization_details === 'string'
+          ? JSON.parse(therapist.specialization_details)
+          : therapist.specialization_details;
+        for (const spec in details) {
+          if (details[spec]?.price) {
+            charges = parseInt(details[spec].price, 10);
+            break;
+          }
+        }
+      } catch (e) {
+        if (typeof therapist.specialization_details === 'string') {
+          const match = therapist.specialization_details.match(/Price\s*:\s*₹?\s*(\d+)/i) || therapist.specialization_details.match(/(\d+)/);
+          if (match) {
+            charges = parseInt(match[1], 10);
+          }
+        }
+      }
+    }
+
+    return res.status(200).json([
+      {
+        "Available Slots": availableSlots,
+        "session charges": charges
+      }
+    ]);
   } catch (error) {
     console.error('❌ Error in fetch-slots:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Create Direct Booking webhook proxy
+// Create Direct Booking webhook proxy - now fully direct database booking with calendar sync
 app.post('/api/create-booking', async (req, res) => {
   try {
     const payload = req.body;
-    
-    try {
-      // Send to n8n webhook
-      // Updated to dynamic webhook selection provided by user
-      let webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/d7194a23-689f-4d95-bb35-d30fca3f15f9'; // Default: Public
-      
-      if (payload.isAdmin && payload.skipPayment) {
-        webhookUrl = 'https://n8n.srv1169280.hstgr.cloud/webhook/568038fa-d320-47da-8001-ea1ffeabde00'; // Admin Direct Create
-      }
-      
-      const response = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'User-Agent': 'SafeStories-Backend/1.0'
-        },
-        body: JSON.stringify(payload)
-      });
 
-      const responseText = await response.text();
-
-      if (response.ok) {
-        let jsonResponse;
-        try {
-          jsonResponse = JSON.parse(responseText);
-        } catch (e) {
-          jsonResponse = { success: true, message: responseText };
-        }
-        // Logic to store the public check-in URL for new bookings
-        // This ensures the link is available in the database for WhatsApp automation
-        const booking_id = jsonResponse.booking_id || jsonResponse.id || payload.bookingId;
-        if (booking_id) {
-          const publicLink = `https://safestories-dashboard.vercel.app/booking-confirmation/${booking_id}`;
-          console.log(`[Create Booking] Storing public confirmation link for booking ${booking_id}: ${publicLink}`);
-          await pool.query(
-            'UPDATE bookings SET public_booking_checkin_url = $1 WHERE booking_id = $2',
-            [publicLink, booking_id]
-          );
-        }
-        
-        res.status(200).json(jsonResponse);
-      } else {
-        console.error('❌ Booking Webhook failed:', response.status, response.statusText);
-        res.status(response.status).json({ error: 'Webhook failed', details: responseText });
+    // Verify Razorpay signature if it is a paid public booking with payment details
+    if (payload.razorpay_payment_id) {
+      const crypto = await import('crypto');
+      const hmac = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || 'placeholder_secret');
+      hmac.update(payload.razorpay_order_id + "|" + payload.razorpay_payment_id);
+      const generated_signature = hmac.digest('hex');
+      if (generated_signature !== payload.razorpay_signature) {
+        console.error('❌ Razorpay Signature Verification Failed!');
+        return res.status(400).json({ success: false, error: 'Signature verification failed' });
       }
-    } catch (fetchError) {
-      console.error('❌ Network error calling booking webhook:', fetchError);
-      res.status(503).json({ error: 'Could not reach webhook service' });
+      console.log('✅ Razorpay Signature Verified successfully!');
     }
+
+    // Check if therapist has Google Calendar connected
+    let therapist = null;
+    if (payload.therapistId) {
+      const result = await pool.query('SELECT * FROM therapists WHERE therapist_id = $1', [payload.therapistId]);
+      therapist = result.rows[0];
+    } else if (payload.therapistName === 'SafeStories') {
+      const result = await pool.query('SELECT * FROM therapists WHERE therapist_id = $1', ['SafeStories']);
+      therapist = result.rows[0];
+    } else if (payload.therapistName) {
+      const result = await pool.query('SELECT * FROM therapists WHERE name = $1', [payload.therapistName]);
+      therapist = result.rows[0];
+    }
+
+    if (!therapist && payload.therapistName) {
+      const result = await pool.query('SELECT * FROM therapists WHERE name ILIKE $1', [payload.therapistName]);
+      therapist = result.rows[0];
+      if (!therapist) {
+        const firstName = payload.therapistName.split(' ')[0];
+        if (firstName) {
+          const result2 = await pool.query('SELECT * FROM therapists WHERE name ILIKE $1', [`%${firstName}%`]);
+          therapist = result2.rows[0];
+        }
+      }
+    }
+
+    // Helper to generate a unique 6-digit numeric string for IDs
+    const generateUniqueId = async (columnName: string) => {
+      let attempts = 0;
+      while (attempts < 100) {
+        const id = String(Math.floor(100000 + Math.random() * 900000));
+        const result = await pool.query(`SELECT 1 FROM bookings WHERE ${columnName} = $1`, [id]);
+        if (result.rows.length === 0) {
+          return id;
+        }
+        attempts++;
+      }
+      return String(Math.floor(100000 + Math.random() * 900000));
+    };
+
+    const bookingId = await generateUniqueId('booking_id');
+    const inviteeId = await generateUniqueId('invitee_id');
+
+    // Parse slot and date to ISO String in IST
+    let hour = 9;
+    let minute = 0;
+    const timePart = (payload.slot || '').trim();
+    const ampmMatch = timePart.match(/^(\d+):(\d+)\s*(AM|PM)$/i);
+    if (ampmMatch) {
+      hour = parseInt(ampmMatch[1], 10);
+      minute = parseInt(ampmMatch[2], 10);
+      const ampm = ampmMatch[3].toUpperCase();
+      if (ampm === 'PM' && hour < 12) hour += 12;
+      if (ampm === 'AM' && hour === 12) hour = 0;
+    } else {
+      const directMatch = timePart.match(/^(\d+):(\d+)$/);
+      if (directMatch) {
+        hour = parseInt(directMatch[1], 10);
+        minute = parseInt(directMatch[2], 10);
+      }
+    }
+
+    const startStr = `${payload.date}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+05:30`;
+    const startDate = new Date(startStr);
+    const endDate = new Date(startDate.getTime() + 50 * 60 * 1000); // 50 minutes duration
+    
+    // Format invitee time readable format
+    const inviteeTimeStr = startDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' }) + 
+                           ' at ' + 
+                           startDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) + 
+                           ' - ' + 
+                           endDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) + 
+                           ' (GMT+05:30)';
+
+    let meetLink = '';
+    let hasCalendar = false;
+
+    if (therapist && therapist.google_refresh_token) {
+      console.log(`[Create Booking] Therapist ${therapist.name} has Google Calendar connected. Creating Event.`);
+      try {
+        const oauth2Client = await getAuthenticatedClient(therapist);
+        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+
+        const isOnline = payload.sessionMode === 'online';
+
+        const eventBody: any = {
+          summary: `${payload.therapyName} - ${payload.clientName}`,
+          description: `Therapy session booked via SafeStories.\nClient: ${payload.clientName}\nClient Email: ${payload.clientEmail}\nSession Mode: ${payload.sessionMode || 'online'}\nNotes: ${payload.notes || 'None'}`,
+          start: {
+            dateTime: startDate.toISOString(),
+            timeZone: 'Asia/Kolkata'
+          },
+          end: {
+            dateTime: endDate.toISOString(),
+            timeZone: 'Asia/Kolkata'
+          },
+          attendees: [
+            { email: payload.clientEmail }
+          ]
+        };
+
+        if (isOnline) {
+          eventBody.conferenceData = {
+            createRequest: {
+              requestId: randomUUID(),
+              conferenceSolutionKey: {
+                type: 'hangoutsMeet'
+              }
+            }
+          };
+        } else {
+          // In-person: add office location with Google Maps link
+          eventBody.location = 'SafeStories Office - Lullanagar, Pune, Maharashtra 411040 | https://share.google/3tnQB1ORUWCJcmZyv';
+        }
+
+        const calendarEvent = await calendar.events.insert({
+          calendarId: 'primary',
+          conferenceDataVersion: isOnline ? 1 : 0,
+          requestBody: eventBody
+        });
+
+        if (isOnline) {
+          meetLink = calendarEvent.data.hangoutLink || '';
+        }
+        hasCalendar = true;
+        console.log(`[Create Booking] Successfully created Google Calendar event. ${isOnline ? 'Meet Link: ' + meetLink : 'In-person with location'}`);
+      } catch (calendarError) {
+        console.error('❌ Failed creating booking via Google Calendar:', calendarError);
+      }
+    }
+
+    const sourceVal = null; // Old system used null
+    const therapistIdVal = therapist ? therapist.therapist_id : (payload.therapistId || null);
+    const hostNameVal = therapist ? therapist.name : (payload.therapistName || '');
+
+    const bookingMode = payload.sessionMode === 'online' ? 'Online' : 'Offline';
+    const bookingResourceName = payload.sessionMode === 'online' ? 'Google Meet' : 'In-person (SafeStories Office - Lullanagar, Pune, Maharashtra 411040)';
+    const bookingSubject = `${payload.clientName} and ${hostNameVal}: ${payload.therapyName} Session with ${hostNameVal}`;
+    const inviteeQuestion = `Please share anything that will help prepare for our meeting: ${payload.notes || ''} | Please review the Terms & Conditions before completing your booking.: I confirm that I have read and agree to the Terms & Conditions.`;
+    const inviteeToken = Math.random().toString(36).substring(2, 12).toUpperCase();
+
+    const checkinHost = req.headers.host || '';
+    const checkinBaseUrl = checkinHost.includes('localhost') ? 'http://localhost:3004' : 'https://safestories-dashboard.vercel.app';
+    const checkinUrl = `${checkinBaseUrl}/booking-confirmation/${bookingId}`;
+
+    // Insert into database
+    console.log(`[Create Booking] Inserting booking ${bookingId} (invitee ${inviteeId}) into database...`);
+    await pool.query(`
+      INSERT INTO bookings (
+        booking_id, invitee_id, invitee_name, invitee_phone, invitee_email,
+        booking_subject, booking_status, booking_resource_name,
+        booking_mode, booking_joining_link, booking_invitee_time,
+        booking_start_at, booking_end_at, booking_duration,
+        therapist_id, emergency_contact_name, emergency_contact_relation,
+        emergency_contact_number, invitee_payment_amount, source,
+        booking_host_name, invitee_timezone, invitee_created_at, invitee_status,
+        booking_updated_at, public_booking_checkin_url, invitee_question, invitee_token, booking_host_user_id,
+        invitee_payment_reference_id, invitee_payment_gateway, invitee_payment_name
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
+    `, [
+      bookingId, inviteeId, payload.clientName, payload.clientWhatsApp, payload.clientEmail,
+      bookingSubject, 'scheduled', bookingResourceName,
+      bookingMode, meetLink || '', inviteeTimeStr,
+      startDate, endDate, 50,
+      therapistIdVal, payload.emergencyContactName, payload.emergencyContactRelation,
+      payload.emergencyContactNumber, payload.amount || null, sourceVal,
+      hostNameVal, 'Asia/Calcutta', new Date(), 'confirmed',
+      new Date(), checkinUrl,
+      inviteeQuestion, inviteeToken, therapistIdVal ? parseInt(therapistIdVal) : null,
+      payload.payment_id || null, payload.payment_gateway || null, payload.payment_name || null
+    ]);
+    console.log(`[Create Booking] ✅ Booking ${bookingId} saved to database successfully.`);
+
+    // Log the booking creation activity in client_logs
+    try {
+      let activityType = 'booking_created';
+      const therapyLower = (payload.therapyName || '').toLowerCase();
+      if (therapyLower.includes('adolescent')) {
+        activityType = 'booking_created_adolescent';
+      } else if (therapyLower.includes('couple')) {
+        activityType = 'booking_created_couple';
+      } else if (therapyLower.includes('individual')) {
+        activityType = 'booking_created_individual';
+      }
+
+      await logClientActivity(
+        bookingId,
+        payload.clientName,
+        activityType,
+        `Client successfully booked a ${payload.therapyName} session with ${hostNameVal} scheduled for ${payload.date} at ${payload.slot}`,
+        req
+      );
+    } catch (logErr) {
+      console.error('Failed to log client activity:', logErr);
+    }
+
+    // Insert into dashboard_api_booking directly for instant tracking if paid
+    if (payload.payment_id) {
+      try {
+        console.log(`[Create Booking] Inserting payment sync record for ${bookingId} in dashboard_api_booking...`);
+        await pool.query(`
+          INSERT INTO dashboard_api_booking (
+            booking_id, invitee_id, invitee_name, invitee_email, invitee_phone,
+            booking_status, booking_resource_name, start_at, end_at,
+            payment_amount, payment_status, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        `, [
+          parseInt(bookingId), parseInt(inviteeId), payload.clientName, payload.clientEmail, payload.clientWhatsApp,
+          'scheduled', bookingResourceName, startDate, endDate,
+          payload.amount || null, 'Completed', new Date()
+        ]);
+        console.log(`[Create Booking] ✅ dashboard_api_booking synced successfully.`);
+      } catch (syncDbError) {
+        console.error('❌ Failed inserting record in dashboard_api_booking:', syncDbError);
+      }
+    }
+
+    // Insert client_doc_form entry as pending
+    const publicLink = `https://safestories-dashboard.vercel.app/session-notes/${bookingId}`;
+    await pool.query(`
+      INSERT INTO client_doc_form (
+        booking_id, status, custom_form_link
+      ) VALUES ($1, 'pending', $2)
+      ON CONFLICT (booking_id) DO NOTHING
+    `, [bookingId, publicLink]);
+
+    return res.status(200).json({
+      success: true,
+      booking_id: bookingId,
+      id: bookingId,
+      joiningLink: meetLink || '',
+      payment: {
+        link: '' // Bypassed
+      }
+    });
   } catch (error) {
     console.error('❌ Error in create-booking:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Create Razorpay Order
+app.post('/api/razorpay/create-order', async (req, res) => {
+  try {
+    const { amount } = req.body;
+    if (!amount) {
+      return res.status(400).json({ error: 'Amount is required' });
+    }
+
+    const keyId = process.env.RAZORPAY_KEY_ID || 'rzp_test_G751156172c7';
+    const keySecret = process.env.RAZORPAY_KEY_SECRET || 'placeholder_secret';
+
+    const amountInPaise = Math.round(parseFloat(amount) * 100);
+
+    const receipt = `rcpt_${Math.random().toString(36).substring(2, 15)}`;
+
+    const response = await fetch('https://api.razorpay.com/v1/orders', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Basic ' + Buffer.from(keyId + ':' + keySecret).toString('base64')
+      },
+      body: JSON.stringify({
+        amount: amountInPaise,
+        currency: 'INR',
+        receipt: receipt
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.log('❌ Razorpay Order creation failed:', errorText);
+      return res.status(response.status).json({ error: 'Failed to create order with Razorpay' });
+    }
+
+    const order = await response.json();
+    console.log('✅ Razorpay Order Created:', order.id);
+    res.json({
+      success: true,
+      order_id: order.id,
+      amount: order.amount,
+      currency: order.currency
+    });
+  } catch (error) {
+    console.error('❌ Error creating Razorpay Order:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

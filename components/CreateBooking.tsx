@@ -210,7 +210,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       const response = await fetch('/api/therapies');
       if (response.ok) {
         const data = await response.json();
-        setTherapies(data);
+        const validTherapies = data.filter((t: any) => 
+          t.therapy_name !== 'Platform Therapy' && 
+          t.therapy_name !== 'Platform Calendar'
+        );
+        setTherapies(validTherapies);
       }
     } catch (error) {
       console.error('Error fetching therapies:', error);
@@ -277,7 +281,8 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       const response = await fetch(`/api/therapists-by-therapy?therapy_name=${encodeURIComponent(therapyName)}`);
       if (response.ok) {
         const data = await response.json();
-        setFilteredTherapists(data);
+        const validTherapists = data.filter((t: any) => t.therapist_name !== 'Platform Calendar' && t.therapist_name !== 'SafeStories');
+        setFilteredTherapists(validTherapists);
       }
     } catch (error) {
       console.error('Error fetching therapists by therapy:', error);
@@ -415,14 +420,15 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       clientWhatsApp: `${countryCode}${clientWhatsApp}`,
       sessionMode,
       timezone: selectedTimezone,
-      skipPayment: isDirectBooking,
+      // ═ PAYMENT_DISABLED: skipPayment forced true ═══════════════════════════════
+      // Original: skipPayment: isDirectBooking
+      skipPayment: true,
+      // ══════════════════════════════════════════════════════════════
       isAdmin: true
     };
     
     try {
-      const webhookUrl = isDirectBooking
-        ? '/api/create-booking'
-        : 'https://n8n.srv1169280.hstgr.cloud/webhook/7ce18907-f7f2-425e-9d67-6751156172c7';
+      const webhookUrl = '/api/create-booking';
       const response = await fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -432,11 +438,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       if (response.ok) {
         setShowSuccessModal(true);
       } else {
-        alert(isDirectBooking || grandTotal === 0 ? 'Failed to create booking' : 'Failed to send payment link');
+        alert('Failed to create booking');
       }
     } catch (error) {
-      console.error('Error sending payment link:', error);
-      alert(isDirectBooking || grandTotal === 0 ? 'Error creating booking' : 'Error sending payment link');
+      console.error('Error creating booking:', error);
+      alert('Error creating booking');
     }
   };
 
@@ -457,16 +463,21 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 style={{ width: 200, height: 200 }}
               />
             </div>
+            {/* Success modal title — PAYMENT_DISABLED: always show 'Session Booked' */}
             <h2 className="text-xl font-bold mb-4 text-gray-800 text-center">
-              {(grandTotal === 0 || isDirectBooking) ? 'Session Booked' : 'Payment Link Sent'}
+              Session Booked
+              {/* Original: {(grandTotal === 0 || isDirectBooking) ? 'Session Booked' : 'Payment Link Sent'} */}
             </h2>
             <p className="text-gray-600 mb-6 text-center">
+              {/* PAYMENT_DISABLED: always show direct booking message */}
+              The session has been created successfully. The client will receive a confirmation via WhatsApp.
+              {/* Original message logic preserved:
               {isDirectBooking 
                 ? 'The session has been created successfully. The client will receive a confirmation email with the session details and joining link.'
                 : grandTotal === 0
                 ? 'The free consultation session has been booked successfully. The client will receive a confirmation email with the session details and joining link.'
                 : 'The payment link has been sent to the client. Once the payment is confirmed by the client, their session will be booked automatically.'
-              }
+              } */}
             </p>
             <button
               onClick={onBack}
@@ -673,18 +684,21 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
 
           {/* Grand Total and Payment */}
           <div className="pt-6 border-t">
+            {/* PAYMENT_DISABLED: Session Charges hidden. Original block:
             {!isDirectBooking && (
               <div className="flex items-center justify-between mb-4">
                 <span className="text-lg font-medium text-gray-600">Session Charges:</span>
                 <span className="text-2xl font-bold">Rs. {grandTotal}/-</span>
               </div>
             )}
+            */}
             <button
               onClick={handleSendPaymentLink}
               disabled={!isPaymentLinkEnabled()}
               className="w-full bg-teal-700 text-white px-6 py-3 rounded-lg hover:bg-teal-800 font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
-              {isDirectBooking ? 'Create booking' : grandTotal === 0 ? 'Book Session' : 'Send Payment Link'}
+              {/* PAYMENT_DISABLED: always 'Book Session'. Original: isDirectBooking ? 'Create booking' : grandTotal === 0 ? 'Book Session' : 'Send Payment Link' */}
+              Book Session
             </button>
           </div>
         </div>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Upload, X } from 'lucide-react';
+import { ArrowLeft, Upload, X, Calendar } from 'lucide-react';
 import { Toast } from './Toast';
 
 interface EditProfileProps {
@@ -24,6 +24,38 @@ export const EditProfile: React.FC<EditProfileProps> = ({ user, onBack }) => {
   const [profilePicture, setProfilePicture] = useState<File | null>(null);
   const [currentProfilePictureUrl, setCurrentProfilePictureUrl] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [calendarStatus, setCalendarStatus] = useState<{ connected: boolean; email: string | null } | null>(null);
+
+  useEffect(() => {
+    if (user.therapist_id) {
+      fetch(`/api/auth/google/status?therapistId=${user.therapist_id}`)
+        .then(res => res.json())
+        .then(data => setCalendarStatus(data))
+        .catch(err => console.error('Error fetching calendar status:', err));
+    }
+  }, [user.therapist_id]);
+
+  const handleConnectCalendar = () => {
+    window.location.href = `/api/auth/google?therapistId=${user.therapist_id}`;
+  };
+
+  const handleDisconnectCalendar = async () => {
+    if (confirm('Are you sure you want to disconnect Google Calendar?')) {
+      try {
+        const res = await fetch('/api/auth/google/disconnect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ therapistId: user.therapist_id })
+        });
+        if (res.ok) {
+          setCalendarStatus({ connected: false, email: null });
+          setToast({ message: 'Google Calendar disconnected successfully!', type: 'success' });
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
 
   const countryCodes = [
     { code: '+91', country: 'India' },
@@ -585,6 +617,51 @@ export const EditProfile: React.FC<EditProfileProps> = ({ user, onBack }) => {
           </button>
         </form>
       </div>
+
+      {/* Google Calendar Section */}
+      {user.therapist_id && (
+        <div className="bg-white rounded-lg border p-6 mt-6">
+          <h2 className="text-xl font-bold mb-2 flex items-center gap-2">
+            <Calendar className="text-teal-700" size={24} />
+            Google Calendar Sync
+          </h2>
+          <p className="text-gray-600 mb-6 text-sm">
+            Sync bookings and availability directly with your Google Calendar to prevent double bookings.
+          </p>
+
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 border rounded-xl bg-gray-50 gap-4">
+            <div className="flex-1">
+              <h3 className="font-semibold text-gray-800">
+                {calendarStatus?.connected ? 'Status: Connected' : 'Status: Disconnected'}
+              </h3>
+              <p className="text-sm text-gray-500 mt-1">
+                {calendarStatus?.connected
+                  ? `Your account is connected to ${calendarStatus.email}`
+                  : 'Connect your Google account to automatically import busy slots and set up Google Meet links.'}
+              </p>
+            </div>
+            <div>
+              {calendarStatus?.connected ? (
+                <button
+                  type="button"
+                  onClick={handleDisconnectCalendar}
+                  className="px-6 py-2 bg-red-50 text-red-600 font-semibold rounded-lg hover:bg-red-100 transition-colors border border-red-200"
+                >
+                  Disconnect Account
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleConnectCalendar}
+                  className="px-6 py-2 bg-teal-700 text-white font-semibold rounded-lg hover:bg-teal-800 transition-colors"
+                >
+                  Connect Calendar
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <Toast

@@ -14,16 +14,30 @@ export const PublicBookingContainer: React.FC<PublicBookingContainerProps> = ({ 
 
   useEffect(() => {
     const checkAvailability = async () => {
-      // Find the session in therapistData
       let foundSession = null;
       let therapistName = "";
 
-      for (const [name, data] of Object.entries(therapistData)) {
-        const match = data.services.find(s => s.slug === `/${slug}`);
-        if (match) {
-          foundSession = { ...match, owner: name };
-          therapistName = name;
-          break;
+      // 1. Try to fetch from DB first
+      try {
+        const response = await fetch(`/api/public/services/${slug}`);
+        if (response.ok) {
+          const dbService = await response.json();
+          foundSession = dbService;
+          therapistName = dbService.owner;
+        }
+      } catch (err) {
+        console.error('Error fetching public service from DB:', err);
+      }
+
+      // 2. Fallback to hardcoded therapistData if not found in DB
+      if (!foundSession) {
+        for (const [name, data] of Object.entries(therapistData)) {
+          const match = data.services.find(s => s.slug === `/${slug}`);
+          if (match) {
+            foundSession = { ...match, owner: name };
+            therapistName = name;
+            break;
+          }
         }
       }
 

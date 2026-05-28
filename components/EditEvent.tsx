@@ -39,7 +39,7 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
 
-  // DaySchedule API State
+  // Schedule API State
   const [scheduleData, setScheduleData] = useState<any>(null);
   const [loadingSchedule, setLoadingSchedule] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
@@ -138,7 +138,7 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
         }))
       }));
 
-      // Format overrides for DaySchedule API schema
+      // Format overrides for schedule schema
       const dateOverrides = overridesList
         .filter((a: any) => a.is_available)
         .map((a: any) => ({
@@ -190,10 +190,8 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
         availability: cleanAvailability
       }));
 
-      // Delay background refresh to allow DaySchedule API / n8n caches to clear
-      setTimeout(() => {
-        fetchSchedule();
-      }, 4000);
+      // Refresh local schedule data from database
+      fetchSchedule();
     } catch (err: any) {
       alert(`Error updating schedule: ${err.message}`);
     } finally {
@@ -402,7 +400,7 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
                 {loadingSchedule ? (
                   <div className="loading-state">
                     <Loader2 className="animate-spin" />
-                    <p>Fetching availability from DaySchedule...</p>
+                    <p>Fetching availability...</p>
                   </div>
                 ) : error ? (
                   <div className="error-state">

@@ -12,7 +12,6 @@ import { ViewTherapistModal } from './ViewTherapistModal';
 import { EditTherapistForm } from './EditTherapistForm';
 import { ConfirmModal } from './ConfirmModal';
 import EditEvent from './EditEvent';
-import { therapistData } from '../lib/sessionData';
 
 interface Client {
   invitee_name: string;
@@ -47,6 +46,7 @@ interface Appointment {
 
 export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => void }> = ({ selectedClientProp, onBack }) => {
   const [therapists, setTherapists] = useState<any[]>([]);
+  const [dbServices, setDbServices] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTherapist, setSelectedTherapist] = useState<any>(null);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -182,12 +182,14 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
   const fetchTherapists = async () => {
     try {
       setLoading(true);
-      const [therapistsRes, liveSessionsRes] = await Promise.all([
+      const [therapistsRes, liveSessionsRes, servicesRes] = await Promise.all([
         fetch('/api/therapists'),
-        fetch('/api/therapists-live-status')
+        fetch('/api/therapists-live-status'),
+        fetch('/api/services')
       ]);
       const therapistsData = await therapistsRes.json();
       const liveStatusData = await liveSessionsRes.json();
+      const servicesData = await servicesRes.json();
 
       const therapistsWithStatus = therapistsData.map((t: any) => {
         const firstName = t.name ? t.name.split(' ')[0] : '';
@@ -198,6 +200,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       });
 
       setTherapists(therapistsWithStatus);
+      setDbServices(servicesData);
     } catch (error) {
       console.error('Error fetching therapists:', error);
     } finally {
@@ -2516,7 +2519,14 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
               <EditEvent
                 event={selectedEditEvent}
                 therapistId={therapists.find(t => t.name === selectedEditEvent.owner)?.therapist_id}
-                services={therapistData[selectedEditEvent.owner]?.services || []}
+                services={dbServices
+                  .filter((s: any) => s.therapist_name === selectedEditEvent.owner)
+                  .map((s: any) => ({
+                    ...s,
+                    scheduleId: s.schedule_id,
+                    detailedDescription: s.detailed_description,
+                    editViewDescription: s.edit_view_description
+                  }))}
                 isAdminView={true}
                 onBack={() => {
                   setSelectedEditEvent(null);
@@ -2532,9 +2542,16 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
             <div className="p-6 h-full overflow-y-auto bg-gray-50 rounded-lg border">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                 {therapists.map((therapist) => {
-                  const services = therapistData[therapist.name]?.services || [];
-                  const hasSchedule = !!therapist.scheduleId;
-                  const canManage = hasSchedule || services.length > 0;
+                  const services = dbServices
+                    .filter((s: any) => s.therapist_id === therapist.therapist_id || s.therapist_name === therapist.name)
+                    .map((s: any) => ({
+                      ...s,
+                      scheduleId: s.schedule_id,
+                      detailedDescription: s.detailed_description,
+                      editViewDescription: s.edit_view_description
+                    }));
+                  const hasSchedule = !!therapist.scheduleId || !!therapist.therapist_id;
+                  const canManage = true;
 
                   return (
                     <div
@@ -2542,8 +2559,15 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                       className={`relative bg-white rounded-xl border p-6 flex flex-col items-center text-center transition-all ${canManage ? 'hover:shadow-md cursor-pointer hover:border-teal-500' : 'opacity-70 bg-gray-50'
                         }`}
                       onClick={() => {
-                        const services = therapistData[therapist.name]?.services || [];
-                        const scheduleId = therapist.scheduleId || (services.length > 0 ? services[0].scheduleId : null);
+                        const services = dbServices
+                          .filter((s: any) => s.therapist_id === therapist.therapist_id || s.therapist_name === therapist.name)
+                          .map((s: any) => ({
+                            ...s,
+                            scheduleId: s.schedule_id,
+                            detailedDescription: s.detailed_description,
+                            editViewDescription: s.edit_view_description
+                          }));
+                        const scheduleId = therapist.scheduleId || (services.length > 0 ? services[0].scheduleId : null) || therapist.therapist_id;
 
                         // We can open the edit event if we have either a scheduleId or services
                         if (scheduleId || services.length > 0) {

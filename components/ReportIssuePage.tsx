@@ -7,9 +7,10 @@ interface ReportIssuePageProps {
     username: string;
     role: string;
   };
+  hideHeader?: boolean;
 }
 
-export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userInfo }) => {
+export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userInfo, hideHeader }) => {
   const [subject, setSubject] = useState('');
   const [component, setComponent] = useState('');
   const [description, setDescription] = useState('');
@@ -173,18 +174,20 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
       <>
         <div className="p-8">
           {/* Header */}
-          <div className="flex items-center gap-4 mb-6">
-            <button
-              onClick={onBack}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              <ArrowLeft className="w-6 h-6 text-gray-600" />
-            </button>
-            <div className="flex items-center gap-3">
-              <AlertCircle className="w-8 h-8 text-teal-700" />
-              <h1 className="text-2xl font-semibold text-gray-800">Report an Issue</h1>
+          {!hideHeader && (
+            <div className="flex items-center gap-4 mb-6">
+              <button
+                onClick={onBack}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <ArrowLeft className="w-6 h-6 text-gray-600" />
+              </button>
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-8 h-8 text-teal-700" />
+                <h1 className="text-2xl font-semibold text-gray-800">Report an Issue</h1>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Form Container */}
           <div className="max-w-lg mx-auto">
@@ -313,18 +316,20 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
   return (
     <div className="p-8">
       {/* Header */}
-      <div className="flex items-center gap-4 mb-6">
-        <button
-          onClick={onBack}
-          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-        >
-          <ArrowLeft className="w-6 h-6 text-gray-600" />
-        </button>
-        <div className="flex items-center gap-3">
-          <AlertCircle className="w-8 h-8 text-teal-700" />
-          <h1 className="text-2xl font-semibold text-gray-800">Report an Issue</h1>
+      {!hideHeader && (
+        <div className="flex items-center gap-4 mb-6">
+          <button
+            onClick={onBack}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <ArrowLeft className="w-6 h-6 text-gray-600" />
+          </button>
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-8 h-8 text-teal-700" />
+            <h1 className="text-2xl font-semibold text-gray-800">Report an Issue</h1>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Form Container */}
       <div className="max-w-3xl mx-auto">

@@ -11,7 +11,7 @@ interface AuditLog {
   timestamp: string;
 }
 
-export const AuditLogs: React.FC = () => {
+export const AuditLogs: React.FC<{ hideHeader?: boolean }> = ({ hideHeader }) => {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -101,12 +101,14 @@ export const AuditLogs: React.FC = () => {
 
   return (
     <div className="p-8 h-full flex flex-col">
-      <div className="flex justify-between items-start mb-6">
-        <div>
-          <h1 className="text-3xl font-bold mb-1">Audit Logs</h1>
-          <p className="text-gray-600">Track all therapist activities</p>
+      {!hideHeader && (
+        <div className="flex justify-between items-start mb-6">
+          <div>
+            <h1 className="text-3xl font-bold mb-1">Audit Logs</h1>
+            <p className="text-gray-600">Track all therapist activities</p>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="relative mb-6">
         <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />

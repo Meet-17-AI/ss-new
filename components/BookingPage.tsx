@@ -58,7 +58,9 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [bookedDetails, setBookedDetails] = useState<any>(null);
   const [paymentLink, setPaymentLink] = useState<string | null>(null);
+  const [paymentConfig, setPaymentConfig] = useState<any>(null);
   const [countdown, setCountdown] = useState(5);
+  const [redirectUrl, setRedirectUrl] = useState<string | null>(null);
 
   // Timezone support
   const [clientTimezone, setClientTimezone] = useState(() => {
@@ -144,6 +146,29 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
     return () => clearInterval(interval);
   }, [paymentLink]);
 
+  useEffect(() => {
+    // Dynamically load active Payment SDK based on settings
+    fetch('/api/payment-settings/public')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          setPaymentConfig(data);
+          if (data.activeGateway === 'razorpay') {
+            const script = document.createElement('script');
+            script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+            script.async = true;
+            document.head.appendChild(script);
+          } else if (data.activeGateway === 'cashfree') {
+            const script = document.createElement('script');
+            script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
+            script.async = true;
+            document.head.appendChild(script);
+          }
+        }
+      })
+      .catch(err => console.error('Error fetching payment config:', err));
+  }, []);
+
   const formatTime = (timeStr: string) => {
     return moment(timeStr, 'HH:mm').format(timeFormat === '12h' ? 'h:mm A' : 'HH:mm');
   };
@@ -168,8 +193,9 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
     const payload = {
       selectedTherapy: getSimplifiedTherapyName(),
       selectedTherapist: session.owner === 'SafeStories' ? 'SafeStories' : session.owner,
+      therapistId: session.therapist_id || undefined,
       selectedDate: date.format('YYYY-MM-DD'),
-      isFreeConsultation: session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free'),
+      isFreeConsultation: session.charges === '₹0' || session.charges === '0' || (typeof session.charges === 'string' && session.charges.toLowerCase().includes('free')),
       timezone: 'Asia/Kolkata',
       isDirectBooking: false,
       isAdmin: false
@@ -228,10 +254,13 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
     };
 
     setIsSubmitting(true);
-    const payload = {
+    const amountVal = parseFloat(sessionCharges.replace('₹', '').replace(',', '')) || 0;
+    const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free') || amountVal === 0;
+
+    const payload: any = {
       therapyName: getSimplifiedTherapyName(),
       therapistName: session.owner,
-      isFreeConsultation: session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free'),
+      isFreeConsultation: isFree,
       date: selectedDate.format('YYYY-MM-DD'),
       slot: moment(selectedSlot, 'HH:mm').format('h:mm A'),
       clientName: formData.name,
@@ -248,49 +277,165 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
       notes: formData.notes,
       isAdmin: false,
       clientTimezone: clientTimezone,
-      amount: parseFloat(sessionCharges.replace('₹', '').replace(',', '')) || 0
+      amount: amountVal
     };
 
-    try {
-      const response = await fetch('/api/create-booking', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+    const submitBooking = async (paymentDetails?: any) => {
+      try {
+        const finalPayload = {
+          ...payload,
+          ...(paymentDetails || {})
+        };
 
-      if (response.ok) {
-        const responseData = await response.json();
-        console.log('📦 Webhook response:', JSON.stringify(responseData, null, 2));
-        setBookedDetails(payload);
-        // Extract payment link from webhook response (handle array or object)
-        const data = Array.isArray(responseData) ? responseData[0] : responseData;
-        // Payment link is nested: invitees[0].payment.link
-        const link =
-          data?.invitees?.[0]?.payment?.link ||
-          data?.payment?.link ||
-          data?.payment_link ||
-          data?.paymentLink ||
-          data?.payment_url ||
-          data?.paymentUrl ||
-          data?.short_url ||
-          data?.link ||
-          data?.url ||
-          null;
-        console.log('💳 Extracted payment link:', link);
-        if (link) {
-          setPaymentLink(link);
+        const response = await fetch('/api/create-booking', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(finalPayload),
+        });
+
+        if (response.ok) {
+          const responseData = await response.json();
+          console.log('📦 Booking response:', JSON.stringify(responseData, null, 2));
+          setBookedDetails(finalPayload);
+          
+          const returnedBookingId = responseData.booking_id || responseData.id || responseData.bookingId;
+          
+          if (isPublic) {
+            // Store redirect url and display success animation
+            setRedirectUrl(`${window.location.origin}/booking-confirmation/${returnedBookingId}`);
+            setShowSuccessModal(true);
+          } else {
+            setShowSuccessModal(true);
+          }
         } else {
-          // No payment link returned — fall back to success modal
-          setShowSuccessModal(true);
+          const errorData = await response.json();
+          alert(`Booking failed: ${errorData.details || errorData.error || 'Unknown error'}`);
         }
-      } else {
-        const errorData = await response.json();
-        alert(`Booking failed: ${errorData.details || 'Unknown error'}`);
+      } catch (error) {
+        console.error('Error creating booking:', error);
+        alert('Error creating booking. Please try again.');
+      } finally {
+        setIsSubmitting(false);
       }
-    } catch (error) {
-      console.error('Error creating booking:', error);
-      alert('Error creating booking. Please try again.');
-    } finally {
+    };
+
+    if (isFree) {
+      // Free consultation session: bypass payment completely
+      await submitBooking();
+      return;
+    }
+
+    if (!paymentConfig) {
+      alert('Payment system is initializing. Please try again in a few seconds.');
+      setIsSubmitting(false);
+      return;
+    }
+
+    try {
+      if (paymentConfig.activeGateway === 'cashfree') {
+        // --- CASHFREE FLOW ---
+        const orderResponse = await fetch('/api/cashfree/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: amountVal,
+            customerName: payload.clientName,
+            customerPhone: payload.clientWhatsApp,
+            customerEmail: payload.clientEmail
+          }),
+        });
+        
+        if (!orderResponse.ok) {
+          const errorMsg = await orderResponse.json();
+          throw new Error(errorMsg.error || 'Failed to initialize Cashfree payment order');
+        }
+
+        const orderData = await orderResponse.json();
+        
+        const cashfree = await (window as any).Cashfree({ mode: paymentConfig.environment });
+        
+        const checkoutOptions = {
+          paymentSessionId: orderData.payment_session_id,
+          redirectTarget: "_modal"
+        };
+        
+        cashfree.checkout(checkoutOptions).then(async (result: any) => {
+          if (result.error) {
+            console.error('❌ Cashfree payment error:', result.error);
+            alert(result.error.message || 'Payment failed or cancelled.');
+            setIsSubmitting(false);
+          }
+          if (result.redirect) {
+            console.log("Cashfree Payment completed/redirected");
+          }
+          if (result.paymentDetails) {
+            console.log('💳 Cashfree Payment Details:', result.paymentDetails);
+            const paymentDetails = {
+              payment_id: result.paymentDetails.paymentId || orderData.order_id,
+              payment_gateway: 'Cashfree',
+              payment_name: `${payload.clientName} - ${payload.therapyName}`
+            };
+            await submitBooking(paymentDetails);
+          }
+        });
+
+      } else {
+        // --- RAZORPAY FLOW ---
+        const orderResponse = await fetch('/api/razorpay/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount: amountVal }),
+        });
+
+        if (!orderResponse.ok) {
+          const errorMsg = await orderResponse.json();
+          throw new Error(errorMsg.error || 'Failed to initialize payment order');
+        }
+
+        const orderData = await orderResponse.json();
+        const rzpKeyId = paymentConfig.publicKey || import.meta.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_G751156172c7';
+
+        const options = {
+          key: rzpKeyId,
+          amount: orderData.amount,
+          currency: orderData.currency,
+          name: 'SafeStories',
+          description: `${payload.therapyName} with ${payload.therapistName}`,
+          order_id: orderData.order_id,
+          handler: async function (response: any) {
+            console.log('💳 Razorpay Payment Succeeded:', response.razorpay_payment_id);
+            const paymentDetails = {
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_signature: response.razorpay_signature,
+              payment_id: response.razorpay_payment_id,
+              payment_gateway: 'Razorpay',
+              payment_name: `${payload.clientName} - ${payload.therapyName}`
+            };
+            await submitBooking(paymentDetails);
+          },
+          prefill: {
+            name: payload.clientName,
+            email: payload.clientEmail,
+            contact: payload.clientWhatsApp
+          },
+          theme: {
+            color: '#0f766e' // Brand premium Teal matching SafeStories
+          },
+          modal: {
+            ondismiss: function () {
+              setIsSubmitting(false);
+              console.log('Payment checkout closed by user');
+            }
+          }
+        };
+
+        const rzp = new (window as any).Razorpay(options);
+        rzp.open();
+      }
+    } catch (err: any) {
+      console.error('❌ Payment checkout error:', err);
+      alert(err.message || 'Payment initiation failed. Please try again.');
       setIsSubmitting(false);
     }
   };
@@ -687,18 +832,6 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
                 </div>
               </div>
 
-              <div className="bp-reg-section">
-                <h3 className="bp-section-title">Select Payment Method</h3>
-                <div className={`bp-option-card ${formData.paymentMethod === 'razorpay' ? 'active' : ''}`}>
-                  <div className="bp-option-header">
-                    <div className="bp-option-icon">
-                      <CreditCard size={18} color="#0052cc" /> <strong>Razorpay</strong>
-                    </div>
-                    <Check size={16} className="bp-check-icon" />
-                  </div>
-                </div>
-              </div>
-
               {(isAdolescentSession) && (
                 <div className="bp-add-guests">
                   <button className="bp-add-guests-btn" onClick={() => alert('Feature coming soon...')}>
@@ -716,7 +849,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
                   {isSubmitting ? (
                     <><div className="bp-spinner-small" /> Processing...</>
                   ) : (
-                    <><CalendarCheck size={18} /> Pay and Confirm</>
+                    <><CalendarCheck size={18} /> Confirm Booking</>
                   )}
                 </button>
                 <button className="bp-cancel-btn" onClick={() => setView('selection')}>
@@ -747,8 +880,13 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
               <button
                 onClick={() => {
                   setShowSuccessModal(false);
-                  if (onBack) onBack();
-                  else window.location.reload();
+                  if (redirectUrl) {
+                    window.location.href = redirectUrl;
+                  } else if (onBack) {
+                    onBack();
+                  } else {
+                    window.location.reload();
+                  }
                 }}
                 className="w-full bg-teal-700 text-white font-bold py-4 rounded-xl hover:bg-teal-800 transition-colors shadow-lg shadow-teal-700/20"
               >

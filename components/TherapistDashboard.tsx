@@ -24,6 +24,9 @@ import EditEvent from './EditEvent';
 import { BookingPage } from './BookingPage';
 import { NotificationBell } from './NotificationBell';
 
+import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { useSocket } from '../context/SocketContext';
+
 interface TherapistDashboardProps {
   onLogout: () => void;
   user: any;
@@ -31,9 +34,14 @@ interface TherapistDashboardProps {
 
 export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) {
 
-  // Use URL state for view and tabs
-  const [activeView, setActiveView] = useUrlState<string>('view', 'dashboard', 'therapistActiveView');
-  const [activeAppointmentTab, setActiveAppointmentTab] = useUrlState<string>('tab', 'all', undefined);
+  const { socket } = useSocket();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const activeView = location.pathname.split('/')[2] || 'dashboard';
+  const setActiveView = (view: string) => navigate(`/therapist/${view}`);
+  
+  // Use state instead of useUrlState
+  const [activeAppointmentTab, setActiveAppointmentTab] = useState<string>('all');
 
   const [isDateDropdownOpen, setIsDateDropdownOpen] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState('All Time');
@@ -432,6 +440,32 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
       fetchClientDetails(selectedClient);
     }
   }, [clientDateRange]);
+
+  // Socket.io Real-time Updates
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleBookingUpdate = () => {
+      console.log('[Socket] Booking updated, refreshing therapist dashboard data...');
+      if (activeView === 'clients') {
+        fetchClientsData();
+      } else if (activeView === 'appointments') {
+        fetchAppointmentsData();
+      } else if (activeView === 'dashboard') {
+        fetchClientsData();
+        fetchAppointmentsData();
+      }
+      if (selectedClient) {
+        fetchClientDetails(selectedClient);
+      }
+    };
+
+    socket.on('booking_updated', handleBookingUpdate);
+
+    return () => {
+      socket.off('booking_updated', handleBookingUpdate);
+    };
+  }, [socket, activeView, selectedClient, user.id]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
