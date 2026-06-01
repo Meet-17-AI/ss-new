@@ -2520,7 +2520,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       </div>
 
       {/* Content Area */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden min-h-0 relative">
         {viewMode === 'calendar' ? (
           <TherapistCalendar
             therapists={therapists}
