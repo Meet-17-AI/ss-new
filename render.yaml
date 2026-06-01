@@ -12,15 +12,4 @@ services:
       - key: PORT
         value: 3003
 
-  # CRM Backend Web Service
-  - type: web
-    name: safestories-crm-backend
-    env: node
-    rootDir: crm-backend
-    buildCommand: npm install
-    startCommand: npx tsx src/index.ts
-    plan: free
-    autoDeploy: true
-    envVars:
-      - key: PORT
-        value: 3002
+
