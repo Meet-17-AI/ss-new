@@ -5520,7 +5520,8 @@ app.post('/api/create-booking', async (req, res) => {
   try {
     const payload = req.body;
     const { randomUUID } = require('crypto');
-    const booking_id = payload.bookingId || randomUUID();
+    const booking_id = payload.bookingId || Math.floor(100000 + Math.random() * 900000).toString();
+    const invitee_id = Math.floor(100000 + Math.random() * 900000).toString();
 
     const therapistName = payload.therapistName || 'Unknown Therapist';
     let therapistId = payload.therapistId || null;
@@ -5609,24 +5610,27 @@ app.post('/api/create-booking', async (req, res) => {
 
     await pool.query(
       `INSERT INTO bookings (
-        booking_id, invitee_name, invitee_email, invitee_phone,
+        booking_id, invitee_id, source, invitee_name, invitee_email, invitee_phone, invitee_timezone,
         booking_resource_name, booking_start_at, booking_end_at,
         booking_invitee_time, invitee_payment_amount, invitee_payment_currency,
         booking_status, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, booking_joining_link
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
       [
         booking_id,
+        invitee_id,
+        'Direct Booking',
         payload.clientName,
         payload.clientEmail,
         payload.clientWhatsApp,
+        payload.timezone || 'Asia/Kolkata',
         payload.therapyName,
         startAt.toISOString(),
         endAt.toISOString(),
         inviteeTime,
         payload.paymentDetails?.amount || 0,
         'INR',
-        'booked',
+        'confirmed',
         publicBookingCheckinUrl,
         therapistName,
         therapistId,
