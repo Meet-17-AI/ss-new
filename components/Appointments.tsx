@@ -295,7 +295,8 @@ ${apt.booking_mode} joining info${apt.booking_joining_link ? `\nVideo call link:
       therapistName: apt.booking_host_name,
       clientName: apt.invitee_name,
       sessionName: apt.booking_resource_name,
-      sessionTimings: apt.booking_start_at
+      sessionTimings: apt.booking_start_at,
+      domain: window.location.origin
     };
     try {
       const response = await fetch('https://n8n.srv1169280.hstgr.cloud/webhook/fd13ea75-06b4-49e5-8188-75a88a9aaade', {

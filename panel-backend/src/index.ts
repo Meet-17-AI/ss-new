@@ -3478,7 +3478,7 @@ app.get('/api/therapist-schedule', async (req, res) => {
 });
 
 // Get all therapists
-app.get('/api/therapists', async (req, res) => {
+app.get('/api/therapists-admin', async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
@@ -3510,7 +3510,8 @@ app.get('/api/therapists', async (req, res) => {
           AND EXTRACT(YEAR FROM b.booking_start_at) = EXTRACT(YEAR FROM CURRENT_DATE)
           THEN b.invitee_payment_amount 
           ELSE 0 
-        END), 0) as revenue_this_month
+        END), 0) as revenue_this_month,
+        ROUND(AVG(NULLIF(CAST(b.client_rating AS numeric), 0)), 1) as average_rating
       FROM therapists t
       LEFT JOIN bookings b ON (
         TRIM(b.booking_host_name) ILIKE '%' || SPLIT_PART(t.name, ' ', 1) || '%'
@@ -4009,6 +4010,7 @@ app.get('/api/therapist-appointments', async (req, res) => {
         b.booking_start_at,
         b.booking_status,
         b.booking_joining_link,
+        b.client_rating,
         CASE WHEN (csn.note_id IS NOT NULL OR cpn.id IS NOT NULL OR fcn.id IS NOT NULL OR pcf.booking_id IS NOT NULL OR cch.id IS NOT NULL) THEN true ELSE false END as has_session_notes
       FROM bookings b
       LEFT JOIN client_session_notes csn ON b.booking_id = csn.booking_id
@@ -5540,12 +5542,33 @@ app.post('/api/create-booking', async (req, res) => {
       }
     }
 
-    const inviteeTime = `${payload.date} ${payload.slot}`;
-    let startAt = new Date(inviteeTime);
+    let startAt = new Date(`${payload.date} ${payload.slot}`);
     if (isNaN(startAt.getTime())) {
       startAt = new Date();
     }
     const endAt = new Date(startAt.getTime() + 50 * 60000);
+
+    const formatTime = (dateObj: Date) => {
+      let hours = dateObj.getHours();
+      let minutes = dateObj.getMinutes();
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      hours = hours % 12;
+      hours = hours ? hours : 12;
+      const minutesStr = minutes < 10 ? '0' + minutes : minutes.toString();
+      return `${hours}:${minutesStr} ${ampm}`;
+    };
+
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    
+    const dayName = days[startAt.getDay()];
+    const monthName = months[startAt.getMonth()];
+    const dateNum = startAt.getDate();
+    const yearNum = startAt.getFullYear();
+    const startTimeStr = formatTime(startAt);
+    const endTimeStr = formatTime(endAt);
+
+    const inviteeTime = `${dayName}, ${monthName} ${dateNum}, ${yearNum} at ${startTimeStr} - ${endTimeStr} IST`;
 
     const origin = req.get('origin') || 'http://localhost:3004';
     
@@ -6263,7 +6286,7 @@ app.get('/api/progress-notes', async (req, res) => {
     const progressNotesResult = await pool.query(
       `SELECT *, 'progress_note' as note_type
        FROM client_progress_notes 
-       WHERE client_id = $1 
+       WHERE client_id::text = $1 
           OR booking_id IN (
             SELECT booking_id FROM bookings 
             WHERE invitee_email = $1 OR invitee_phone = $1

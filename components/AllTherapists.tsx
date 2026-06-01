@@ -184,7 +184,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
     try {
       setLoading(true);
       const [therapistsRes, liveSessionsRes, servicesRes] = await Promise.all([
-        fetch('/api/therapists'),
+        fetch('/api/therapists-admin'),
         fetch('/api/therapists-live-status').catch(() => null),
         fetch('/api/services').catch(() => null)
       ]);
@@ -765,10 +765,12 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
     }
 
     const webhookData = {
+      bookingId: apt.booking_id,
       therapistName: apt.booking_host_name || selectedTherapist?.name,
       clientName: selectedClient?.invitee_name,
       sessionName: apt.booking_resource_name,
-      sessionTimings: apt.booking_invitee_time
+      sessionTimings: apt.booking_invitee_time,
+      domain: window.location.origin
     };
 
     try {
@@ -2712,6 +2714,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                     <tr>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Therapists Name</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Specialization</th>
+                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Rating</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Total sessions lifetime</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Sessions this month</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Live Status</th>
@@ -2742,6 +2745,18 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                                   {spec.trim()}
                                 </span>
                               ))}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-1">
+                              {therapist.average_rating ? (
+                                <>
+                                  <span className="text-yellow-500 font-medium text-sm">★</span>
+                                  <span className="font-medium">{therapist.average_rating}</span>
+                                </>
+                              ) : (
+                                <span className="text-gray-400 text-sm">No ratings</span>
+                              )}
                             </div>
                           </td>
                           <td className="px-6 py-4">{therapist.total_sessions_lifetime}</td>
