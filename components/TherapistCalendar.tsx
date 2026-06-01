@@ -216,11 +216,34 @@ export const TherapistCalendar: React.FC<TherapistCalendarProps> = ({
           if (sessionTypeFilter === 'free_consultation' && !sessionTypeLower.includes('free consultation')) return;
         }
 
-        // Use session_timings for therapist dashboard, booking_start_at for admin dashboard
+        // Determine start and end times
+        let timeData: { start: Date; end: Date } | null = null;
+        
+        // 1. First try parsing the formatted string to get both start and precise end times
         const timeString = apt.session_timings || apt.booking_start_at;
-        const timeData = parseAppointmentTime(timeString);
+        timeData = parseAppointmentTime(timeString);
+        
+        // 2. If parsing the string failed, fallback to raw timestamp (if available)
         if (!timeData) {
-          return;
+          const rawTimestamp = apt.booking_start_at_raw || apt.booking_date;
+          const isIsoDate = (str: string) => moment(str, moment.ISO_8601, true).isValid() || moment(str).isValid();
+          
+          if (rawTimestamp && isIsoDate(rawTimestamp)) {
+            timeData = {
+              start: moment(rawTimestamp).toDate(),
+              end: moment(rawTimestamp).add(50, 'minutes').toDate()
+            };
+          } else if (apt.booking_start_at && isIsoDate(apt.booking_start_at)) {
+            // In therapist-appointments, booking_start_at is the raw timestamp
+            timeData = {
+              start: moment(apt.booking_start_at).toDate(),
+              end: moment(apt.booking_start_at).add(50, 'minutes').toDate()
+            };
+          }
+        }
+
+        if (!timeData) {
+          return; // Skip if we completely failed to determine a valid time
         }
 
         const clientName = apt.invitee_name || apt.client_name || 'Unknown Client';
