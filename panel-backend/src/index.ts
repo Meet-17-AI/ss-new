@@ -3121,7 +3121,8 @@ app.post('/api/reschedule-booking', async (req, res) => {
     if (notify !== false) {
       try {
         const { sendBookingRescheduledClient, sendBookingRescheduledTherapist } = await import('./automations/index.js');
-        const shortLink = bookingDetails.public_booking_checkin_url || `https://safestories-dashboard.vercel.app/booking-confirmation/${booking_id}`;
+        const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://safestories-dashboard.vercel.app';
+        const shortLink = bookingDetails.public_booking_checkin_url || `${baseUrl}/booking-confirmation/${booking_id}`;
         
         await sendBookingRescheduledClient(
           booking_id,
@@ -4734,7 +4735,7 @@ app.get('/api/session-notes-info', async (req, res) => {
     // Auto-populate custom_form_link in DB for consultations if empty
     if (isConsultation) {
       const host = req.headers.host || '';
-      const baseUrl = host.includes('localhost') ? 'http://localhost:3004' : 'https://safestories-dashboard.vercel.app';
+      const baseUrl = host.includes('localhost') ? 'http://localhost:3004' : (process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://safestories-dashboard.vercel.app');
       const publicLink = `${baseUrl}/session-notes/${row.booking_id}`;
       
       // Upsert into client_doc_form
@@ -5181,14 +5182,16 @@ app.post('/api/webhooks/new-booking', async (req, res) => {
     }
     
     // Store public booking checkin URL
-    const publicBookingCheckinUrl = `https://safestories-dashboard.vercel.app/booking-confirmation/${booking_id}`;
+    const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://safestories-dashboard.vercel.app';
+    const publicBookingCheckinUrl = `${baseUrl}/booking-confirmation/${booking_id}`;
     await pool.query(
       `UPDATE bookings SET public_booking_checkin_url = $1 WHERE booking_id = $2`,
       [publicBookingCheckinUrl, booking_id]
     );
 
     // Auto-populate client_doc_form with public session notes link
-    const publicSessionNotesUrl = `https://safestories-dashboard.vercel.app/session-notes/${booking_id}`;
+    const baseUrlForSession = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://safestories-dashboard.vercel.app';
+    const publicSessionNotesUrl = `${baseUrlForSession}/session-notes/${booking_id}`;
     await pool.query(`
       INSERT INTO client_doc_form (booking_id, status, custom_form_link)
       VALUES ($1, 'pending', $2)
