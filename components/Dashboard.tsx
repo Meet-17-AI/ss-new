@@ -53,8 +53,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
     if (params.get('googleAuth') === 'success') {
       const newUrl = window.location.pathname + window.location.search.replace(/[?&]googleAuth=success/, '').replace(/^&/, '?');
       window.history.replaceState({}, '', newUrl);
-      navigate('/admin/appSettings');
+      navigate('/admin/appSettings/calendars');
       alert('Google Calendar connected successfully!');
+    } else if (params.get('googleAuth') === 'error') {
+      const reason = params.get('reason');
+      const newUrl = window.location.pathname + window.location.search.replace(/[?&]googleAuth=error/, '').replace(/[?&]reason=[^&]*/, '').replace(/^&/, '?');
+      window.history.replaceState({}, '', newUrl);
+      navigate('/admin/appSettings/calendars');
+      if (reason === 'already_linked') {
+        alert('This email or calendar is connected to another therapist. Please connect a different Google Calendar.');
+      } else {
+        alert('Google Calendar connection failed.');
+      }
     }
   }, [navigate]);
 

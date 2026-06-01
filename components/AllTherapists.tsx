@@ -8,6 +8,7 @@ import { ProgressNotesTab } from './ProgressNotesTab';
 import { ProgressNoteDetail } from './ProgressNoteDetail';
 import { GoalTrackingTab } from './GoalTrackingTab';
 import { FreeConsultationDetail } from './FreeConsultationDetail';
+import { therapistData } from '../lib/sessionData';
 import { ViewTherapistModal } from './ViewTherapistModal';
 import { EditTherapistForm } from './EditTherapistForm';
 import { ConfirmModal } from './ConfirmModal';
@@ -184,12 +185,24 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       setLoading(true);
       const [therapistsRes, liveSessionsRes, servicesRes] = await Promise.all([
         fetch('/api/therapists'),
-        fetch('/api/therapists-live-status'),
-        fetch('/api/services')
+        fetch('/api/therapists-live-status').catch(() => null),
+        fetch('/api/services').catch(() => null)
       ]);
       const therapistsData = await therapistsRes.json();
-      const liveStatusData = await liveSessionsRes.json();
-      const servicesData = await servicesRes.json();
+      
+      let liveStatusData = {};
+      try {
+        if (liveSessionsRes && liveSessionsRes.ok) {
+          liveStatusData = await liveSessionsRes.json();
+        }
+      } catch (e) { console.error('Failed to parse live status:', e); }
+
+      let servicesData = [];
+      try {
+        if (servicesRes && servicesRes.ok) {
+          servicesData = await servicesRes.json();
+        }
+      } catch (e) { console.error('Failed to parse services:', e); }
 
       const therapistsWithStatus = therapistsData.map((t: any) => {
         const firstName = t.name ? t.name.split(' ')[0] : '';
@@ -213,15 +226,15 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       if (!searchQuery) return true;
       const query = searchQuery.toLowerCase();
       return (
-        therapist.name.toLowerCase().includes(query) ||
-        therapist.specialization.toLowerCase().includes(query)
+        (therapist.name || '').toLowerCase().includes(query) ||
+        (therapist.specialization || '').toLowerCase().includes(query)
       );
     })
     .sort((a, b) => {
       if (!searchQuery) return 0;
       const query = searchQuery.toLowerCase();
-      const aNameMatch = a.name.toLowerCase().includes(query);
-      const bNameMatch = b.name.toLowerCase().includes(query);
+      const aNameMatch = (a.name || '').toLowerCase().includes(query);
+      const bNameMatch = (b.name || '').toLowerCase().includes(query);
       if (aNameMatch && !bNameMatch) return -1;
       if (!aNameMatch && bNameMatch) return 1;
       return 0;
@@ -2542,7 +2555,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
             <div className="p-6 h-full overflow-y-auto bg-gray-50 rounded-lg border">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                 {therapists.map((therapist) => {
-                  const services = dbServices
+                  let services = dbServices
                     .filter((s: any) => s.therapist_id === therapist.therapist_id || s.therapist_name === therapist.name)
                     .map((s: any) => ({
                       ...s,
@@ -2550,6 +2563,24 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                       detailedDescription: s.detailed_description,
                       editViewDescription: s.edit_view_description
                     }));
+                  
+                  if (services.length === 0 && therapistData[therapist.name]) {
+                    services = therapistData[therapist.name].services;
+                  }
+                  
+                  if (services.length === 0) {
+                    const defaultSlug = `/${therapist.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+                    services = [{
+                      title: `Therapy Session with ${therapist.name}`,
+                      slug: defaultSlug,
+                      charges: 'TBD',
+                      type: 'one_on_one',
+                      label: 'Session',
+                      description: 'Therapy Session',
+                      detailedDescription: ''
+                    }];
+                  }
+
                   const hasSchedule = !!therapist.scheduleId || !!therapist.therapist_id;
                   const canManage = true;
 
@@ -2559,14 +2590,6 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                       className={`relative bg-white rounded-xl border p-6 flex flex-col items-center text-center transition-all ${canManage ? 'hover:shadow-md cursor-pointer hover:border-teal-500' : 'opacity-70 bg-gray-50'
                         }`}
                       onClick={() => {
-                        const services = dbServices
-                          .filter((s: any) => s.therapist_id === therapist.therapist_id || s.therapist_name === therapist.name)
-                          .map((s: any) => ({
-                            ...s,
-                            scheduleId: s.schedule_id,
-                            detailedDescription: s.detailed_description,
-                            editViewDescription: s.edit_view_description
-                          }));
                         const scheduleId = therapist.scheduleId || (services.length > 0 ? services[0].scheduleId : null) || therapist.therapist_id;
 
                         // We can open the edit event if we have either a scheduleId or services

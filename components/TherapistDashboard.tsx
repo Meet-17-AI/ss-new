@@ -3872,8 +3872,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                       sessionDate: feedbackTarget.session_timings || feedbackTarget.booking_start_at
                     };
                     
-                    // Real webhook URL
-                    const response = await fetch('https://n8n.srv1169280.hstgr.cloud/webhook/6e110a22-ddc7-487b-8995-233b94ecb2c5', {
+                    const response = await fetch('/api/request-feedback', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(webhookData)

@@ -9,6 +9,10 @@ export default defineConfig(({ mode }) => {
         port: 3004,
         host: '0.0.0.0',
         proxy: {
+          '/api/crm': {
+            target: 'http://localhost:3003',
+            changeOrigin: true,
+          },
           '/api': {
             target: 'http://localhost:3002',
             changeOrigin: true,

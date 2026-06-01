@@ -70,6 +70,22 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   });
   const [showTzDropdown, setShowTzDropdown] = useState(false);
 
+  useEffect(() => {
+    // Auto-fetch timezone from browser IP
+    fetch('https://ipapi.co/timezone')
+      .then(res => {
+        if (!res.ok) throw new Error('IP timezone fetch failed');
+        return res.text();
+      })
+      .then(tz => {
+        const fetchedTz = tz.trim();
+        if (fetchedTz && fetchedTz.includes('/')) {
+          setClientTimezone(fetchedTz === 'Asia/Calcutta' ? 'Asia/Kolkata' : fetchedTz);
+        }
+      })
+      .catch(err => console.error('Error fetching timezone from IP, using system default:', err));
+  }, []);
+
   const COMMON_TIMEZONES = [
     { value: 'Asia/Kolkata', label: 'India (IST, UTC+5:30)' },
     { value: 'America/New_York', label: 'New York (EST/EDT)' },
@@ -255,7 +271,9 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
 
     setIsSubmitting(true);
     const amountVal = parseFloat(sessionCharges.replace('₹', '').replace(',', '')) || 0;
-    const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free') || amountVal === 0;
+    // Temporarily disabled payments globally as per user request
+    // const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free') || amountVal === 0;
+    const isFree = true;
 
     const payload: any = {
       therapyName: getSimplifiedTherapyName(),

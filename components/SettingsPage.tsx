@@ -78,10 +78,11 @@ const CalendarConnectionsAdmin: React.FC = () => {
     }
   };
 
-  const filteredTherapists = therapists.filter(t => 
-    t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (t.google_email && t.google_email.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
+  const filteredTherapists = Array.isArray(therapists) ? therapists.filter(t => {
+    const nameStr = t.name || '';
+    return nameStr.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (t.google_email && t.google_email.toLowerCase().includes(searchQuery.toLowerCase()));
+  }) : [];
 
   if (loading) {
     return (
@@ -158,7 +159,7 @@ const CalendarConnectionsAdmin: React.FC = () => {
                         className="w-12 h-12 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center font-semibold text-base"
                         style={{ display: therapist.profile_picture_url && !isPlatform ? 'none' : 'flex' }}
                       >
-                        {therapist.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()}
+                        {(therapist.name || 'Unknown').split(' ').map((n: string) => n[0] || '').join('').substring(0, 2).toUpperCase()}
                       </div>
                     ) : null}
 
