@@ -24,7 +24,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from './lib/timezone';
 import { startDashboardApiBookingSync } from './dashboardApiBookingSync';
 import { uploadFile } from './lib/minio';
-import { sendOTPEmail, sendPasswordResetOTP } from './lib/email';
+import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail } from './lib/email';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -5379,7 +5379,9 @@ app.post('/api/fetch-slots', async (req, res) => {
     let scheduleId = null;
     let therapistId = null;
 
-    if (therapistName) {
+    if (therapistName === 'SafeStories') {
+      scheduleId = 999999;
+    } else if (therapistName) {
       const therapistResult = await pool.query(
         'SELECT t.therapist_id, tr.schedule_id FROM therapists t LEFT JOIN therapist_resources tr ON t.therapist_id = tr.therapist_id WHERE t.name ILIKE $1 ORDER BY tr.schedule_id DESC NULLS LAST LIMIT 1',
         [`%${therapistName.split(' ')[0]}%`]
@@ -5525,11 +5527,31 @@ app.post('/api/create-booking', async (req, res) => {
     const booking_id = payload.bookingId || Math.floor(100000 + Math.random() * 900000).toString();
     const invitee_id = Math.floor(100000 + Math.random() * 900000).toString();
 
+    // 1. Generate Masked Email
+    let nextSequentialId = 11111; // Starting number based on user preference
+    const latestMaskRes = await pool.query('SELECT masked_email FROM masked_emails ORDER BY id DESC LIMIT 1');
+    if (latestMaskRes.rows.length > 0) {
+      const latestEmail = latestMaskRes.rows[0].masked_email;
+      const match = latestEmail.match(/client(\d+)@safestories\.in/);
+      if (match && match[1]) {
+        nextSequentialId = parseInt(match[1], 10) + 1;
+      }
+    }
+    const maskedEmail = `client${nextSequentialId}@safestories.in`;
+    
+    const maskInsertRes = await pool.query(
+      'INSERT INTO masked_emails (real_email, masked_email, created_at) VALUES ($1, $2, CURRENT_TIMESTAMP) RETURNING id',
+      [payload.clientEmail, maskedEmail]
+    );
+    const maskId = maskInsertRes.rows[0].id;
+
     const therapistName = payload.therapistName || 'Unknown Therapist';
     let therapistId = payload.therapistId || null;
     let therapist = null;
 
-    if (therapistName !== 'Unknown Therapist') {
+    if (therapistName === 'SafeStories') {
+      therapistId = 'SafeStories';
+    } else if (therapistName !== 'Unknown Therapist') {
       const queryParam = therapistId ? therapistId : `%${therapistName.split(' ')[0]}%`;
       const queryStr = therapistId 
         ? 'SELECT * FROM therapists WHERE therapist_id = $1 LIMIT 1'
@@ -5585,7 +5607,7 @@ app.post('/api/create-booking', async (req, res) => {
 
         const eventBody: any = {
           summary: `${payload.therapyName} - ${payload.clientName}`,
-          description: `Therapy session booked via SafeStories.\nClient: ${payload.clientName}\nClient Email: ${payload.clientEmail}\nSession Mode: ${payload.sessionMode || 'online'}\nNotes: ${payload.notes || 'None'}`,
+          description: `Therapy session booked via SafeStories.\nClient: ${payload.clientName}\nClient Email: ${maskedEmail}\nSession Mode: ${payload.sessionMode || 'online'}\nNotes: ${payload.notes || 'None'}`,
           start: {
             dateTime: startAt.toISOString(),
             timeZone: 'Asia/Kolkata'
@@ -5595,7 +5617,7 @@ app.post('/api/create-booking', async (req, res) => {
             timeZone: 'Asia/Kolkata'
           },
           attendees: [
-            { email: payload.clientEmail }
+            { email: maskedEmail }
           ]
         };
 
@@ -5637,14 +5659,14 @@ app.post('/api/create-booking', async (req, res) => {
         booking_resource_name, booking_start_at, booking_end_at,
         booking_invitee_time, invitee_payment_amount, invitee_payment_currency,
         booking_status, public_booking_checkin_url,
-        booking_host_name, therapist_id, booking_mode, booking_joining_link
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+        booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
       [
         booking_id,
         invitee_id,
         'Direct Booking',
         payload.clientName,
-        payload.clientEmail,
+        maskedEmail,
         payload.clientWhatsApp,
         payload.timezone || 'Asia/Kolkata',
         payload.therapyName,
@@ -5658,9 +5680,29 @@ app.post('/api/create-booking', async (req, res) => {
         therapistName,
         therapistId,
         payload.sessionMode === 'online' ? 'Online' : 'Offline',
-        meetLink
+        meetLink,
+        maskId
       ]
     );
+
+    // Send native email confirmation
+    try {
+      await sendClientBookingConfirmationEmail(payload.clientEmail, {
+        clientName: payload.clientName,
+        inviteeTimeStr: inviteeTime,
+        sessionName: payload.therapyName || 'Session',
+        dateStr: `${dayName}, ${monthName} ${dateNum}, ${yearNum}`,
+        timeRangeStr: `${startTimeStr} - ${endTimeStr}`,
+        duration: 50,
+        joinLink: hasCalendar ? meetLink : (payload.sessionMode || 'online'),
+        checkinUrl: publicBookingCheckinUrl,
+        calendarStartRaw: startAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z',
+        calendarEndRaw: endAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
+      });
+      console.log(`[Create Booking] Sent confirmation email to ${payload.clientEmail}`);
+    } catch (emailErr) {
+      console.error('[Create Booking] Failed to send confirmation email:', emailErr);
+    }
 
     // Send confirmation WhatsApp natively
     try {

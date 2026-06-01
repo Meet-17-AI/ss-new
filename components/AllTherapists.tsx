@@ -2556,7 +2556,12 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
           ) : (
             <div className="p-6 h-full overflow-y-auto bg-gray-50 rounded-lg border">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {therapists.map((therapist) => {
+                {[{
+                  therapist_id: 'SafeStories',
+                  name: 'SafeStories',
+                  contact_info: 'Free Consultation',
+                  scheduleId: 999999
+                }, ...therapists].map((therapist) => {
                   let services = dbServices
                     .filter((s: any) => s.therapist_id === therapist.therapist_id || s.therapist_name === therapist.name)
                     .map((s: any) => ({

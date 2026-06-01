@@ -161,5 +161,21 @@ export const therapistData: Record<string, { url: string, services: any[] }> = {
         label: "adolescent/anjali"
       }
     ]
+  },
+  "SafeStories": {
+    url: "safestories.dayschedule.com",
+    services: [
+      {
+        title: "Free Consultation with SafeStories",
+        duration: "15 m",
+        type: "one_on_one",
+        description: "**Free Consultation:** A brief introductory session.",
+        detailedDescription: "A free 15-minute consultation session.",
+        editViewDescription: "**Free Consultation**\n**Therapist:** SafeStories",
+        charges: "Free",
+        slug: "/safestories",
+        label: "consultation/safestories"
+      }
+    ]
   }
 };
