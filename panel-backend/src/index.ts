@@ -3511,7 +3511,7 @@ app.get('/api/therapists-admin', async (req, res) => {
           THEN b.invitee_payment_amount 
           ELSE 0 
         END), 0) as revenue_this_month,
-        ROUND(AVG(NULLIF(CAST(b.client_rating AS numeric), 0)), 1) as average_rating
+        ROUND(AVG(NULLIF(CAST(NULLIF(REGEXP_REPLACE(b.client_rating::text, '[^0-9.]', '', 'g'), '') AS numeric), 0)), 1) as average_rating
       FROM therapists t
       LEFT JOIN bookings b ON (
         TRIM(b.booking_host_name) ILIKE '%' || SPLIT_PART(t.name, ' ', 1) || '%'
