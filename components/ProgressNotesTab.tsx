@@ -100,6 +100,7 @@ export const ProgressNotesTab: React.FC<ProgressNotesTabProps> = ({ clientId, on
   };
 
   const filteredNotes = notes.filter(note => {
+    if (!searchTerm) return true;
     const searchLower = searchTerm.toLowerCase();
     // For progress notes
     if (note.note_type === 'progress_note') {
@@ -114,10 +115,11 @@ export const ProgressNotesTab: React.FC<ProgressNotesTabProps> = ({ clientId, on
     return true;
   });
 
-  const filteredFreeConsultNotes = freeConsultNotes.filter(note =>
-    note.presenting_concerns?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    note.other_notes?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredFreeConsultNotes = freeConsultNotes.filter(note => {
+    if (!searchTerm) return true;
+    return note.presenting_concerns?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+           note.other_notes?.toLowerCase().includes(searchTerm.toLowerCase())
+  });
 
   const allNotes = [...filteredFreeConsultNotes.map(n => ({ ...n, isFreeConsultation: true })), ...filteredNotes];
 
