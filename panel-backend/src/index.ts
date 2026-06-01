@@ -3241,25 +3241,43 @@ app.post('/api/request-feedback', async (req, res) => {
 // Webhook to receive feedback rating from WhatsApp/automation
 app.post('/api/webhook/feedback', async (req, res) => {
   try {
-    const { bookingId, rating } = req.body;
+    const { name, phone, rating } = req.body;
     
-    if (!bookingId || rating === undefined) {
-      return res.status(400).json({ error: 'Missing bookingId or rating' });
+    if (!phone || rating === undefined) {
+      return res.status(400).json({ error: 'Missing phone or rating' });
     }
 
-    const updateResult = await pool.query(
-      `UPDATE bookings SET client_rating = $1 WHERE booking_id = $2 RETURNING booking_id`,
-      [rating, bookingId]
+    // Clean phone number to match database format (usually +91... or without)
+    const cleanPhone = phone.replace(/[^0-9+]/g, '');
+    const phoneSearchPattern = `%${cleanPhone.slice(-10)}`; // Match last 10 digits
+
+    // Find the latest completed booking for this phone number
+    const bookingResult = await pool.query(
+      `SELECT booking_id 
+       FROM bookings 
+       WHERE invitee_phone LIKE $1 
+         AND (booking_status = 'COMPLETED' OR booking_status = 'PENDING_NOTES')
+       ORDER BY booking_start_at DESC 
+       LIMIT 1`,
+      [phoneSearchPattern]
     );
 
-    if (updateResult.rowCount === 0) {
-      return res.status(404).json({ error: 'Booking not found' });
+    if (bookingResult.rows.length === 0) {
+      return res.status(404).json({ error: 'No recent completed booking found for this client' });
     }
+
+    const targetBookingId = bookingResult.rows[0].booking_id;
+
+    // Update the rating
+    const updateResult = await pool.query(
+      `UPDATE bookings SET client_rating = $1 WHERE booking_id = $2 RETURNING booking_id`,
+      [rating, targetBookingId]
+    );
 
     // You can emit a socket event here if you want the dashboard to refresh instantly
     io.emit('booking_updated');
 
-    res.json({ success: true, message: 'Rating saved successfully' });
+    res.json({ success: true, message: 'Rating saved successfully', bookingId: targetBookingId });
   } catch (error: any) {
     console.error('Error saving feedback rating:', error);
     res.status(500).json({ error: 'Failed to save rating' });
