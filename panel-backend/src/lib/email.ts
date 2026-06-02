@@ -168,11 +168,15 @@ Best regards,
 The SafeStories Team`,
     };
 
-    const info = await resend.emails.send(mailOptions);
-    console.log('✅ Email sent successfully:', info.data?.id);
+    const { data, error } = await resend.emails.send(mailOptions);
+    if (error) {
+      console.error('❌ Resend API Error:', error);
+      throw error;
+    }
+    console.log('✅ Email sent successfully:', data?.id);
   } catch (error) {
     console.error('❌ Error sending email:', error);
-    throw new Error('Failed to send OTP email');
+    throw error;
   }
 }
 
@@ -323,11 +327,15 @@ Best regards,
 The SafeStories Team`,
     };
 
-    const info = await resend.emails.send(mailOptions);
-    console.log('✅ Password reset email sent successfully:', info.data?.id);
+    const { data, error } = await resend.emails.send(mailOptions);
+    if (error) {
+      console.error('❌ Resend API Error:', error);
+      throw error;
+    }
+    console.log('✅ Password reset email sent successfully:', data?.id);
   } catch (error) {
     console.error('❌ Error sending password reset email:', error);
-    throw new Error('Failed to send password reset email');
+    throw error;
   }
 }
 
@@ -373,10 +381,15 @@ export async function sendAdminBookingConfirmationEmail(
       html: htmlContent,
     };
 
-    const info = await resend.emails.send(mailOptions);
-    console.log('✅ Admin booking confirmation email sent successfully:', info.data?.id);
+    const { data, error } = await resend.emails.send(mailOptions);
+    if (error) {
+      console.error('❌ Resend API Error:', error);
+      throw error;
+    }
+    console.log('✅ Admin booking confirmation email sent successfully:', data?.id);
   } catch (error) {
     console.error('❌ Error sending admin booking confirmation email:', error);
+    throw error;
   }
 }
 
@@ -511,9 +524,14 @@ export async function sendClientBookingConfirmationEmail(
       html: htmlContent,
     };
 
-    const info = await resend.emails.send(mailOptions);
-    console.log('✅ Client booking confirmation email sent successfully:', info.data?.id);
+    const { data, error } = await resend.emails.send(mailOptions);
+    if (error) {
+      console.error('❌ Resend API Error:', error);
+      throw error;
+    }
+    console.log('✅ Client booking confirmation email sent successfully:', data?.id);
   } catch (error) {
     console.error('❌ Error sending client booking confirmation email:', error);
+    throw error;
   }
 }
