@@ -5557,29 +5557,20 @@ app.post('/api/create-booking', async (req, res) => {
       }
     }
 
-    let startAt = new Date(`${payload.date} ${payload.slot}`);
+    let startAt = new Date(`${payload.date} ${payload.slot} GMT+0530`);
     if (isNaN(startAt.getTime())) {
       startAt = new Date();
     }
     const endAt = new Date(startAt.getTime() + 50 * 60000);
 
     const formatTime = (dateObj: Date) => {
-      let hours = dateObj.getHours();
-      let minutes = dateObj.getMinutes();
-      const ampm = hours >= 12 ? 'PM' : 'AM';
-      hours = hours % 12;
-      hours = hours ? hours : 12;
-      const minutesStr = minutes < 10 ? '0' + minutes : minutes.toString();
-      return `${hours}:${minutesStr} ${ampm}`;
+      return dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
     };
 
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    
-    const dayName = days[startAt.getDay()];
-    const monthName = months[startAt.getMonth()];
-    const dateNum = startAt.getDate();
-    const yearNum = startAt.getFullYear();
+    const dayName = startAt.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
+    const monthName = startAt.toLocaleDateString('en-US', { month: 'short', timeZone: 'Asia/Kolkata' });
+    const dateNum = startAt.toLocaleDateString('en-US', { day: 'numeric', timeZone: 'Asia/Kolkata' });
+    const yearNum = startAt.toLocaleDateString('en-US', { year: 'numeric', timeZone: 'Asia/Kolkata' });
     const startTimeStr = formatTime(startAt);
     const endTimeStr = formatTime(endAt);
 
