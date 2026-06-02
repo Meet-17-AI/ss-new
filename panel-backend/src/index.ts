@@ -5418,40 +5418,54 @@ app.post('/api/fetch-slots', async (req, res) => {
     }
 
     let availableSlots = [];
+    const targetDateStr = payload.selectedDate;
+    const targetDate = new Date(`${targetDateStr}T12:00:00Z`);
+    const daysToCheck = [-1, 0, 1].map(offset => {
+      const d = new Date(targetDate.getTime() + offset * 86400000);
+      return d.toISOString().split('T')[0];
+    });
 
     if (Array.isArray(availabilityRules) && availabilityRules.length > 0) {
-      const selectedDateObj = new Date(payload.selectedDate);
-      const dayOfWeek = selectedDateObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: payload.timezone }).toLowerCase();
-      
-      const dayRule = availabilityRules.find((r) => r.day.toLowerCase() === dayOfWeek);
-      
-      if (dayRule && dayRule.is_available && Array.isArray(dayRule.times)) {
-        for (const timeBlock of dayRule.times) {
-          let current = new Date(`${payload.selectedDate}T${timeBlock.start}:00`);
-          const end = new Date(`${payload.selectedDate}T${timeBlock.end}:00`);
-          
-          while (current < end) {
-            const slotEndCheck = new Date(current.getTime() + 50 * 60000);
-            if (slotEndCheck > end) break; // Do not generate slots that run past the availability block
+      for (const dStr of daysToCheck) {
+        const dObj = new Date(`${dStr}T12:00:00Z`);
+        const dayOfWeekIST = dObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' }).toLowerCase();
+        
+        const dayRule = availabilityRules.find((r) => r.day.toLowerCase() === dayOfWeekIST);
+        
+        if (dayRule && dayRule.is_available && Array.isArray(dayRule.times)) {
+          for (const timeBlock of dayRule.times) {
+            let current = new Date(`${dStr}T${timeBlock.start}:00+05:30`);
+            const end = new Date(`${dStr}T${timeBlock.end}:00+05:30`);
             
-            const timeStr = `${current.getHours().toString().padStart(2, '0')}:${current.getMinutes().toString().padStart(2, '0')}:00`;
-            availableSlots.push({ timeStr, timestampMs: current.getTime() });
-            
-            current.setMinutes(current.getMinutes() + 30);
+            while (current < end) {
+              const slotEndCheck = new Date(current.getTime() + 50 * 60000);
+              if (slotEndCheck > end) break;
+              
+              availableSlots.push({ 
+                timestampMs: current.getTime(), 
+                dateObj: new Date(current.getTime())
+              });
+              
+              current.setMinutes(current.getMinutes() + 30);
+            }
           }
         }
       }
     } else {
-       let current = new Date(`${payload.selectedDate}T10:00:00`);
-       const end = new Date(`${payload.selectedDate}T18:00:00`);
-       while (current < end) {
-         const slotEndCheck = new Date(current.getTime() + 50 * 60000);
-         if (slotEndCheck > end) break;
-         
-         const timeStr = `${current.getHours().toString().padStart(2, '0')}:${current.getMinutes().toString().padStart(2, '0')}:00`;
-         availableSlots.push({ timeStr, timestampMs: current.getTime() });
-         
-         current.setMinutes(current.getMinutes() + 30);
+       for (const dStr of daysToCheck) {
+         let current = new Date(`${dStr}T10:00:00+05:30`);
+         const end = new Date(`${dStr}T18:00:00+05:30`);
+         while (current < end) {
+           const slotEndCheck = new Date(current.getTime() + 50 * 60000);
+           if (slotEndCheck > end) break;
+           
+           availableSlots.push({ 
+              timestampMs: current.getTime(),
+              dateObj: new Date(current.getTime())
+           });
+           
+           current.setMinutes(current.getMinutes() + 30);
+         }
        }
     }
 
@@ -5459,8 +5473,10 @@ app.post('/api/fetch-slots', async (req, res) => {
       try {
         const bookingsRes = await pool.query(
           `SELECT booking_start_at, booking_end_at FROM bookings 
-           WHERE therapist_id = $1 AND DATE(booking_start_at AT TIME ZONE 'Asia/Kolkata') = $2 AND booking_status != 'Canceled'`,
-          [therapistId, payload.selectedDate]
+           WHERE therapist_id = $1 AND booking_status != 'Canceled'
+           AND booking_start_at >= $2::timestamp WITH TIME ZONE 
+           AND booking_start_at <= $3::timestamp WITH TIME ZONE`,
+          [therapistId, `${daysToCheck[0]}T00:00:00+05:30`, `${daysToCheck[2]}T23:59:59+05:30`]
         );
         
         availableSlots = availableSlots.filter(slot => {
@@ -5486,11 +5502,34 @@ app.post('/api/fetch-slots', async (req, res) => {
     const fourHoursFromNow = new Date(realNow.getTime() + 4 * 60 * 60 * 1000);
     
     availableSlots = availableSlots.filter(slot => {
-      const slotDateIST = new Date(`${payload.selectedDate}T${slot.timeStr}+05:30`);
-      return slotDateIST >= fourHoursFromNow;
+      return slot.timestampMs >= fourHoursFromNow.getTime();
     });
 
-    const formattedSlots = availableSlots.map(slot => `${payload.selectedDate}T${slot.timeStr}`);
+    const formattedSlots = availableSlots
+      .map(slot => {
+        const formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: payload.timezone,
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+            hourCycle: 'h23'
+        });
+        const parts = formatter.formatToParts(slot.dateObj);
+        const y = parts.find(p => p.type === 'year').value;
+        const m = parts.find(p => p.type === 'month').value;
+        const d = parts.find(p => p.type === 'day').value;
+        const h = parts.find(p => p.type === 'hour').value;
+        const min = parts.find(p => p.type === 'minute').value;
+        const s = parts.find(p => p.type === 'second').value;
+        
+        return {
+          clientDateStr: `${y}-${m}-${d}`,
+          clientTimeStr: `${h}:${min}:${s}`,
+          absoluteIso: slot.dateObj.toISOString()
+        };
+      })
+      .filter(slot => slot.clientDateStr === payload.selectedDate)
+      .map(slot => slot.absoluteIso);
+
     res.json([{ "Available Slots": formattedSlots, success: true }]);
   } catch (error) {
     console.error('Error in native fetch-slots:', error);
@@ -5594,7 +5633,25 @@ app.post('/api/create-booking', async (req, res) => {
     const startTimeStr = formatTime(startAt);
     const endTimeStr = formatTime(endAt);
 
-    const inviteeTime = `${dayName}, ${monthName} ${dateNum}, ${yearNum} at ${startTimeStr} - ${endTimeStr} IST`;
+    const hostTime = `${dayName}, ${monthName} ${dateNum}, ${yearNum} at ${startTimeStr} - ${endTimeStr} IST`;
+
+    const clientTz = payload.timezone || 'Asia/Kolkata';
+    const formatTimeClient = (dateObj: Date) => dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: clientTz });
+    const clientDayName = startAt.toLocaleDateString('en-US', { weekday: 'long', timeZone: clientTz });
+    const clientMonthName = startAt.toLocaleDateString('en-US', { month: 'short', timeZone: clientTz });
+    const clientDateNum = startAt.toLocaleDateString('en-US', { day: 'numeric', timeZone: clientTz });
+    const clientYearNum = startAt.toLocaleDateString('en-US', { year: 'numeric', timeZone: clientTz });
+    
+    let tzShort = 'IST';
+    if (clientTz !== 'Asia/Kolkata') {
+      try {
+        const parts = new Intl.DateTimeFormat('en-US', { timeZone: clientTz, timeZoneName: 'short' }).formatToParts(startAt);
+        tzShort = parts.find(p => p.type === 'timeZoneName')?.value || clientTz;
+      } catch (e) {
+        tzShort = clientTz;
+      }
+    }
+    const inviteeTime = `${clientDayName}, ${clientMonthName} ${clientDateNum}, ${clientYearNum} at ${formatTimeClient(startAt)} - ${formatTimeClient(endAt)} ${tzShort}`;
 
     const origin = req.get('origin') || 'http://localhost:3004';
     
@@ -5661,10 +5718,10 @@ app.post('/api/create-booking', async (req, res) => {
       `INSERT INTO bookings (
         booking_id, invitee_id, source, invitee_name, invitee_email, invitee_phone, invitee_timezone,
         booking_resource_name, booking_start_at, booking_end_at,
-        booking_invitee_time, invitee_payment_amount, invitee_payment_currency,
+        booking_invitee_time, booking_host_time, invitee_payment_amount, invitee_payment_currency,
         booking_status, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
       [
         booking_id,
         invitee_id,
@@ -5677,6 +5734,7 @@ app.post('/api/create-booking', async (req, res) => {
         startAt.toISOString(),
         endAt.toISOString(),
         inviteeTime,
+        hostTime,
         payload.paymentDetails?.amount || 0,
         'INR',
         'confirmed',
@@ -5715,7 +5773,7 @@ app.post('/api/create-booking', async (req, res) => {
         clientPhone: payload.clientWhatsApp || 'Not provided',
         clientEmail: payload.clientEmail,
         sessionName: payload.therapyName || 'Session',
-        sessionTiming: inviteeTime,
+        sessionTiming: hostTime, // Send admin the IST hostTime!
         sessionMode: payload.sessionMode || 'Online',
         therapistName: therapistName,
         therapistEmail: therapist?.contact_info || 'Not available'
