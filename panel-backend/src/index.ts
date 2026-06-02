@@ -25,7 +25,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from './lib/timezone';
 import { startDashboardApiBookingSync } from './dashboardApiBookingSync';
 import { uploadFile } from './lib/minio';
-import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail } from './lib/email';
+import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail } from './lib/email';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -317,6 +317,18 @@ app.post('/api/native/fetch-slots', async (req, res) => {
         console.error('Error fetching bookings to filter slots:', err);
       }
     }
+
+    const realNow = new Date();
+    const fourHoursFromNow = new Date(realNow.getTime() + 4 * 60 * 60 * 1000);
+    
+    availableSlots = availableSlots.filter(slot => {
+      const [time, modifier] = slot.split(' ');
+      let [hours, minutes] = time.split(':');
+      if (hours === '12') hours = '00';
+      if (modifier === 'PM') hours = (parseInt(hours, 10) + 12).toString();
+      const slotDateIST = new Date(`${payload.selectedDate}T${hours.padStart(2, '0')}:${minutes}:00+05:30`);
+      return slotDateIST >= fourHoursFromNow;
+    });
 
     res.json([{ "Available Slots": availableSlots, success: true }]);
   } catch (error) {
@@ -5470,6 +5482,14 @@ app.post('/api/fetch-slots', async (req, res) => {
       }
     }
 
+    const realNow = new Date();
+    const fourHoursFromNow = new Date(realNow.getTime() + 4 * 60 * 60 * 1000);
+    
+    availableSlots = availableSlots.filter(slot => {
+      const slotDateIST = new Date(`${payload.selectedDate}T${slot.timeStr}+05:30`);
+      return slotDateIST >= fourHoursFromNow;
+    });
+
     const formattedSlots = availableSlots.map(slot => `${payload.selectedDate}T${slot.timeStr}`);
     res.json([{ "Available Slots": formattedSlots, success: true }]);
   } catch (error) {
@@ -5650,7 +5670,7 @@ app.post('/api/create-booking', async (req, res) => {
         invitee_id,
         'Direct Booking',
         payload.clientName || 'Unknown Client',
-        maskedEmail,
+        payload.clientEmail,
         payload.clientWhatsApp,
         payload.timezone || 'Asia/Kolkata',
         payload.therapyName || 'Session',
@@ -5684,8 +5704,32 @@ app.post('/api/create-booking', async (req, res) => {
         calendarEndRaw: endAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
       });
       console.log(`[Create Booking] Sent confirmation email to ${payload.clientEmail}`);
-    } catch (emailErr) {
+      await pool.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [booking_id, 'client_confirmation_email', payload.clientEmail, 'success', JSON.stringify({ sent: true })]
+      );
+
+      const adminEmailTarget = process.env.ADMIN_EMAIL || 'admin@safestories.in';
+      await sendAdminBookingConfirmationEmail(adminEmailTarget, {
+        clientName: payload.clientName || 'Unknown Client',
+        clientPhone: payload.clientWhatsApp || 'Not provided',
+        clientEmail: payload.clientEmail,
+        sessionName: payload.therapyName || 'Session',
+        sessionTiming: inviteeTime,
+        sessionMode: payload.sessionMode || 'Online',
+        therapistName: therapistName,
+        therapistEmail: therapist?.contact_info || 'Not available'
+      });
+      await pool.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [booking_id, 'admin_confirmation_email', adminEmailTarget, 'success', JSON.stringify({ sent: true })]
+      );
+    } catch (emailErr: any) {
       console.error('[Create Booking] Failed to send confirmation email:', emailErr);
+      await pool.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [booking_id, 'confirmation_emails', payload.clientEmail, 'failed', emailErr?.message || String(emailErr)]
+      );
     }
 
     // Send confirmation WhatsApp natively
@@ -5699,8 +5743,16 @@ app.post('/api/create-booking', async (req, res) => {
         inviteeTime,
         publicBookingCheckinUrl
       );
-    } catch (waErr) {
+      await pool.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [booking_id, 'client_confirmation_whatsapp', payload.clientWhatsApp, 'success', JSON.stringify({ sent: true })]
+      );
+    } catch (waErr: any) {
       console.error('[Create Booking] Failed to send AiSensy client confirmation:', waErr);
+      await pool.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [booking_id, 'client_confirmation_whatsapp', payload.clientWhatsApp, 'failed', waErr?.message || String(waErr)]
+      );
     }
 
     try {
