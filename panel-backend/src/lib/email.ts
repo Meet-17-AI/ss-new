@@ -143,7 +143,7 @@ export async function sendOTPEmail(
     `;
 
     const mailOptions = {
-      from: `"SafeStories" <${process.env.GMAIL_USER}>`,
+      from: '"SafeStories" <therapy@safestories.in>',
       to: email,
       subject: '🔐 Your SafeStories Profile Setup OTP',
       html: htmlContent,
@@ -299,7 +299,7 @@ export async function sendPasswordResetOTP(
     `;
 
     const mailOptions = {
-      from: `"SafeStories" <${process.env.GMAIL_USER}>`,
+      from: '"SafeStories" <therapy@safestories.in>',
       to: email,
       subject: '🔐 Password Reset OTP - SafeStories',
       html: htmlContent,
@@ -367,7 +367,7 @@ export async function sendAdminBookingConfirmationEmail(
     `;
 
     const mailOptions = {
-      from: `"SafeStories" <${process.env.GMAIL_USER}>`,
+      from: '"SafeStories" <therapy@safestories.in>',
       to: adminEmail,
       subject: `New Session Confirmed: ${details.sessionName}`,
       html: htmlContent,
@@ -505,7 +505,7 @@ export async function sendClientBookingConfirmationEmail(
     `;
 
     const mailOptions = {
-      from: `"SafeStories" <${process.env.GMAIL_USER}>`,
+      from: '"SafeStories" <therapy@safestories.in>',
       to: clientEmail,
       subject: `Session Confirmed: ${details.sessionName}`,
       html: htmlContent,
