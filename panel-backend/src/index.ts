@@ -4,17 +4,18 @@ import fetch from 'node-fetch';
 
 // Intercept fetch calls to N8N Webhooks
 const originalFetch = fetch;
-global.fetch = async (url, options) => {
+global.fetch = (async (url: any, options: any) => {
   if (typeof url === 'string' && (url.includes('n8n') || url.includes('webhook'))) {
     console.log('Intercepted n8n webhook call to:', url);
     return {
       ok: true,
       text: async () => JSON.stringify([{"Available Slots": [], "success": true, "message": "Webhook removed"}]),
       json: async () => ([{"Available Slots": [], "success": true, "message": "Webhook removed"}])
-    };
+    } as any;
   }
   return originalFetch(url, options);
-};
+}) as any;
+
 
 import multer from 'multer';
 import { randomUUID } from 'crypto';
@@ -5528,22 +5529,14 @@ app.post('/api/create-booking', async (req, res) => {
     const invitee_id = Math.floor(100000 + Math.random() * 900000).toString();
 
     // 1. Generate Masked Email
-    let nextSequentialId = 11111; // Starting number based on user preference
-    const latestMaskRes = await pool.query('SELECT masked_email FROM masked_emails ORDER BY id DESC LIMIT 1');
-    if (latestMaskRes.rows.length > 0) {
-      const latestEmail = latestMaskRes.rows[0].masked_email;
-      const match = latestEmail.match(/client(\d+)@safestories\.in/);
-      if (match && match[1]) {
-        nextSequentialId = parseInt(match[1], 10) + 1;
-      }
-    }
-    const maskedEmail = `client${nextSequentialId}@safestories.in`;
-    
     const maskInsertRes = await pool.query(
-      'INSERT INTO masked_emails (real_email, masked_email, created_at) VALUES ($1, $2, CURRENT_TIMESTAMP) RETURNING id',
-      [payload.clientEmail, maskedEmail]
+      `INSERT INTO masked_emails (real_email, created_at) VALUES ($1, CURRENT_TIMESTAMP)
+       ON CONFLICT (real_email) DO UPDATE SET real_email = EXCLUDED.real_email
+       RETURNING id, masked_email`,
+      [payload.clientEmail]
     );
     const maskId = maskInsertRes.rows[0].id;
+    const maskedEmail = maskInsertRes.rows[0].masked_email;
 
     const therapistName = payload.therapistName || 'Unknown Therapist';
     let therapistId = payload.therapistId || null;
@@ -5665,11 +5658,11 @@ app.post('/api/create-booking', async (req, res) => {
         booking_id,
         invitee_id,
         'Direct Booking',
-        payload.clientName,
+        payload.clientName || 'Unknown Client',
         maskedEmail,
         payload.clientWhatsApp,
         payload.timezone || 'Asia/Kolkata',
-        payload.therapyName,
+        payload.therapyName || 'Session',
         startAt.toISOString(),
         endAt.toISOString(),
         inviteeTime,
@@ -6988,7 +6981,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`\nAPI server running on http://localhost:${PORT}`);
   startDashboardApiBookingSync();
-}).on('error', (err) => {
+}).on('error', (err: any) => {
   if (err.code === 'EADDRINUSE') console.error('Port is in use.');
   else console.error('Server error', err);
   process.exit(1);
