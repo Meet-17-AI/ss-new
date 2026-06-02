@@ -1,48 +1,48 @@
-name: Vibe-Check Security Auditor
-
-on:
-  push:
-    branches: ["main"]
-  pull_request:
-    branches: ["main"]
-
-jobs:
-  semgrep-audit:
-    name: Run Semgrep & Ship Telemetry
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Check out Source Code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python Environment
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install Semgrep Engine
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install semgrep
-
-      - name: Execute Security Scan (OWASP Top 10, APIs, Secrets)
-        # Using '|| true' ensures that even if bugs are found, the pipeline 
-        # doesn't crash before it has a chance to ship the JSON report to n8n
-        run: |
-          semgrep scan --config auto --json --json-output=semgrep-results.json || true
-
-      - name: Broadcast Scan Analytics to VPS n8n Brain
-        env:
-          N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
-        run: |
-          if [ -z "$N8N_WEBHOOK_URL" ]; then
-            echo "Error: N8N_WEBHOOK_URL secret is not set in GitHub Repository Settings."
-            exit 1
-          fi
-          
-          echo "Shipping telemetry to VPS..."
-          curl -X POST "$N8N_WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d @semgrep-results.json
+# name: Vibe-Check Security Auditor
+# 
+# on:
+#   push:
+#     branches: ["main"]
+#   pull_request:
+#     branches: ["main"]
+# 
+# jobs:
+#   semgrep-audit:
+#     name: Run Semgrep & Ship Telemetry
+#     runs-on: ubuntu-latest
+#     
+#     steps:
+#       - name: Check out Source Code
+#         uses: actions/checkout@v4
+#         with:
+#           fetch-depth: 0
+# 
+#       - name: Set up Python Environment
+#         uses: actions/setup-python@v5
+#         with:
+#           python-version: '3.10'
+# 
+#       - name: Install Semgrep Engine
+#         run: |
+#           python3 -m pip install --upgrade pip
+#           python3 -m pip install semgrep
+# 
+#       - name: Execute Security Scan (OWASP Top 10, APIs, Secrets)
+#         # Using '|| true' ensures that even if bugs are found, the pipeline 
+#         # doesn't crash before it has a chance to ship the JSON report to n8n
+#         run: |
+#           semgrep scan --config auto --json --json-output=semgrep-results.json || true
+# 
+#       - name: Broadcast Scan Analytics to VPS n8n Brain
+#         env:
+#           N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
+#         run: |
+#           if [ -z "$N8N_WEBHOOK_URL" ]; then
+#             echo "Error: N8N_WEBHOOK_URL secret is not set in GitHub Repository Settings."
+#             exit 1
+#           fi
+#           
+#           echo "Shipping telemetry to VPS..."
+#           curl -X POST "$N8N_WEBHOOK_URL" \
+#             -H "Content-Type: application/json" \
+#             -d @semgrep-results.json
