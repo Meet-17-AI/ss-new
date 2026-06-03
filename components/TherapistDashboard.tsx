@@ -138,7 +138,9 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   }, [searchParams, clients, selectedClient]);
 
   useEffect(() => {
-    const googleAuth = searchParams.get('googleAuth');
+    const params = new URLSearchParams(window.location.search);
+    const googleAuth = params.get('googleAuth');
+    
     if (googleAuth) {
       if (googleAuth === 'success') {
         setUser((prev: any) => ({ ...prev, google_calendar_connected: true }));
@@ -153,7 +155,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           }
         } catch (e) {}
       } else if (googleAuth === 'error') {
-        const reason = searchParams.get('reason');
+        const reason = params.get('reason');
         if (reason === 'already_linked') {
           setToast({ message: 'This Google Calendar is already connected to another therapist.', type: 'error' });
         } else {
@@ -161,12 +163,15 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
         }
       }
 
-      const newSearchParams = new URLSearchParams(searchParams);
-      newSearchParams.delete('googleAuth');
-      newSearchParams.delete('reason');
-      setSearchParams(newSearchParams, { replace: true });
+      // Clean up URL without triggering react-router re-renders
+      const newUrl = window.location.pathname + window.location.search
+        .replace(/[?&]googleAuth=[^&]*/, '')
+        .replace(/[?&]reason=[^&]*/, '')
+        .replace(/^&/, '?');
+        
+      window.history.replaceState({}, '', newUrl);
     }
-  }, [searchParams, setSearchParams]);
+  }, []);
 
   const [isClientDateDropdownOpen, setIsClientDateDropdownOpen] = useState(false);
   const [showClientCustomCalendar, setShowClientCustomCalendar] = useState(false);
