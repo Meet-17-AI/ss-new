@@ -1482,13 +1482,20 @@ app.patch('/api/leads/:id/assign-therapist', async (req, res) => {
 app.get('/api/therapists', async (req, res) => {
   try {
     const therapists = await pool.query(`
-      SELECT u.id, u.name, u.full_name, u.therapist_id
+      SELECT u.id, u.name, u.full_name, u.therapist_id, t.specialization,
+             CASE WHEN u.google_calendar_tokens IS NOT NULL THEN true ELSE false END as google_calendar_connected
       FROM users u
       LEFT JOIN therapists t ON u.therapist_id = t.therapist_id
       WHERE u.role = 'therapist' AND COALESCE(t.is_active, true) = true
       ORDER BY COALESCE(u.full_name, u.name)
     `);
-    res.json(therapists.rows);
+    
+    const formattedTherapists = therapists.rows.map(row => ({
+      ...row,
+      specializations: row.specialization ? row.specialization.split(',').map((s: string) => s.trim()) : []
+    }));
+    
+    res.json(formattedTherapists);
   } catch (err) {
     console.error('Error fetching therapists:', err);
     res.status(500).json({ error: 'Failed to fetch therapists' });

@@ -32,9 +32,15 @@ export function TherapyCalendars() {
     }
   };
 
-  const filteredTherapists = therapists.filter(t => 
-    t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (t.specializations || []).some(s => s.toLowerCase().includes(searchTerm.toLowerCase()))
+  const flattenedTherapies = therapists.flatMap(t => {
+    const specs = (t.specializations || []);
+    if (specs.length === 0) return [{ ...t, therapyName: 'General Therapy' }];
+    return specs.map(s => ({ ...t, therapyName: s.trim() }));
+  });
+
+  const filteredTherapies = flattenedTherapies.filter(item => 
+    item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    item.therapyName.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -89,12 +95,12 @@ export function TherapyCalendars() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {filteredTherapists.length > 0 ? (
-                  filteredTherapists.map((therapist) => (
-                    <tr key={therapist.therapist_id} className="hover:bg-teal-50 transition-colors">
+                {filteredTherapies.length > 0 ? (
+                  filteredTherapies.map((item, index) => (
+                    <tr key={`${item.therapist_id}-${index}`} className="hover:bg-teal-50 transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900">
-                          {(therapist.specializations || []).join(', ') || 'General Therapy'}
+                          {item.therapyName}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
@@ -102,21 +108,21 @@ export function TherapyCalendars() {
                           <div className="h-8 w-8 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold mr-3">
                             <User size={16} />
                           </div>
-                          <div className="text-sm font-medium text-gray-900">{therapist.name}</div>
+                          <div className="text-sm font-medium text-gray-900">{item.name}</div>
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <a 
-                          href={`https://safestories-checkin.vercel.app/book/${therapist.name.toLowerCase().replace(/\s+/g, '-')}`}
+                          href={`https://safestories-checkin.vercel.app/book/${item.name.toLowerCase().replace(/\s+/g, '-')}?service=${encodeURIComponent(item.therapyName)}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-sm text-teal-600 hover:text-teal-800 hover:underline flex items-center gap-1"
                         >
-                          safestories-checkin.vercel.app/book/{therapist.name.toLowerCase().replace(/\s+/g, '-')}
+                          safestories-checkin.vercel.app/book/{item.name.toLowerCase().replace(/\s+/g, '-')}?service={encodeURIComponent(item.therapyName)}
                         </a>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        {therapist.google_calendar_connected ? (
+                        {item.google_calendar_connected ? (
                           <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
                             Google Connected
                           </span>
