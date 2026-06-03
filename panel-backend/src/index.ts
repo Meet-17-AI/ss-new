@@ -3018,7 +3018,38 @@ app.post('/api/cancel-booking', async (req, res) => {
       [reason || 'No reason provided', booking_id]
     );
 
-    // 3. Send WhatsApp via AiSensy
+    // 3. Delete from Google Calendar if event exists
+    const googleEventId = bookingDetails.google_event_id;
+    const cancelHostId = bookingDetails.booking_host_calendar_id || bookingDetails.therapist_id;
+    
+    if (googleEventId && cancelHostId) {
+      try {
+        const tokenRes = await pool.query('SELECT google_calendar_tokens FROM users WHERE id = $1', [cancelHostId]);
+        if (tokenRes.rows.length > 0 && tokenRes.rows[0].google_calendar_tokens) {
+          const tokens = typeof tokenRes.rows[0].google_calendar_tokens === 'string' 
+            ? JSON.parse(tokenRes.rows[0].google_calendar_tokens) 
+            : tokenRes.rows[0].google_calendar_tokens;
+            
+          const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+          );
+          oauth2Client.setCredentials(tokens);
+          const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+          
+          await calendar.events.delete({
+            calendarId: 'primary',
+            eventId: googleEventId
+          });
+          console.log(`[Cancel Booking] Successfully deleted Google Calendar event ${googleEventId}`);
+        }
+      } catch (calErr) {
+        console.error('[Cancel Booking] Failed to delete Google Calendar event:', calErr);
+      }
+    }
+
+    // 4. Send WhatsApp via AiSensy
     if (notify !== false) {
       try {
         const { sendBookingCancelledRefundClient, sendBookingCancelledNoRefundClient } = await import('./automations/index.js');
@@ -5693,10 +5724,6 @@ app.post('/api/create-booking', async (req, res) => {
     if (clientTz !== 'Asia/Kolkata') {
       try {
         const parts = new Intl.DateTimeFormat('en-US', { timeZone: clientTz, timeZoneName: 'short' }).formatToParts(startAt);
-        tzShort = parts.find(p => p.type === 'timeZoneName')?.value || clientTz;
-      } catch (e) {
-        tzShort = clientTz;
-      }
     }
     const inviteeTime = `${clientDayName}, ${clientMonthName} ${clientDateNum}, ${clientYearNum} at ${formatTimeClient(startAt)} - ${formatTimeClient(endAt)} ${tzShort}`;
 
@@ -5704,6 +5731,7 @@ app.post('/api/create-booking', async (req, res) => {
     
     let hasCalendar = false;
     let meetLink = '';
+    let google_event_id: string | null = null;
     
     if (therapist && therapist.google_refresh_token) {
       console.log(`[Create Booking] Therapist ${therapist.name} has Google Calendar connected. Creating Event.`);
@@ -5749,6 +5777,8 @@ app.post('/api/create-booking', async (req, res) => {
           requestBody: eventBody
         });
 
+        google_event_id = calendarEvent.data.id || null;
+
         if (isOnline) {
           meetLink = calendarEvent.data.hangoutLink || '';
         }
@@ -5759,7 +5789,9 @@ app.post('/api/create-booking', async (req, res) => {
       }
     }
 
-    const publicBookingCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
+    const originalCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
+    const shortCode = await createShortUrl(originalCheckinUrl);
+    const publicBookingCheckinUrl = `${origin}/r/${shortCode}`;
 
     await pool.query(
       `INSERT INTO bookings (
@@ -5767,8 +5799,8 @@ app.post('/api/create-booking', async (req, res) => {
         booking_resource_name, booking_start_at, booking_end_at,
         booking_invitee_time, booking_host_time, invitee_payment_amount, invitee_payment_currency,
         booking_status, public_booking_checkin_url,
-        booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+        booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id, google_event_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
       [
         booking_id,
         invitee_id,
@@ -5788,11 +5820,11 @@ app.post('/api/create-booking', async (req, res) => {
         publicBookingCheckinUrl,
         therapistName,
         therapistId,
-        payload.sessionMode === 'online' ? 'Online' : 'Offline',
-        meetLink,
-        maskId
+        payload.sessionMode === 'online' ? 'Online Video Call' : 'In Person (Pune)',
+        hasCalendar && payload.sessionMode === 'online' ? meetLink : null,
+        maskId,
+        google_event_id
       ]
-    );
 
     // Send native email confirmation
     try {

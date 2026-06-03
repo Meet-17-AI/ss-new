@@ -998,59 +998,14 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
             </span>
             <button
               onClick={() => {
-                if (isClientEditMode) {
-                  setIsClientEditMode(false);
-                } else {
-                  setClientContactEdit({ name: selectedClient.invitee_name, phone: selectedClient.invitee_phone || '', email: selectedClient.invitee_email || '', saving: false });
-                  setIsClientEditMode(true);
-                }
+                setClientContactEdit({ name: selectedClient.invitee_name, phone: selectedClient.invitee_phone || '', email: selectedClient.invitee_email || '', saving: false });
+                setIsClientEditMode(true);
               }}
-              className={`flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
-                isClientEditMode
-                  ? 'bg-orange-500 text-white hover:bg-orange-600'
-                  : 'text-teal-700 border border-teal-200 hover:bg-teal-50'
-              }`}
+              className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors text-teal-700 border border-teal-200 hover:bg-teal-50"
             >
               <Pencil size={14} />
-              {isClientEditMode ? 'Exit Edit Mode' : 'Edit Mode'}
+              Edit Profile
             </button>
-            {isClientEditMode && (
-              <button
-                onClick={async () => {
-                  setClientContactEdit(prev => ({ ...prev, saving: true }));
-                  try {
-                    const res = await fetch('/api/clients/update-contact', {
-                      method: 'PATCH',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        old_phone: selectedClient.invitee_phone || undefined,
-                        old_email: selectedClient.invitee_email || undefined,
-                        new_name: clientContactEdit.name !== selectedClient.invitee_name ? clientContactEdit.name : undefined,
-                        new_phone: clientContactEdit.phone !== selectedClient.invitee_phone ? clientContactEdit.phone : undefined,
-                        new_email: clientContactEdit.email !== selectedClient.invitee_email ? clientContactEdit.email : undefined,
-                        _audit_user: JSON.parse(localStorage.getItem('user') || '{}')
-                      })
-                    });
-                    if (res.ok) {
-                      setSelectedClient(prev => prev ? { ...prev, invitee_name: clientContactEdit.name, invitee_phone: clientContactEdit.phone, invitee_email: clientContactEdit.email } : prev);
-                      setToast({ message: 'Client updated successfully', type: 'success' });
-                      setIsClientEditMode(false);
-                    } else {
-                      setToast({ message: 'Failed to save', type: 'error' });
-                    }
-                  } catch {
-                    setToast({ message: 'Network error', type: 'error' });
-                  } finally {
-                    setClientContactEdit(prev => ({ ...prev, saving: false }));
-                  }
-                }}
-                disabled={clientContactEdit.saving}
-                className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-teal-700 text-white rounded-lg hover:bg-teal-800 disabled:opacity-50"
-              >
-                <Check size={14} />
-                {clientContactEdit.saving ? 'Saving...' : 'Save'}
-              </button>
-            )}
           </div>
         </div>
 
@@ -1064,19 +1019,11 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
               <div className="space-y-3">
                 <div className="flex items-center gap-3 text-sm">
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                  {isClientEditMode ? (
-                    <input type="tel" value={clientContactEdit.phone} onChange={e => setClientContactEdit(prev => ({ ...prev, phone: e.target.value }))} className="flex-1 px-2 py-1 border rounded text-sm focus:outline-none focus:ring-1 focus:ring-teal-500" placeholder="Phone" />
-                  ) : (
-                    <span className="text-gray-700">{selectedClient.invitee_phone || 'N/A'}</span>
-                  )}
+                  <span className="text-gray-700">{selectedClient.invitee_phone || 'N/A'}</span>
                 </div>
                 <div className="flex items-center gap-3 text-sm">
                   <Mail size={18} />
-                  {isClientEditMode ? (
-                    <input type="email" value={clientContactEdit.email} onChange={e => setClientContactEdit(prev => ({ ...prev, email: e.target.value }))} className="flex-1 px-2 py-1 border rounded text-sm focus:outline-none focus:ring-1 focus:ring-teal-500" placeholder="Email" />
-                  ) : (
-                    <span className="text-gray-700">{selectedClient.invitee_email || 'N/A'}</span>
-                  )}
+                  <span className="text-gray-700">{selectedClient.invitee_email || 'N/A'}</span>
                 </div>
               </div>
             </div>
@@ -1760,8 +1707,95 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
           </div>
         )}
       </div>
-      {isClientEditMode && false && editingClientContact && (
-        <span />
+      {isClientEditMode && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[9999]" onClick={() => setIsClientEditMode(false)}>
+          <div className="bg-white rounded-xl w-full max-w-md shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="bg-teal-700 px-6 py-4 flex justify-between items-center text-white">
+              <h2 className="text-xl font-bold">Edit Client Profile</h2>
+              <button onClick={() => setIsClientEditMode(false)} className="text-teal-100 hover:text-white transition-colors">
+                <X size={24} />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <input
+                  type="text"
+                  value={clientContactEdit.name}
+                  onChange={(e) => setClientContactEdit(prev => ({ ...prev, name: e.target.value }))}
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                  placeholder="Client Name"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+                <input
+                  type="tel"
+                  value={clientContactEdit.phone}
+                  onChange={(e) => setClientContactEdit(prev => ({ ...prev, phone: e.target.value }))}
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                  placeholder="Phone Number"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input
+                  type="email"
+                  value={clientContactEdit.email}
+                  onChange={(e) => setClientContactEdit(prev => ({ ...prev, email: e.target.value }))}
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-teal-500 focus:outline-none"
+                  placeholder="Email Address"
+                />
+              </div>
+            </div>
+
+            <div className="bg-gray-50 px-6 py-4 border-t flex justify-end gap-3">
+              <button
+                onClick={() => setIsClientEditMode(false)}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setClientContactEdit(prev => ({ ...prev, saving: true }));
+                  try {
+                    const res = await fetch('/api/clients/update-contact', {
+                      method: 'PATCH',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        old_phone: selectedClient.invitee_phone || undefined,
+                        old_email: selectedClient.invitee_email || undefined,
+                        new_name: clientContactEdit.name !== selectedClient.invitee_name ? clientContactEdit.name : undefined,
+                        new_phone: clientContactEdit.phone !== selectedClient.invitee_phone ? clientContactEdit.phone : undefined,
+                        new_email: clientContactEdit.email !== selectedClient.invitee_email ? clientContactEdit.email : undefined,
+                        _audit_user: JSON.parse(localStorage.getItem('user') || '{}')
+                      })
+                    });
+                    if (res.ok) {
+                      setSelectedClient(prev => prev ? { ...prev, invitee_name: clientContactEdit.name, invitee_phone: clientContactEdit.phone, invitee_email: clientContactEdit.email } : prev);
+                      setToast({ message: 'Client updated successfully', type: 'success' });
+                      setIsClientEditMode(false);
+                    } else {
+                      setToast({ message: 'Failed to save', type: 'error' });
+                    }
+                  } catch {
+                    setToast({ message: 'Network error', type: 'error' });
+                  } finally {
+                    setClientContactEdit(prev => ({ ...prev, saving: false }));
+                  }
+                }}
+                disabled={clientContactEdit.saving}
+                className="px-6 py-2 bg-teal-700 text-white rounded-lg hover:bg-teal-800 transition-colors font-medium disabled:opacity-50 flex items-center gap-2"
+              >
+                {clientContactEdit.saving ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       </>
     );
