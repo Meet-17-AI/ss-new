@@ -77,6 +77,38 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Helper function for URL shortener
+function generateShortCode() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < 6; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+async function createShortUrl(longUrl: string) {
+  const code = generateShortCode();
+  await pool.query('INSERT INTO short_urls (short_code, long_url) VALUES ($1, $2)', [code, longUrl]);
+  return code;
+}
+
+// Redirect shortened URLs
+app.get('/r/:code', async (req, res) => {
+  try {
+    const { code } = req.params;
+    const result = await pool.query('SELECT long_url FROM short_urls WHERE short_code = $1', [code]);
+    if (result.rows.length > 0) {
+      res.redirect(302, result.rows[0].long_url);
+    } else {
+      res.status(404).send('Link not found');
+    }
+  } catch (err) {
+    console.error('Error redirecting short URL:', err);
+    res.status(500).send('Server Error');
+  }
+});
+
 // ==================== GOOGLE CALENDAR OAUTH CONFIG & ENDPOINTS ====================
 import { google } from 'googleapis';
 import * as dotenv from 'dotenv';

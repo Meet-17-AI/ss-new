@@ -143,7 +143,7 @@ export async function sendOTPEmail(
     `;
 
     const mailOptions = {
-      from: '"SafeStories" <therapy@safestories.in>',
+      from: 'Resend <onboarding@resend.dev>',
       to: email,
       subject: '🔐 Your SafeStories Profile Setup OTP',
       html: htmlContent,
@@ -303,7 +303,7 @@ export async function sendPasswordResetOTP(
     `;
 
     const mailOptions = {
-      from: '"SafeStories" <therapy@safestories.in>',
+      from: 'Resend <onboarding@resend.dev>',
       to: email,
       subject: '🔐 Password Reset OTP - SafeStories',
       html: htmlContent,
@@ -375,7 +375,7 @@ export async function sendAdminBookingConfirmationEmail(
     `;
 
     const mailOptions = {
-      from: '"SafeStories" <therapy@safestories.in>',
+      from: 'Resend <onboarding@resend.dev>',
       to: adminEmail,
       subject: `New Session Confirmed: ${details.sessionName}`,
       html: htmlContent,
@@ -518,7 +518,7 @@ export async function sendClientBookingConfirmationEmail(
     `;
 
     const mailOptions = {
-      from: '"SafeStories" <therapy@safestories.in>',
+      from: 'Resend <onboarding@resend.dev>',
       to: clientEmail,
       subject: `Session Confirmed: ${details.sessionName}`,
       html: htmlContent,
