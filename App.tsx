@@ -6,6 +6,7 @@ import { Logo } from './components/Logo';
 import { Footer } from './components/Footer';
 import { Dashboard } from './components/Dashboard';
 import { TherapistDashboard } from './components/TherapistDashboard';
+import { PaymentCheckoutPage } from './components/PaymentCheckoutPage';
 import { MaintenancePage } from './components/MaintenancePage';
 import { SOSDocumentationView } from './components/SOSDocumentationView';
 import { PublicBookingContainer } from './components/PublicBookingContainer';
@@ -96,6 +97,7 @@ const App: React.FC = () => {
       {/* Dynamic Route wrappers for public pages since react-router passes params differently */}
       <Route path="/sos-view/*" element={<SOSRouterWrapper />} />
       <Route path="/book/*" element={<BookRouterWrapper />} />
+      <Route path="/pay/:bookingId" element={<PaymentCheckoutPage />} />
       <Route path="/booking-confirmation/*" element={<ConfirmationRouterWrapper />} />
       <Route path="/session-notes/*" element={<NotesRouterWrapper />} />
 

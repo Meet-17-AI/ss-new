@@ -7065,6 +7065,172 @@ app.get('/api/free-consultation-notes/:id', async (req, res) => {
 
 // ==================== END FREE CONSULTATION ENDPOINTS ====================
 
+// ==================== PAYMENT LINK EXPIRATION APIs ====================
+
+// 1. Generate Payment Link (Admin)
+app.post('/api/admin/generate-payment-link', async (req, res) => {
+  try {
+    const { 
+      therapistName, 
+      clientName, 
+      clientEmail, 
+      clientPhone, 
+      date, 
+      time, 
+      serviceType, 
+      amount 
+    } = req.body;
+
+    let resolvedTherapistId = null;
+    if (therapistName) {
+      const therapistResult = await pool.query(
+        'SELECT therapist_id FROM therapists WHERE name ILIKE $1 LIMIT 1',
+        [`%${therapistName.split(' ')[0]}%`]
+      );
+      if (therapistResult.rows.length > 0) {
+        resolvedTherapistId = therapistResult.rows[0].therapist_id;
+      }
+    }
+
+    const bookingId = randomUUID();
+    const startObj = new Date(`${date}T${time}:00+05:30`);
+    const endObj = new Date(startObj.getTime() + 50 * 60000); // 50 mins
+
+    await pool.query(
+      `INSERT INTO bookings (
+        booking_id, therapist_id, invitee_name, invitee_email, invitee_phone,
+        booking_start_at, booking_end_at, booking_status, payment_status, payment_amount,
+        booking_resource_name, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())`,
+      [
+        bookingId, resolvedTherapistId, clientName, clientEmail, clientPhone,
+        startObj.toISOString(), endObj.toISOString(), 'waiting_for_payment', 'Pending', amount,
+        serviceType
+      ]
+    );
+
+    let baseUrl = process.env.FRONTEND_URL || 'https://safestories-panel.vercel.app';
+    if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+    
+    const paymentLink = `${baseUrl}/pay/${bookingId}`;
+
+    res.json({ success: true, paymentLink, bookingId });
+  } catch (err) {
+    console.error('Error generating payment link:', err);
+    res.status(500).json({ error: 'Failed to generate payment link' });
+  }
+});
+
+// 2. Fetch checkout info for public payment page
+app.get('/api/bookings/:id/checkout-info', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `SELECT b.*, t.name as therapist_name 
+       FROM bookings b 
+       LEFT JOIN therapists t ON b.therapist_id = t.therapist_id 
+       WHERE b.booking_id = $1`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Booking not found' });
+    }
+
+    const booking = result.rows[0];
+
+    if (booking.booking_status !== 'waiting_for_payment') {
+      return res.status(400).json({ error: 'This payment link has either expired or already been paid.' });
+    }
+
+    res.json({ success: true, data: booking });
+  } catch (err) {
+    console.error('Error fetching checkout info:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 3. Confirm Payment and Trigger N8N Webhook
+app.post('/api/confirm-payment', async (req, res) => {
+  try {
+    const { bookingId, razorpayPaymentId, razorpayOrderId } = req.body;
+    
+    // Update local DB to Scheduled
+    const updateRes = await pool.query(
+      `UPDATE bookings 
+       SET booking_status = 'Scheduled', payment_status = 'Paid', 
+           payment_id = $1, updated_at = NOW()
+       WHERE booking_id = $2 AND booking_status = 'waiting_for_payment'
+       RETURNING *`,
+      [razorpayPaymentId || razorpayOrderId || 'manual_bypass', bookingId]
+    );
+
+    if (updateRes.rows.length === 0) {
+      return res.status(400).json({ error: 'Booking not found, expired, or already processed.' });
+    }
+
+    const booking = updateRes.rows[0];
+
+    // Trigger N8N Webhook for Google Calendar & Emails
+    // Using global fetch (intercepted or real based on setup)
+    const webhookUrl = 'https://fluid.live/webhook/safestories/booking';
+    
+    const tRes = await pool.query('SELECT email FROM therapists WHERE therapist_id = $1', [booking.therapist_id]);
+    const therapistEmail = tRes.rows.length > 0 ? tRes.rows[0].email : '';
+
+    const webhookPayload = {
+      event_type: "booking_created",
+      therapist_email: therapistEmail,
+      client_name: booking.invitee_name,
+      client_email: booking.invitee_email,
+      client_phone: booking.invitee_phone,
+      start_time: booking.booking_start_at,
+      end_time: booking.booking_end_at,
+      service_type: booking.booking_resource_name,
+      amount_paid: booking.payment_amount,
+      booking_id: booking.booking_id
+    };
+
+    try {
+      await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(webhookPayload)
+      });
+      console.log('✓ Triggered N8N Webhook for confirmed payment:', bookingId);
+    } catch (whErr) {
+      console.error('❌ Failed to trigger N8N webhook after payment:', whErr);
+    }
+
+    res.json({ success: true, message: 'Payment confirmed and booking scheduled!' });
+  } catch (err) {
+    console.error('Error confirming payment:', err);
+    res.status(500).json({ error: 'Failed to confirm payment' });
+  }
+});
+
+function startPaymentLinkExpiryCron() {
+  console.log('[Cron] Starting Payment Link Expiry background job...');
+  setInterval(async () => {
+    try {
+      const result = await pool.query(
+        `UPDATE bookings 
+         SET booking_status = 'Canceled', updated_at = NOW()
+         WHERE booking_status = 'waiting_for_payment'
+           AND created_at < NOW() - INTERVAL '15 minutes'
+         RETURNING booking_id, invitee_email, booking_start_at`
+      );
+      if (result.rows.length > 0) {
+        console.log(`[Cron] Expired ${result.rows.length} unpaid payment links and freed up their slots.`);
+      }
+    } catch (err) {
+      console.error('[Cron] Error expiring payment links:', err);
+    }
+  }, 60000); // Check every 60 seconds
+}
+
+// ==================== END PAYMENT LINK EXPIRATION APIs ====================
+
 // Global error handler - must be after all routes
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error('❌ Unhandled error:', err);
@@ -7127,6 +7293,7 @@ io.on('connection', (socket) => {
 httpServer.listen(PORT, () => {
   console.log(`\nAPI server running on http://localhost:${PORT}`);
   startDashboardApiBookingSync();
+  startPaymentLinkExpiryCron();
 }).on('error', (err: any) => {
   if (err.code === 'EADDRINUSE') console.error('Port is in use.');
   else console.error('Server error', err);

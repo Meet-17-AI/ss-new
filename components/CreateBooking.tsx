@@ -40,6 +40,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   const [clients, setClients] = useState<any[]>([]);
   const [showClientDropdown, setShowClientDropdown] = useState(false);
   const [filteredClients, setFilteredClients] = useState<any[]>([]);
+  const [generatedPaymentLink, setGeneratedPaymentLink] = useState('');
 
   const timezones = [
     { name: 'Asia/Kolkata', offset: 'GMT+5:30' },
@@ -409,6 +410,39 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
 
   const handleSendPaymentLink = async () => {
     
+    // Check if we should generate a payment link
+    if (!isFreeConsultation && sessionCharges > 0 && isDirectBooking) {
+      const linkPayload = {
+        therapistName: selectedTherapist,
+        clientName,
+        clientEmail,
+        clientPhone: `${countryCode}${clientWhatsApp}`,
+        date: selectedDate,
+        time: selectedSlot,
+        serviceType: selectedTherapy,
+        amount: sessionCharges
+      };
+
+      try {
+        const response = await fetch('/api/admin/generate-payment-link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(linkPayload)
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setGeneratedPaymentLink(data.paymentLink);
+          setShowSuccessModal(true);
+        } else {
+          toast.error('Failed to generate payment link');
+        }
+      } catch (err) {
+        toast.error('Error generating link');
+      }
+      return;
+    }
+
     const payload = {
       therapyName: isFreeConsultation ? 'Free Consultation' : selectedTherapy,
       therapistName: isFreeConsultation ? 'SafeStories' : selectedTherapist,
@@ -420,10 +454,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       clientWhatsApp: `${countryCode}${clientWhatsApp}`,
       sessionMode,
       timezone: selectedTimezone,
-      // ═ PAYMENT_DISABLED: skipPayment forced true ═══════════════════════════════
-      // Original: skipPayment: isDirectBooking
       skipPayment: true,
-      // ══════════════════════════════════════════════════════════════
       isAdmin: true
     };
     
@@ -436,6 +467,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       });
       
       if (response.ok) {
+        setGeneratedPaymentLink(''); // clear just in case
         setShowSuccessModal(true);
       } else {
         alert('Failed to create booking');
@@ -463,27 +495,46 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 style={{ width: 200, height: 200 }}
               />
             </div>
-            {/* Success modal title — PAYMENT_DISABLED: always show 'Session Booked' */}
+            {/* Success modal title */}
             <h2 className="text-xl font-bold mb-4 text-gray-800 text-center">
-              Session Booked
-              {/* Original: {(grandTotal === 0 || isDirectBooking) ? 'Session Booked' : 'Payment Link Sent'} */}
+              {generatedPaymentLink ? 'Payment Link Generated' : 'Session Booked'}
             </h2>
-            <p className="text-gray-600 mb-6 text-center">
-              {/* PAYMENT_DISABLED: always show direct booking message */}
-              The session has been created successfully. The client will receive a confirmation via WhatsApp.
-              {/* Original message logic preserved:
-              {isDirectBooking 
-                ? 'The session has been created successfully. The client will receive a confirmation email with the session details and joining link.'
-                : grandTotal === 0
-                ? 'The free consultation session has been booked successfully. The client will receive a confirmation email with the session details and joining link.'
-                : 'The payment link has been sent to the client. Once the payment is confirmed by the client, their session will be booked automatically.'
-              } */}
-            </p>
+            <div className="text-gray-600 mb-6 text-center">
+              {generatedPaymentLink ? (
+                <>
+                  <p className="mb-4">
+                    The calendar slot has been blocked for 15 minutes. Please copy and share this payment link with the client:
+                  </p>
+                  <div className="flex items-center gap-2 mb-2">
+                    <input 
+                      type="text" 
+                      readOnly 
+                      value={generatedPaymentLink} 
+                      className="w-full bg-gray-100 p-3 rounded-lg text-sm border focus:outline-teal-500"
+                    />
+                  </div>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(generatedPaymentLink);
+                      toast.success('Link copied to clipboard!');
+                    }}
+                    className="text-teal-700 font-medium text-sm hover:underline"
+                  >
+                    Copy Link
+                  </button>
+                  <p className="mt-4 text-xs text-red-500 font-medium">
+                    If payment is not received within 15 minutes, the slot will become available again automatically.
+                  </p>
+                </>
+              ) : (
+                <p>The session has been created successfully. The client will receive a confirmation via WhatsApp.</p>
+              )}
+            </div>
             <button
               onClick={onBack}
               className="w-full bg-teal-700 text-white px-6 py-3 rounded-lg hover:bg-teal-800 font-medium"
             >
-              OK
+              Done
             </button>
           </div>
         </div>
@@ -684,21 +735,18 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
 
           {/* Grand Total and Payment */}
           <div className="pt-6 border-t">
-            {/* PAYMENT_DISABLED: Session Charges hidden. Original block:
-            {!isDirectBooking && (
+            {!isFreeConsultation && sessionCharges > 0 && (
               <div className="flex items-center justify-between mb-4">
                 <span className="text-lg font-medium text-gray-600">Session Charges:</span>
-                <span className="text-2xl font-bold">Rs. {grandTotal}/-</span>
+                <span className="text-2xl font-bold">Rs. {sessionCharges}/-</span>
               </div>
             )}
-            */}
             <button
               onClick={handleSendPaymentLink}
               disabled={!isPaymentLinkEnabled()}
               className="w-full bg-teal-700 text-white px-6 py-3 rounded-lg hover:bg-teal-800 font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
-              {/* PAYMENT_DISABLED: always 'Book Session'. Original: isDirectBooking ? 'Create booking' : grandTotal === 0 ? 'Book Session' : 'Send Payment Link' */}
-              Book Session
+              {!isFreeConsultation && sessionCharges > 0 && isDirectBooking ? 'Generate Payment Link' : 'Book Session'}
             </button>
           </div>
         </div>
