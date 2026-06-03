@@ -3,6 +3,7 @@ import { LayoutDashboard, Users, Calendar, LogOut, PieChart, ChevronUp, ChevronD
 import { Logo } from './Logo';
 import { Notifications } from './Notifications';
 import { Toast } from './Toast';
+import { useAuth } from '../context/AuthContext';
 import { Loader } from './Loader';
 import { TherapistCalendar } from './TherapistCalendar';
 import { EditProfile } from './EditProfile';
@@ -33,7 +34,7 @@ interface TherapistDashboardProps {
 }
 
 export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) {
-
+  const { login } = useAuth();
   const { socket } = useSocket();
   const navigate = useNavigate();
   const location = useLocation();
@@ -143,17 +144,8 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     
     if (googleAuth) {
       if (googleAuth === 'success') {
-        setUser((prev: any) => ({ ...prev, google_calendar_connected: true }));
+        login({ ...user, google_calendar_connected: true });
         setToast({ message: 'Google Calendar connected successfully!', type: 'success' });
-        
-        try {
-          const stored = localStorage.getItem('user');
-          if (stored) {
-            const parsed = JSON.parse(stored);
-            parsed.google_calendar_connected = true;
-            localStorage.setItem('user', JSON.stringify(parsed));
-          }
-        } catch (e) {}
       } else if (googleAuth === 'error') {
         const reason = params.get('reason');
         if (reason === 'already_linked') {
