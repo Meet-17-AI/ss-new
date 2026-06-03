@@ -84,7 +84,7 @@ dotenv.config({ path: '.env.local' });
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '168173993649-2v0jpmi1c4mdkjg70agbret556r7uarm.apps.googleusercontent.com';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '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';
-const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3004/api/auth/google/callback';
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'https://safestories-panel.onrender.com/api/auth/google/callback';
 
 const getOAuth2Client = () => {
   return new google.auth.OAuth2(
@@ -156,10 +156,11 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
       if (existingCheck.rows.length > 0) {
         console.error(`❌ Google Calendar ${userEmail} is already linked to therapist ${existingCheck.rows[0].name}`);
+        const frontendUrl = process.env.FRONTEND_URL || 'https://safestories-panel.vercel.app';
         if (adminRedirect || therapistId === 'SafeStories') {
-          return res.redirect('http://localhost:3004/?googleAuth=error&reason=already_linked');
+          return res.redirect(`${frontendUrl}/?googleAuth=error&reason=already_linked`);
         } else {
-          return res.redirect('http://localhost:3004/therapist?googleAuth=error&reason=already_linked');
+          return res.redirect(`${frontendUrl}/therapist?googleAuth=error&reason=already_linked`);
         }
       }
     }
@@ -189,10 +190,11 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
     console.log(`✓ Connected Google Calendar successfully for therapist: ${therapistId} (${userEmail})`);
 
+    const frontendUrl = process.env.FRONTEND_URL || 'https://safestories-panel.vercel.app';
     if (adminRedirect || therapistId === 'SafeStories') {
-      res.redirect('http://localhost:3004/?googleAuth=success');
+      res.redirect(`${frontendUrl}/?googleAuth=success`);
     } else {
-      res.redirect('http://localhost:3004/therapist?googleAuth=success');
+      res.redirect(`${frontendUrl}/therapist?googleAuth=success`);
     }
   } catch (error) {
     console.error('❌ Error in Google OAuth callback:', error);
