@@ -382,8 +382,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               navigate('/admin/dashboard');
             }}
           >
-            <LayoutDashboard size={20} className={activeView === 'dashboard' ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={activeView === 'dashboard' ? 'text-teal-700' : 'text-gray-700'}>Dashboard</span>
+            <LayoutDashboard size={20} className={activeView === 'dashboard' ? 'text-black' : 'text-gray-700'} />
+            <span className={activeView === 'dashboard' ? 'text-black' : 'text-gray-700'}>Dashboard</span>
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
@@ -393,8 +393,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               navigate('/admin/clients');
             }}
           >
-            <Users size={20} className={activeView === 'clients' ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={activeView === 'clients' ? 'text-teal-700' : 'text-gray-700'}>All Clients</span>
+            <Users size={20} className={activeView === 'clients' ? 'text-black' : 'text-gray-700'} />
+            <span className={activeView === 'clients' ? 'text-black' : 'text-gray-700'}>All Clients</span>
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
@@ -404,8 +404,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               navigate('/admin/therapists');
             }}
           >
-            <UserCog size={20} className={activeView === 'therapists' ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={activeView === 'therapists' ? 'text-teal-700' : 'text-gray-700'}>All Therapists</span>
+            <UserCog size={20} className={activeView === 'therapists' ? 'text-black' : 'text-gray-700'} />
+            <span className={activeView === 'therapists' ? 'text-black' : 'text-gray-700'}>All Therapists</span>
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
@@ -415,34 +415,32 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               navigate('/admin/appointments');
             }}
           >
-            <Calendar size={20} className={activeView === 'appointments' ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={activeView === 'appointments' ? 'text-teal-700' : 'text-gray-700'}>Bookings</span>
+            <Calendar size={20} className={activeView === 'appointments' ? 'text-black' : 'text-gray-700'} />
+            <span className={activeView === 'appointments' ? 'text-black' : 'text-gray-700'}>Bookings</span>
           </div>
-          <button
-              onClick={() => {
-                resetAllStates();
-                navigate('/admin/refunds');
-              }}
-              className="flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 w-full text-left font-medium relative overflow-hidden group"
-              style={{ backgroundColor: activeView === 'refunds' ? '#F4A9365C' : 'transparent' }}
-            >
-              <FileWarning size={20} className={activeView === 'refunds' ? 'text-teal-700' : 'text-gray-700'} />
-              <span className={activeView === 'refunds' ? 'text-teal-700' : 'text-gray-700'}>Payments</span>
-              {activeView === 'refunds' && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#F4A936] rounded-r" />}
-            </button>
+          <div
+            className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
+            style={{ backgroundColor: activeView === 'refunds' ? '#F4A9365C' : 'transparent' }}
+            onClick={() => {
+              resetAllStates();
+              navigate('/admin/refunds');
+            }}
+          >
+            <CreditCard size={20} className={activeView === 'refunds' ? 'text-black' : 'text-gray-700'} />
+            <span className={activeView === 'refunds' ? 'text-black' : 'text-gray-700'}>Payments</span>
+          </div>
 
-            <button
-              onClick={() => {
-                resetAllStates();
-                navigate('/admin/therapy-calendars');
-              }}
-              className="flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 w-full text-left font-medium relative overflow-hidden group"
-              style={{ backgroundColor: activeView === 'therapy-calendars' ? '#F4A9365C' : 'transparent' }}
-            >
-              <Calendar size={20} className={activeView === 'therapy-calendars' ? 'text-teal-700' : 'text-gray-700'} />
-              <span className={activeView === 'therapy-calendars' ? 'text-teal-700' : 'text-gray-700'}>Therapy Calendars</span>
-              {activeView === 'therapy-calendars' && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#F4A936] rounded-r" />}
-            </button>
+          <div
+            className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
+            style={{ backgroundColor: activeView === 'therapy-calendars' ? '#F4A9365C' : 'transparent' }}
+            onClick={() => {
+              resetAllStates();
+              navigate('/admin/therapy-calendars');
+            }}
+          >
+            <Calendar size={20} className={activeView === 'therapy-calendars' ? 'text-black' : 'text-gray-700'} />
+            <span className={activeView === 'therapy-calendars' ? 'text-black' : 'text-gray-700'}>Therapy Calendars</span>
+          </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
             style={{ backgroundColor: activeView === 'notifications' ? '#F4A9365C' : 'transparent' }}
@@ -451,8 +449,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               navigate('/admin/notifications');
             }}
           >
-            <Bell size={20} className={activeView === 'notifications' ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={activeView === 'notifications' ? 'text-teal-700' : 'text-gray-700'}>Notifications</span>
+            <Bell size={20} className={activeView === 'notifications' ? 'text-black' : 'text-gray-700'} />
+            <span className={activeView === 'notifications' ? 'text-black' : 'text-gray-700'}>Notifications</span>
           </div>
 
         </nav>

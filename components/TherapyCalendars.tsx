@@ -32,11 +32,20 @@ export function TherapyCalendars() {
     }
   };
 
-  const flattenedTherapies = therapists.flatMap(t => {
-    const specs = (t.specializations || []);
-    if (specs.length === 0) return [{ ...t, therapyName: 'General Therapy' }];
-    return specs.map(s => ({ ...t, therapyName: s.trim() }));
-  });
+  const flattenedTherapies = [
+    {
+      therapist_id: 'Safestories-Free-Consultation',
+      name: 'Safestories',
+      specializations: ['Free Consultation'],
+      google_calendar_connected: false,
+      therapyName: 'Free Consultation'
+    },
+    ...therapists.flatMap(t => {
+      const specs = (t.specializations || []);
+      if (specs.length === 0) return [{ ...t, therapyName: 'General Therapy' }];
+      return specs.map(s => ({ ...t, therapyName: s.trim() }));
+    })
+  ];
 
   const filteredTherapies = flattenedTherapies.filter(item => 
     item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -96,44 +105,49 @@ export function TherapyCalendars() {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredTherapies.length > 0 ? (
-                  filteredTherapies.map((item, index) => (
-                    <tr key={`${item.therapist_id}-${index}`} className="hover:bg-teal-50 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900">
-                          {item.therapyName}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <div className="h-8 w-8 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold mr-3">
-                            <User size={16} />
+                  filteredTherapies.map((item, index) => {
+                    const slug = `/${item.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+                    const fullLink = `${window.location.origin}/book${slug}`;
+                    
+                    return (
+                      <tr key={`${item.therapist_id}-${index}`} className="hover:bg-teal-50 transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm font-medium text-gray-900">
+                            {item.therapyName}
                           </div>
-                          <div className="text-sm font-medium text-gray-900">{item.name}</div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <a 
-                          href={`https://safestories-checkin.vercel.app/book/${item.name.toLowerCase().replace(/\s+/g, '-')}?service=${encodeURIComponent(item.therapyName)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm text-teal-600 hover:text-teal-800 hover:underline flex items-center gap-1"
-                        >
-                          safestories-checkin.vercel.app/book/{item.name.toLowerCase().replace(/\s+/g, '-')}?service={encodeURIComponent(item.therapyName)}
-                        </a>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {item.google_calendar_connected ? (
-                          <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                            Google Connected
-                          </span>
-                        ) : (
-                          <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
-                            Not Connected
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center">
+                            <div className="h-8 w-8 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold mr-3">
+                              <User size={16} />
+                            </div>
+                            <div className="text-sm font-medium text-gray-900">{item.name}</div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <a 
+                            href={fullLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-sm text-teal-600 hover:text-teal-800 hover:underline flex items-center gap-1"
+                          >
+                            {fullLink.replace(/^https?:\/\//, '')}
+                          </a>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {item.google_calendar_connected ? (
+                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                              Google Connected
+                            </span>
+                          ) : (
+                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                              Not Connected
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 ) : (
                   <tr>
                     <td colSpan={4} className="px-6 py-10 text-center text-gray-500">

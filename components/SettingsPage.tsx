@@ -299,18 +299,6 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, user }) => {
               </div>
             </div>
 
-            <div 
-              onClick={() => navigate('/admin/appSettings/therapies')} 
-              className="bg-white p-8 rounded-xl border border-gray-200 shadow-sm cursor-pointer hover:shadow-md hover:border-teal-500 transition-all flex flex-col items-center justify-center text-center gap-4 group"
-            >
-              <div className="w-16 h-16 bg-teal-50 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                <Heart size={32} className="text-teal-700" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-gray-800">Therapies</h3>
-                <p className="text-sm text-gray-500 mt-2">Manage therapy types, categories, and specialization settings</p>
-              </div>
-            </div>
 
             <div 
               onClick={() => navigate('/admin/appSettings/payments')} 
