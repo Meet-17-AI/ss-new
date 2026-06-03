@@ -34,7 +34,7 @@ export function TherapyCalendars() {
 
   const filteredTherapists = therapists.filter(t => 
     t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    t.specializations.some(s => s.toLowerCase().includes(searchTerm.toLowerCase()))
+    (t.specializations || []).some(s => s.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
   return (
@@ -94,7 +94,7 @@ export function TherapyCalendars() {
                     <tr key={therapist.therapist_id} className="hover:bg-teal-50 transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-gray-900">
-                          {therapist.specializations.join(', ') || 'General Therapy'}
+                          {(therapist.specializations || []).join(', ') || 'General Therapy'}
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">

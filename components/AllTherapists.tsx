@@ -678,6 +678,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
 
         setSelectedClient((prev: any) => ({
           ...prev,
+          invitee_name: prev.invitee_name === 'Loading...' ? (aptWithEmergency.invitee_name || aptWithEmergency.client_name || prev.invitee_name) : prev.invitee_name,
           emergency_contact_name: aptWithEmergency.emergency_contact_name,
           emergency_contact_relation: aptWithEmergency.emergency_contact_relation,
           emergency_contact_number: aptWithEmergency.emergency_contact_number,
