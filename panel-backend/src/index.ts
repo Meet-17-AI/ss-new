@@ -157,6 +157,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
       if (existingCheck.rows.length > 0) {
         console.error(`❌ Google Calendar ${userEmail} is already linked to therapist ${existingCheck.rows[0].name}`);
         let baseUrl = process.env.FRONTEND_URL || 'https://safestories-panel.vercel.app';
+        if (baseUrl.includes('safestories-dashboard')) baseUrl = 'https://safestories-panel.vercel.app';
         if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
         
         if (adminRedirect || therapistId === 'SafeStories') {
@@ -193,6 +194,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
     console.log(`✓ Connected Google Calendar successfully for therapist: ${therapistId} (${userEmail})`);
 
     let baseUrl = process.env.FRONTEND_URL || 'https://safestories-panel.vercel.app';
+    if (baseUrl.includes('safestories-dashboard')) baseUrl = 'https://safestories-panel.vercel.app';
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
 
     if (adminRedirect || therapistId === 'SafeStories') {
