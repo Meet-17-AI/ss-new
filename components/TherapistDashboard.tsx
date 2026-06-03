@@ -3033,7 +3033,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                 </p>
               </div>
               <a
-                href={user.google_calendar_connected ? undefined : `/api/auth/google/therapist?userId=${user.therapist_id}`}
+                href={user.google_calendar_connected ? undefined : `/api/auth/google?therapistId=${user.therapist_id}`}
                 className={`px-4 py-2 rounded-lg text-sm font-medium ${
                   user.google_calendar_connected 
                     ? 'bg-gray-100 text-gray-500 cursor-default' 
@@ -3996,7 +3996,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
             </p>
             <div className="flex flex-col gap-3">
               <a
-                href={`/api/auth/google/therapist?userId=${user.therapist_id}`}
+                href={`/api/auth/google?therapistId=${user.therapist_id}`}
                 className="w-full py-3 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors"
               >
                 Connect Calendar Now
