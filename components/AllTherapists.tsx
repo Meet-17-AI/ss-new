@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { Search, ArrowLeft, User, Mail, Calendar as CalendarIcon, List, Eye, EyeOff, Edit, X, Upload, Link, ChevronDown, Copy, ExternalLink, Pencil, Check } from 'lucide-react';
 import { Loader } from './Loader';
 import { Toast } from './Toast';
@@ -147,6 +148,9 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
   const [isClientEditMode, setIsClientEditMode] = useState(false);
   const [clientContactEdit, setClientContactEdit] = useState({ name: '', phone: '', email: '', saving: false });
 
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+
   const toggleTherapistFilter = (therapistName: string) => {
     setSelectedTherapistFilters(prev =>
       prev.includes(therapistName)
@@ -161,6 +165,17 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       openClientDetails(selectedClientProp);
     }
   }, [selectedClientProp]);
+
+  // Read client from URL
+  useEffect(() => {
+    const clientIdParam = searchParams.get('clientId');
+    if (clientIdParam && clients.length > 0 && !selectedClient) {
+      const client = clients.find(c => c.invitee_email === clientIdParam || c.invitee_phone === clientIdParam);
+      if (client) {
+        openClientDetails(client);
+      }
+    }
+  }, [searchParams, clients, selectedClient]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -223,6 +238,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
 
   const filteredTherapists = therapists
     .filter(therapist => {
+      if (therapist.name === 'SafeStories') return false;
       if (!searchQuery) return true;
       const query = searchQuery.toLowerCase();
       return (
@@ -239,6 +255,27 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       if (!aNameMatch && bNameMatch) return 1;
       return 0;
     });
+
+  const toggleTherapistStatus = async (therapist: any) => {
+    try {
+      const newStatus = !therapist.is_active;
+      const response = await fetch(`/api/admin/therapists/${therapist.therapist_id}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: newStatus })
+      });
+      if (response.ok) {
+        setTherapists(prev => prev.map(t => 
+          t.therapist_id === therapist.therapist_id ? { ...t, is_active: newStatus } : t
+        ));
+        setToast({ message: `Therapist marked as ${newStatus ? 'Active' : 'Inactive'}`, type: 'success' });
+      } else {
+        setToast({ message: 'Failed to update therapist status', type: 'error' });
+      }
+    } catch (err) {
+      setToast({ message: 'Error updating status', type: 'error' });
+    }
+  };
 
   const openTherapistDetails = async (therapist: any) => {
     setSelectedTherapist(therapist);
@@ -920,6 +957,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
     }
   };
 
+
   if (selectedClient) {
     return (
       <>
@@ -927,7 +965,19 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
         {/* Header with Back Button */}
         <div className="flex items-center gap-4 mb-6">
           <button
-            onClick={closeClientDetails}
+            onClick={() => {
+              const source = searchParams.get('source');
+              if (source) {
+                navigate(`/admin/${source}`);
+              } else if (onBack) {
+                onBack();
+              } else {
+                setSelectedClient(null);
+                searchParams.delete('clientId');
+                searchParams.delete('source');
+                setSearchParams(searchParams);
+              }
+            }}
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
           >
             <ArrowLeft size={24} />
@@ -2722,6 +2772,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Rating</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Total sessions lifetime</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Sessions this month</th>
+                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Status</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Live Status</th>
                     </tr>
                   </thead>
@@ -2766,6 +2817,19 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                           </td>
                           <td className="px-6 py-4">{therapist.total_sessions_lifetime}</td>
                           <td className="px-6 py-4">{therapist.sessions_this_month}</td>
+                          <td className="px-6 py-4">
+                            <div className="flex flex-col gap-2">
+                              <span className={`px-2 py-1 rounded-full text-xs font-medium text-center ${therapist.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                {therapist.is_active ? 'Active' : 'Inactive'}
+                              </span>
+                              <button
+                                onClick={() => toggleTherapistStatus(therapist)}
+                                className="text-[10px] border px-2 py-1 rounded hover:bg-gray-50 transition-colors"
+                              >
+                                {therapist.is_active ? 'Deactivate' : 'Activate'}
+                              </button>
+                            </div>
+                          </td>
                           <td className="px-6 py-4">
                             <div className="flex items-center gap-2">
                               <div className={`w-2 h-2 rounded-full ${therapist.isLive ? 'bg-green-500' : 'bg-red-500'}`}></div>

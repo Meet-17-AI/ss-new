@@ -479,6 +479,9 @@ ${apt.booking_mode} joining info${apt.booking_joining_link ? `\nVideo call link:
   const startIndex = (currentPage - 1) * itemsPerPage;
   const paginatedAppointments = filteredAppointments.slice(startIndex, startIndex + itemsPerPage);
 
+  const showRating = ['all', 'completed', 'pending_notes'].includes(activeTab);
+  const colCount = 7 + (isFeedbackTab ? 1 : 0) + (showRating ? 1 : 0);
+
   const exportToCSV = () => {
     const headers = ['Session Timings', 'Session Name', 'Client Name', 'Phone', 'Email', 'Therapist Name', 'Mode'];
     const rows = filteredAppointments.map(apt => [
@@ -681,17 +684,17 @@ ${apt.booking_mode} joining info${apt.booking_joining_link ? `\nVideo call link:
                   <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Therapist Name</th>
                   <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Mode</th>
                   <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Status</th>
-                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Rating</th>
+                  {showRating && <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Rating</th>}
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={isFeedbackTab ? 9 : 8} className="text-center text-gray-400 py-8">Loading...</td>
+                    <td colSpan={colCount} className="text-center text-gray-400 py-8">Loading...</td>
                   </tr>
                 ) : filteredAppointments.length === 0 ? (
                   <tr>
-                    <td colSpan={isFeedbackTab ? 9 : 8} className="text-center text-gray-400 py-8">No bookings found</td>
+                    <td colSpan={colCount} className="text-center text-gray-400 py-8">No bookings found</td>
                   </tr>
                 ) : (
                   paginatedAppointments.map((apt, index) => (
@@ -749,13 +752,15 @@ ${apt.booking_mode} joining info${apt.booking_joining_link ? `\nVideo call link:
                                 getAppointmentStatus(apt).charAt(0).toUpperCase() + getAppointmentStatus(apt).slice(1)}
                           </span>
                         </td>
-                        <td className="px-6 py-4 text-sm font-medium text-gray-700 text-center">
-                          {apt.client_rating ? `⭐ ${apt.client_rating}` : '-'}
-                        </td>
+                        {showRating && (
+                          <td className="px-6 py-4 text-sm font-medium text-gray-700 text-center">
+                            {apt.client_rating ? `⭐ ${apt.client_rating}` : '-'}
+                          </td>
+                        )}
                       </tr>
                       {selectedRowIndex === index && (
                         <tr className="bg-gray-100">
-                          <td colSpan={isFeedbackTab ? 9 : 8} className="px-6 py-4">
+                          <td colSpan={colCount} className="px-6 py-4">
                             <div className="flex gap-2 justify-center items-center">
                               <button
                                 onClick={() => copyAppointmentDetails(apt)}

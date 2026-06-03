@@ -474,6 +474,17 @@ app.post('/api/login', async (req, res) => {
             user.scheduleId = resourceCheck.rows[0].schedule_id;
             console.log(`✅ Found scheduleId for therapist: ${user.scheduleId}`);
           }
+
+          // Check google calendar connection
+          const calendarCheck = await pool.query(
+            'SELECT google_refresh_token IS NOT NULL as connected FROM therapists WHERE therapist_id = $1',
+            [user.therapist_id]
+          );
+          if (calendarCheck.rows.length > 0) {
+            user.google_calendar_connected = calendarCheck.rows[0].connected;
+          } else {
+            user.google_calendar_connected = false;
+          }
         } catch (statusError) {
           console.error('Error checking therapist status/resources:', statusError);
         }
@@ -1463,10 +1474,11 @@ app.patch('/api/leads/:id/assign-therapist', async (req, res) => {
 app.get('/api/therapists', async (req, res) => {
   try {
     const therapists = await pool.query(`
-      SELECT id, name, full_name, therapist_id
-      FROM users 
-      WHERE role = 'therapist' 
-      ORDER BY COALESCE(full_name, name)
+      SELECT u.id, u.name, u.full_name, u.therapist_id
+      FROM users u
+      LEFT JOIN therapists t ON u.therapist_id = t.therapist_id
+      WHERE u.role = 'therapist' AND COALESCE(t.is_active, true) = true
+      ORDER BY COALESCE(u.full_name, u.name)
     `);
     res.json(therapists.rows);
   } catch (err) {
@@ -3501,6 +3513,7 @@ app.get('/api/therapists-admin', async (req, res) => {
         t.contact_info,
         t.profile_picture_url,
         t.phone_number,
+        COALESCE(t.is_active, true) as is_active,
         (SELECT MAX(schedule_id) FROM therapist_resources WHERE therapist_id = t.therapist_id) as "scheduleId",
         COUNT(DISTINCT CASE 
           WHEN LOWER(b.booking_status) NOT IN ('cancelled', 'canceled') 
@@ -3530,14 +3543,40 @@ app.get('/api/therapists-admin', async (req, res) => {
         TRIM(b.booking_host_name) ILIKE '%' || SPLIT_PART(t.name, ' ', 1) || '%'
         OR TRIM(b.booking_host_name) ILIKE t.name
       )
-      GROUP BY t.therapist_id, t.name, t.specialization, t.contact_info, t.profile_picture_url, t.phone_number
+      GROUP BY t.therapist_id, t.name, t.specialization, t.contact_info, t.profile_picture_url, t.phone_number, t.is_active
       ORDER BY t.name ASC
     `);
 
     res.json(result.rows);
   } catch (error) {
-    console.error('Error fetching therapists:', error);
-    res.status(500).json({ error: 'Failed to fetch therapists' });
+    console.error('Error fetching admin therapists:', error);
+    res.status(500).json({ error: 'Failed to fetch admin therapists' });
+  }
+});
+
+// Update therapist status (active/inactive)
+app.put('/api/admin/therapists/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_active } = req.body;
+    
+    if (typeof is_active !== 'boolean') {
+      return res.status(400).json({ error: 'is_active must be a boolean' });
+    }
+
+    const result = await pool.query(
+      'UPDATE therapists SET is_active = $1 WHERE therapist_id = $2 RETURNING *',
+      [is_active, id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'Therapist not found' });
+    }
+
+    res.json({ success: true, therapist: result.rows[0] });
+  } catch (error) {
+    console.error('Error updating therapist status:', error);
+    res.status(500).json({ error: 'Failed to update therapist status' });
   }
 });
 

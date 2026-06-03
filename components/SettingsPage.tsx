@@ -184,10 +184,7 @@ const CalendarConnectionsAdmin: React.FC = () => {
                         )}
                       </div>
                       <p className="text-sm text-gray-500 mt-1">
-                        {therapist.connected 
-                          ? `Google Email: ${therapist.google_email}`
-                          : `Contact Email: ${therapist.contact_info || 'N/A'}`
-                        }
+                        {therapist.connected && `Google Email: ${therapist.google_email}`}
                       </p>
                     </div>
                   </div>

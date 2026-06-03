@@ -38,13 +38,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
   const [refundTab, setRefundTab] = useState<string>('all_payments');
 
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedClientForView, setSelectedClientForView] = useState<any>(() => {
-    const saved = localStorage.getItem('selectedClientForView');
-    return saved ? JSON.parse(saved) : null;
-  });
-  const [clientViewSource, setClientViewSource] = useState<string>(() => {
-    return localStorage.getItem('clientViewSource') || '';
-  });
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [profilePictureUrl, setProfilePictureUrl] = useState<string>('');
 
@@ -68,30 +61,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
     }
   }, [navigate]);
 
-  useEffect(() => {
-    if (activeView !== 'therapists') {
-      setSelectedClientForView(null);
-      setClientViewSource('');
-      localStorage.removeItem('selectedClientForView');
-      localStorage.removeItem('clientViewSource');
-    }
-  }, [activeView]);
+  // Local client view state removed in favor of URL params
 
-  useEffect(() => {
-    if (selectedClientForView) {
-      localStorage.setItem('selectedClientForView', JSON.stringify(selectedClientForView));
-    } else {
-      localStorage.removeItem('selectedClientForView');
-    }
-  }, [selectedClientForView]);
-
-  useEffect(() => {
-    if (clientViewSource) {
-      localStorage.setItem('clientViewSource', clientViewSource);
-    } else {
-      localStorage.removeItem('clientViewSource');
-    }
-  }, [clientViewSource]);
   const [isDateDropdownOpen, setIsDateDropdownOpen] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState('All Time');
   const [showCustomCalendar, setShowCustomCalendar] = useState(false);
@@ -168,7 +139,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
     setIsDateDropdownOpen(false);
     setShowCustomCalendar(false);
     setSelectedBookingIndex(null);
-    setSelectedClientForView(null);
   };
 
   const handleNextPage = () => {
@@ -416,36 +386,36 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: (activeView === 'clients' || (activeView === 'therapists' && clientViewSource === 'clients')) ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'clients' ? '#2D75795C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               navigate('/admin/clients');
             }}
           >
-            <Users size={20} className={(activeView === 'clients' || (activeView === 'therapists' && clientViewSource === 'clients')) ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={(activeView === 'clients' || (activeView === 'therapists' && clientViewSource === 'clients')) ? 'text-teal-700' : 'text-gray-700'}>All Clients</span>
+            <Users size={20} className={activeView === 'clients' ? 'text-teal-700' : 'text-gray-700'} />
+            <span className={activeView === 'clients' ? 'text-teal-700' : 'text-gray-700'}>All Clients</span>
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: (activeView === 'therapists' && (!selectedClientForView || clientViewSource === 'therapists')) ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'therapists' ? '#2D75795C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               navigate('/admin/therapists');
             }}
           >
-            <UserCog size={20} className={(activeView === 'therapists' && (!selectedClientForView || clientViewSource === 'therapists')) ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={(activeView === 'therapists' && (!selectedClientForView || clientViewSource === 'therapists')) ? 'text-teal-700' : 'text-gray-700'}>All Therapists</span>
+            <UserCog size={20} className={activeView === 'therapists' ? 'text-teal-700' : 'text-gray-700'} />
+            <span className={activeView === 'therapists' ? 'text-teal-700' : 'text-gray-700'}>All Therapists</span>
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: (activeView === 'appointments' || (activeView === 'therapists' && clientViewSource === 'appointments')) ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'appointments' ? '#2D75795C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               navigate('/admin/appointments');
             }}
           >
-            <Calendar size={20} className={(activeView === 'appointments' || (activeView === 'therapists' && clientViewSource === 'appointments')) ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={(activeView === 'appointments' || (activeView === 'therapists' && clientViewSource === 'appointments')) ? 'text-teal-700' : 'text-gray-700'}>Bookings</span>
+            <Calendar size={20} className={activeView === 'appointments' ? 'text-teal-700' : 'text-gray-700'} />
+            <span className={activeView === 'appointments' ? 'text-teal-700' : 'text-gray-700'}>Bookings</span>
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
@@ -561,31 +531,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           <Route path="newTherapist" element={<NewTherapist onBack={() => navigate('/admin/create')} />} />
           <Route path="clients" element={
             <AllClients onClientClick={(client) => {
-              setSelectedClientForView(client);
-              setClientViewSource('clients');
-              navigate('/admin/therapists');
+              navigate('/admin/therapists?clientId=' + encodeURIComponent(client.invitee_email || client.invitee_phone) + '&source=clients');
             }} onCreateBooking={() => navigate('/admin/createBooking')} />
           } />
           <Route path="therapists" element={
-            <AllTherapists
-              selectedClientProp={selectedClientForView}
-              onBack={() => {
-                const sourceView = clientViewSource || 'therapists';
-                setSelectedClientForView(null);
-                setClientViewSource('');
-                localStorage.removeItem('selectedClientForView');
-                localStorage.removeItem('clientViewSource');
-                navigate('/admin/' + sourceView);
-              }}
-            />
+            <AllTherapists />
           } />
           <Route path="appointments" element={
             <Appointments
               initialTab={appointmentTab}
               onClientClick={(client) => {
-                setSelectedClientForView(client);
-                setClientViewSource('appointments');
-                navigate('/admin/therapists');
+                navigate('/admin/therapists?clientId=' + encodeURIComponent(client.invitee_email || client.invitee_phone) + '&source=appointments');
               }}
               onCreateBooking={() => navigate('/admin/createBooking')}
             />
@@ -764,13 +720,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setSelectedClientForView({
-                                    invitee_name: booking.client_name,
-                                    invitee_email: booking.client_email,
-                                    invitee_phone: booking.client_phone
-                                  });
-                                  setClientViewSource('dashboard');
-                                  navigate('/admin/therapists');
+                                  navigate('/admin/therapists?clientId=' + encodeURIComponent(booking.client_email || booking.client_phone) + '&source=dashboard');
                                 }}
                                 className="text-teal-700 hover:underline font-medium"
                               >

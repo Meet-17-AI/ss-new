@@ -24,7 +24,7 @@ import EditEvent from './EditEvent';
 import { BookingPage } from './BookingPage';
 import { NotificationBell } from './NotificationBell';
 
-import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { Routes, Route, useNavigate, useLocation, Navigate, useSearchParams } from 'react-router-dom';
 import { useSocket } from '../context/SocketContext';
 
 interface TherapistDashboardProps {
@@ -37,11 +37,13 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   const { socket } = useSocket();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const activeView = location.pathname.split('/')[2] || 'dashboard';
   const setActiveView = (view: string) => navigate(`/therapist/${view}`);
   
   // Use state instead of useUrlState
   const [activeAppointmentTab, setActiveAppointmentTab] = useState<string>('all');
+  const [showCalendarPopup, setShowCalendarPopup] = useState(() => !user.google_calendar_connected);
 
   const [isDateDropdownOpen, setIsDateDropdownOpen] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState('All Time');
@@ -124,6 +126,18 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   const [clientSelectedMonth, setClientSelectedMonth] = useState('All Time');
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [selectedClientForBooking, setSelectedClientForBooking] = useState<any>(null);
+  const [selectedClients, setSelectedClients] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const clientId = searchParams.get('clientId');
+    if (clientId && clients.length > 0 && !selectedClient) {
+      const client = clients.find(c => c.invitee_email === clientId || c.invitee_phone === clientId);
+      if (client) {
+        setSelectedClient(client);
+      }
+    }
+  }, [searchParams, clients, selectedClient]);
+
   const [isClientDateDropdownOpen, setIsClientDateDropdownOpen] = useState(false);
   const [showClientCustomCalendar, setShowClientCustomCalendar] = useState(false);
   const [clientStartDate, setClientStartDate] = useState('');
@@ -2390,7 +2404,14 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           <div className="p-8 h-full overflow-auto">
             {/* Header with Back Button */}
             <div className="flex items-center gap-4 mb-6">
-              <button onClick={() => setSelectedClient(null)} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+              <button 
+                onClick={() => {
+                  setSelectedClient(null);
+                  searchParams.delete('clientId');
+                  setSearchParams(searchParams);
+                }} 
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              >
                 <ArrowLeft size={24} />
               </button>
               <div className="flex items-center gap-3">
@@ -3002,25 +3023,49 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
             }}
           />
         ) : activeView === 'resources' ? (
-          selectedEditEvent ? (
-            <EditEvent
-              event={selectedEditEvent}
-              therapistId={user.therapist_id}
-              services={therapistData[user.full_name]?.services || []}
-              onBack={() => {
-                setSelectedEditEvent(null);
-                setActiveView('dashboard');
-              }}
-              onSave={(updated) => {
-                console.log('Event Saved:', updated);
-                setSelectedEditEvent(null);
-                setActiveView('dashboard');
-                setToast({ message: 'Event settings updated successfully!', type: 'success' });
-              }}
-            />
-          ) : (
-            <div className="p-8 text-center text-gray-500">No availability configured for this account.</div>
-          )
+          <div className="flex flex-col h-full overflow-hidden relative">
+            <div className="flex justify-between items-center p-4 bg-teal-50 border-b border-teal-100 flex-shrink-0">
+              <div>
+                <h3 className="font-bold text-teal-800">Google Calendar Connection</h3>
+                <p className="text-sm text-teal-700">
+                  {user.google_calendar_connected 
+                    ? 'Your Google Calendar is connected. Availabilities will be synced.' 
+                    : 'Your Google Calendar is not connected. Please connect to sync availabilities.'}
+                </p>
+              </div>
+              <a
+                href={user.google_calendar_connected ? undefined : `/api/auth/google/therapist?userId=${user.therapist_id}`}
+                className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                  user.google_calendar_connected 
+                    ? 'bg-gray-100 text-gray-500 cursor-default' 
+                    : 'bg-teal-600 text-white hover:bg-teal-700'
+                }`}
+              >
+                {user.google_calendar_connected ? 'Connected' : 'Connect Calendar'}
+              </a>
+            </div>
+            <div className="flex-1 overflow-auto">
+              {selectedEditEvent ? (
+                <EditEvent
+                  event={selectedEditEvent}
+                  therapistId={user.therapist_id}
+                  services={therapistData[user.full_name]?.services || []}
+                  onBack={() => {
+                    setSelectedEditEvent(null);
+                    setActiveView('dashboard');
+                  }}
+                  onSave={(updated) => {
+                    console.log('Event Saved:', updated);
+                    setSelectedEditEvent(null);
+                    setActiveView('dashboard');
+                    setToast({ message: 'Event settings updated successfully!', type: 'success' });
+                  }}
+                />
+              ) : (
+                <div className="p-8 text-center text-gray-500">No availability configured for this account.</div>
+              )}
+            </div>
+          </div>
         ) : activeView === 'notifications' ? (
           <Notifications userRole="therapist" userId={user.id} />
         ) : activeView === 'settings' ? (
@@ -3933,6 +3978,40 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
             </div>
           </div>
         )}
+
+      {showCalendarPopup && !user.google_calendar_connected && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[9999]">
+          <div className="bg-white rounded-xl w-full max-w-md p-6 text-center shadow-2xl relative">
+            <button 
+              onClick={() => setShowCalendarPopup(false)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
+            >
+              <X size={20} />
+            </button>
+            <div className="w-16 h-16 bg-teal-100 rounded-full flex items-center justify-center mx-auto mb-4 text-teal-700">
+              <Calendar size={32} />
+            </div>
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Connect Google Calendar</h3>
+            <p className="text-gray-600 mb-6">
+              Please connect your Google Calendar to sync your availability and manage sessions seamlessly.
+            </p>
+            <div className="flex flex-col gap-3">
+              <a
+                href={`/api/auth/google/therapist?userId=${user.therapist_id}`}
+                className="w-full py-3 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors"
+              >
+                Connect Calendar Now
+              </a>
+              <button
+                onClick={() => setShowCalendarPopup(false)}
+                className="w-full py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+              >
+                Remind Me Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
         {/* Complete Profile Modal */}
         {showCompleteProfileModal && user.needsProfileCompletion && (
