@@ -169,13 +169,14 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
   // Read client from URL
   useEffect(() => {
     const clientIdParam = searchParams.get('clientId');
-    if (clientIdParam && clients.length > 0 && !selectedClient) {
-      const client = clients.find(c => c.invitee_email === clientIdParam || c.invitee_phone === clientIdParam);
-      if (client) {
-        openClientDetails(client);
-      }
+    if (clientIdParam && !selectedClient) {
+      const isEmail = clientIdParam.includes('@');
+      const dummyClient = isEmail 
+        ? { invitee_email: clientIdParam, invitee_name: 'Loading...', invitee_phone: '' }
+        : { invitee_phone: clientIdParam, invitee_name: 'Loading...', invitee_email: '' };
+      openClientDetails(dummyClient);
     }
-  }, [searchParams, clients, selectedClient]);
+  }, [searchParams, selectedClient]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {

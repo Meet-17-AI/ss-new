@@ -3024,7 +3024,7 @@ app.post('/api/cancel-booking', async (req, res) => {
     
     if (googleEventId && cancelHostId) {
       try {
-        const tokenRes = await pool.query('SELECT google_calendar_tokens FROM users WHERE id = $1', [cancelHostId]);
+        const tokenRes = await pool.query('SELECT google_calendar_tokens FROM users WHERE therapist_id = $1 OR CAST(id AS TEXT) = $1', [cancelHostId]);
         if (tokenRes.rows.length > 0 && tokenRes.rows[0].google_calendar_tokens) {
           const tokens = typeof tokenRes.rows[0].google_calendar_tokens === 'string' 
             ? JSON.parse(tokenRes.rows[0].google_calendar_tokens) 
@@ -3093,11 +3093,11 @@ app.post('/api/cancel-booking', async (req, res) => {
     }
 
     // Notify assigned therapist about cancellation
-    const cancelHostId = bookingDetails.booking_host_calendar_id;
-    if (cancelHostId) {
+    const notifyHostId = bookingDetails.booking_host_calendar_id;
+    if (notifyHostId) {
       const therapistUserRes = await pool.query(
         'SELECT id FROM users WHERE therapist_id = $1 OR CAST(id AS TEXT) = $1',
-        [cancelHostId]
+        [notifyHostId]
       );
       if (therapistUserRes.rows.length > 0) {
         const tId = therapistUserRes.rows[0].id;
@@ -5724,6 +5724,10 @@ app.post('/api/create-booking', async (req, res) => {
     if (clientTz !== 'Asia/Kolkata') {
       try {
         const parts = new Intl.DateTimeFormat('en-US', { timeZone: clientTz, timeZoneName: 'short' }).formatToParts(startAt);
+        tzShort = parts.find(p => p.type === 'timeZoneName')?.value || clientTz;
+      } catch (e) {
+        tzShort = clientTz;
+      }
     }
     const inviteeTime = `${clientDayName}, ${clientMonthName} ${clientDateNum}, ${clientYearNum} at ${formatTimeClient(startAt)} - ${formatTimeClient(endAt)} ${tzShort}`;
 
@@ -5825,6 +5829,7 @@ app.post('/api/create-booking', async (req, res) => {
         maskId,
         google_event_id
       ]
+    );
 
     // Send native email confirmation
     try {
