@@ -126,7 +126,6 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   const [clientSelectedMonth, setClientSelectedMonth] = useState('All Time');
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [selectedClientForBooking, setSelectedClientForBooking] = useState<any>(null);
-  const [selectedClients, setSelectedClients] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const clientId = searchParams.get('clientId');
