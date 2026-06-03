@@ -186,9 +186,9 @@ app.get('/api/auth/google/callback', async (req, res) => {
     
     await pool.query(
       `UPDATE therapists 
-       SET google_refresh_token = $1, google_access_token = $2, google_token_expiry = $3, contact_info = COALESCE(NULLIF($4, ''), contact_info)
+       SET google_refresh_token = COALESCE($1, google_refresh_token), google_access_token = $2, google_token_expiry = $3, contact_info = COALESCE(NULLIF($4, ''), contact_info)
        WHERE therapist_id = $5`,
-      [tokens.refresh_token, tokens.access_token, expiryDate, userEmail, therapistId]
+      [tokens.refresh_token || null, tokens.access_token, expiryDate, userEmail, therapistId]
     );
 
     console.log(`✓ Connected Google Calendar successfully for therapist: ${therapistId} (${userEmail})`);

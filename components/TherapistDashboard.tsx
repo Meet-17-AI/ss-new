@@ -137,6 +137,37 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     }
   }, [searchParams, clients, selectedClient]);
 
+  useEffect(() => {
+    const googleAuth = searchParams.get('googleAuth');
+    if (googleAuth) {
+      if (googleAuth === 'success') {
+        setUser((prev: any) => ({ ...prev, google_calendar_connected: true }));
+        setToast({ message: 'Google Calendar connected successfully!', type: 'success' });
+        
+        try {
+          const stored = localStorage.getItem('user');
+          if (stored) {
+            const parsed = JSON.parse(stored);
+            parsed.google_calendar_connected = true;
+            localStorage.setItem('user', JSON.stringify(parsed));
+          }
+        } catch (e) {}
+      } else if (googleAuth === 'error') {
+        const reason = searchParams.get('reason');
+        if (reason === 'already_linked') {
+          setToast({ message: 'This Google Calendar is already connected to another therapist.', type: 'error' });
+        } else {
+          setToast({ message: 'Failed to connect Google Calendar.', type: 'error' });
+        }
+      }
+
+      const newSearchParams = new URLSearchParams(searchParams);
+      newSearchParams.delete('googleAuth');
+      newSearchParams.delete('reason');
+      setSearchParams(newSearchParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   const [isClientDateDropdownOpen, setIsClientDateDropdownOpen] = useState(false);
   const [showClientCustomCalendar, setShowClientCustomCalendar] = useState(false);
   const [clientStartDate, setClientStartDate] = useState('');
