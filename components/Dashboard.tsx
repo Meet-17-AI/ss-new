@@ -376,7 +376,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer"
-            style={{ backgroundColor: activeView === 'dashboard' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'dashboard' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               navigate('/admin/dashboard');
@@ -387,7 +387,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'clients' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'clients' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               navigate('/admin/clients');
@@ -398,7 +398,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'therapists' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'therapists' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               navigate('/admin/therapists');
@@ -409,7 +409,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'appointments' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'appointments' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               navigate('/admin/appointments');
@@ -424,11 +424,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                 navigate('/admin/refunds');
               }}
               className="flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 w-full text-left font-medium relative overflow-hidden group"
-              style={{ backgroundColor: activeView === 'refunds' ? '#2D75795C' : 'transparent' }}
+              style={{ backgroundColor: activeView === 'refunds' ? '#F4A9365C' : 'transparent' }}
             >
               <FileWarning size={20} className={activeView === 'refunds' ? 'text-teal-700' : 'text-gray-700'} />
-              <span className={activeView === 'refunds' ? 'text-teal-700' : 'text-gray-700'}>Refunds/Cancellations</span>
-              {activeView === 'refunds' && <div className="absolute left-0 top-0 bottom-0 w-1 bg-teal-700 rounded-r" />}
+              <span className={activeView === 'refunds' ? 'text-teal-700' : 'text-gray-700'}>Payments</span>
+              {activeView === 'refunds' && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#F4A936] rounded-r" />}
             </button>
 
             <button
@@ -437,15 +437,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                 navigate('/admin/therapy-calendars');
               }}
               className="flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 w-full text-left font-medium relative overflow-hidden group"
-              style={{ backgroundColor: activeView === 'therapy-calendars' ? '#2D75795C' : 'transparent' }}
+              style={{ backgroundColor: activeView === 'therapy-calendars' ? '#F4A9365C' : 'transparent' }}
             >
               <Calendar size={20} className={activeView === 'therapy-calendars' ? 'text-teal-700' : 'text-gray-700'} />
               <span className={activeView === 'therapy-calendars' ? 'text-teal-700' : 'text-gray-700'}>Therapy Calendars</span>
-              {activeView === 'therapy-calendars' && <div className="absolute left-0 top-0 bottom-0 w-1 bg-teal-700 rounded-r" />}
+              {activeView === 'therapy-calendars' && <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#F4A936] rounded-r" />}
             </button>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'notifications' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'notifications' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               navigate('/admin/notifications');
@@ -460,7 +460,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
         <div className="px-4 mb-4 pt-4 border-t">
           <div
             className="rounded-lg px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'appSettings' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'appSettings' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               navigate('/admin/appSettings');

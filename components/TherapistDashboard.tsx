@@ -2262,7 +2262,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
         <nav className="flex-1 px-4">
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer"
-            style={{ backgroundColor: activeView === 'dashboard' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'dashboard' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               setActiveView('dashboard');
@@ -2274,7 +2274,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
           <div
             className={`rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100`}
-            style={{ backgroundColor: activeView === 'resources' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'resources' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               setActiveView('resources');
@@ -2312,7 +2312,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'clients' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'clients' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               setActiveView('clients');
@@ -2323,7 +2323,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'appointments' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'appointments' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               setActiveView('appointments');
@@ -2334,7 +2334,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'notifications' ? '#2D75795C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'notifications' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
               setActiveView('notifications');

@@ -30,6 +30,7 @@ export const Logo: React.FC<LogoProps> = ({ size = 'large' }) => {
         </div>
       </div>
       <span className={`${isSmall ? 'text-3xl' : 'text-4xl md:text-5xl'} font-bold text-brand-teal tracking-tight -mt-2 font-sans`}>Stories</span>
+      <span className={`${isSmall ? 'text-xs' : 'text-sm'} font-semibold text-teal-800 tracking-widest mt-1 uppercase ml-1 opacity-80`} style={{ letterSpacing: '0.3em' }}>Panel 2.0</span>
     </div>
   );
 };

@@ -1483,7 +1483,7 @@ app.get('/api/therapists', async (req, res) => {
   try {
     const therapists = await pool.query(`
       SELECT u.id, u.name, u.full_name, u.therapist_id, t.specialization,
-             CASE WHEN u.google_calendar_tokens IS NOT NULL THEN true ELSE false END as google_calendar_connected
+             false as google_calendar_connected
       FROM users u
       LEFT JOIN therapists t ON u.therapist_id = t.therapist_id
       WHERE u.role = 'therapist' AND COALESCE(t.is_active, true) = true
