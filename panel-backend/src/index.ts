@@ -7321,6 +7321,68 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
+// ==================== THERAPY SERVICES APIs ====================
+app.get('/api/therapy-services', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT ts.*, t.google_calendar_connected
+      FROM therapy_services ts
+      LEFT JOIN therapists t ON ts.therapist_id = t.therapist_id
+      ORDER BY ts.therapist_name, ts.title
+    `);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching therapy services:', error);
+    res.status(500).json({ error: 'Failed to fetch therapy services' });
+  }
+});
+
+app.post('/api/therapy-services', async (req, res) => {
+  try {
+    const { title, duration, type, description, charges, therapist_id, therapist_name, payment_gateway } = req.body;
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + therapist_name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Math.random().toString(36).substring(2, 7);
+    
+    const result = await pool.query(`
+      INSERT INTO therapy_services (title, duration, type, description, charges, slug, therapist_id, therapist_name, payment_gateway)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING *
+    `, [title, duration || '50 Mins', type, description, charges, slug, therapist_id, therapist_name, payment_gateway || 'Razorpay']);
+    
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating therapy service:', error);
+    res.status(500).json({ error: 'Failed to create therapy service' });
+  }
+});
+
+app.put('/api/therapy-services/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, type, description, charges, therapist_id, therapist_name, payment_gateway } = req.body;
+    
+    const result = await pool.query(`
+      UPDATE therapy_services 
+      SET title = COALESCE($1, title),
+          type = COALESCE($2, type),
+          description = COALESCE($3, description),
+          charges = COALESCE($4, charges),
+          therapist_id = COALESCE($5, therapist_id),
+          therapist_name = COALESCE($6, therapist_name),
+          payment_gateway = COALESCE($7, payment_gateway)
+      WHERE id = $8
+      RETURNING *
+    `, [title, type, description, charges, therapist_id, therapist_name, payment_gateway, id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Therapy service not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating therapy service:', error);
+    res.status(500).json({ error: 'Failed to update therapy service' });
+  }
+});
+
 // Automation Logs API
 app.get('/api/automation-logs', async (req, res) => {
   try {

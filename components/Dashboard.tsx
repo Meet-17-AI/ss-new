@@ -32,7 +32,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
   const { socket } = useSocket();
   const navigate = useNavigate();
   const location = useLocation();
-  const activeView = location.pathname.split('/')[2] || 'dashboard';
+  const searchParams = new URLSearchParams(location.search);
+  const sourceParam = searchParams.get('source');
+  let activeView = location.pathname.split('/')[2] || 'dashboard';
+  if (sourceParam && ['clients', 'appointments'].includes(sourceParam)) {
+    activeView = sourceParam;
+  }
   
   // Keep tab states as local state since they were URL params but are now handled by component state or we can just use state
   const [appointmentTab, setAppointmentTab] = useState<string>('scheduled');
