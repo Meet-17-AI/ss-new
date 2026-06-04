@@ -42,8 +42,13 @@ interface TherapyService {
 
 const DEFAULT_QUESTIONS: FormQuestion[] = [
   { id: '1', type: 'text', label: 'Name', required: true },
-  { id: '2', type: 'email', label: 'Email Address', required: true },
-  { id: '3', type: 'tel', label: 'WhatsApp Number', required: true }
+  { id: '2', type: 'email', label: 'Email address', required: true },
+  { id: '3', type: 'tel', label: 'Whatsapp Number', required: true },
+  { id: '4', type: 'text', label: 'Emergency Contact Name', required: false },
+  { id: '5', type: 'text', label: 'Emergency Contact Relation', required: false },
+  { id: '6', type: 'tel', label: 'Emergency Contact Number', required: false },
+  { id: '7', type: 'textarea', label: 'Please share anything that will help prepare for our meeting', required: false },
+  { id: '8', type: 'checkbox', label: 'I confirm that I have read and agree to the Terms & Conditions.', required: true }
 ];
 
 export function TherapyCalendarDetails() {
@@ -118,7 +123,14 @@ export function TherapyCalendarDetails() {
     try {
       const res = await fetch(`/api/therapist-schedules/${therapistId}`);
       if (res.ok) {
-        setSchedules(await res.json());
+        const data = await res.json();
+        setSchedules(data);
+        if (data.length > 0) {
+          setFormData(prev => {
+            if (!prev.schedule_id) return { ...prev, schedule_id: data[0].schedule_id };
+            return prev;
+          });
+        }
       }
     } catch (err) {
       console.error('Error fetching schedules:', err);
@@ -304,7 +316,30 @@ export function TherapyCalendarDetails() {
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-gray-500 mt-1">Select which live availability calendar applies to this service.</p>
+                <p className="text-xs text-gray-500 mt-1 mb-3">Availability is synced automatically from the therapist's configuration.</p>
+                
+                {/* Displaying the selected schedule availability */}
+                {formData.schedule_id && schedules.find(s => s.schedule_id === formData.schedule_id) && (
+                  <div className="bg-white border rounded-lg p-4 mt-2">
+                    <h4 className="text-sm font-bold text-gray-700 mb-3 border-b pb-2">Configured Availability</h4>
+                    <div className="space-y-2">
+                      {schedules.find(s => s.schedule_id === formData.schedule_id)?.availability?.map((dayObj: any, idx: number) => {
+                        if (!dayObj.is_available || !dayObj.times || dayObj.times.length === 0) return null;
+                        return (
+                          <div key={idx} className="flex gap-4 text-sm">
+                            <span className="w-24 font-medium text-gray-600 capitalize">{dayObj.day.toLowerCase()}</span>
+                            <span className="text-gray-500">
+                              {dayObj.times.map((t: any) => `${t.start} - ${t.end}`).join(', ')}
+                            </span>
+                          </div>
+                        );
+                      })}
+                      {!schedules.find(s => s.schedule_id === formData.schedule_id)?.availability?.some((d: any) => d.is_available && d.times?.length > 0) && (
+                        <span className="text-sm text-gray-400 italic">No active availability slots found for this schedule.</span>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -434,22 +469,6 @@ export function TherapyCalendarDetails() {
                   <Plus size={18} />
                   Add New Question
                 </button>
-              </div>
-
-              <div className="pt-6 border-t">
-                <h3 className="text-lg font-bold text-gray-800 mb-4">Legal & Consent</h3>
-                <label className="flex items-center gap-3 p-4 bg-gray-50 border rounded-xl cursor-pointer hover:bg-gray-100 transition-colors">
-                  <input 
-                    type="checkbox" 
-                    checked={formData.requires_tnc}
-                    onChange={(e) => setFormData({ ...formData, requires_tnc: e.target.checked })}
-                    className="w-5 h-5 text-teal-600 rounded focus:ring-teal-500"
-                  />
-                  <div>
-                    <span className="block font-medium text-gray-800">Require Terms & Conditions</span>
-                    <span className="block text-sm text-gray-500">Clients must check a consent box before completing the booking.</span>
-                  </div>
-                </label>
               </div>
             </div>
           )}
