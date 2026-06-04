@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Loader, Save, Plus, Trash2, GripVertical } from 'lucide-react';
+import { ArrowLeft, Loader, Save, Plus, Trash2, GripVertical, Edit } from 'lucide-react';
 import { Toast } from './Toast';
 
 interface Therapist {
@@ -57,6 +57,7 @@ export function TherapyCalendarDetails() {
   const isEdit = id && id !== 'new';
 
   const [activeTab, setActiveTab] = useState<'basic' | 'form' | 'payment'>('basic');
+  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(isEdit ? true : false);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -183,13 +184,15 @@ export function TherapyCalendarDetails() {
   };
 
   const addQuestion = () => {
+    const newId = Date.now().toString();
     setFormData({
       ...formData,
       form_questions: [
         ...formData.form_questions,
-        { id: Date.now().toString(), type: 'text', label: '', required: false }
+        { id: newId, type: 'text', label: '', required: false }
       ]
     });
+    setEditingQuestionId(newId);
   };
 
   const updateQuestion = (index: number, field: keyof FormQuestion, value: any) => {
@@ -395,79 +398,118 @@ export function TherapyCalendarDetails() {
                 <p className="text-sm text-gray-500 mb-4">Define the information required from clients when booking this calendar.</p>
                 
                 <div className="space-y-4">
-                  {formData.form_questions.map((q, idx) => (
-                    <div key={q.id} className="flex gap-4 items-start p-4 bg-gray-50 border rounded-xl hover:shadow-md transition-shadow">
-                      <div className="pt-3 text-gray-400 cursor-grab">
-                        <GripVertical size={20} />
-                      </div>
-                      
-                      <div className="flex-1 grid grid-cols-12 gap-4">
-                        <div className="col-span-5">
-                          <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wider">Question Label</label>
-                          <input 
-                            type="text" 
-                            value={q.label}
-                            onChange={(e) => updateQuestion(idx, 'label', e.target.value)}
-                            placeholder="e.g. Full Name"
-                            className="w-full border rounded-lg p-2.5 focus:ring-2 focus:ring-teal-500 outline-none"
-                          />
-                        </div>
-                        <div className="col-span-4">
-                          <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wider">Type</label>
-                          <select 
-                            value={q.type}
-                            onChange={(e) => updateQuestion(idx, 'type', e.target.value)}
-                            className="w-full border rounded-lg p-2.5 focus:ring-2 focus:ring-teal-500 outline-none bg-white"
-                          >
-                            <option value="text">Short Text</option>
-                            <option value="textarea">Long Text (Paragraph)</option>
-                            <option value="email">Email</option>
-                            <option value="tel">Phone/WhatsApp</option>
-                            <option value="dropdown">Dropdown Options</option>
-                          </select>
-                        </div>
-                        <div className="col-span-3 flex items-center justify-between pt-6">
-                          <label className="flex items-center gap-2 cursor-pointer">
-                            <input 
-                              type="checkbox" 
-                              checked={q.required}
-                              onChange={(e) => updateQuestion(idx, 'required', e.target.checked)}
-                              className="w-4 h-4 text-teal-600 rounded focus:ring-teal-500"
-                            />
-                            <span className="text-sm font-medium text-gray-700">Required</span>
-                          </label>
-                        </div>
-                        
-                        {q.type === 'dropdown' && (
-                          <div className="col-span-12 mt-2">
-                            <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wider">Dropdown Options (Comma Separated)</label>
-                            <input 
-                              type="text" 
-                              value={q.options || ''}
-                              onChange={(e) => updateQuestion(idx, 'options', e.target.value)}
-                              placeholder="e.g. Option 1, Option 2, Option 3"
-                              className="w-full border rounded-lg p-2.5 focus:ring-2 focus:ring-teal-500 outline-none"
-                            />
+                  {formData.form_questions.map((q, idx) => {
+                    const isEditing = editingQuestionId === q.id;
+
+                    return (
+                      <div key={q.id} className={`flex flex-col bg-white border rounded-xl overflow-hidden hover:shadow-md transition-shadow ${isEditing ? 'ring-2 ring-teal-500' : ''}`}>
+                        {isEditing ? (
+                          <div className="flex gap-4 items-start p-6 bg-gray-50">
+                            <div className="pt-3 text-gray-400 cursor-grab">
+                              <GripVertical size={20} />
+                            </div>
+                            
+                            <div className="flex-1 grid grid-cols-12 gap-4">
+                              <div className="col-span-5">
+                                <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wider">Question Label</label>
+                                <input 
+                                  type="text" 
+                                  value={q.label}
+                                  onChange={(e) => updateQuestion(idx, 'label', e.target.value)}
+                                  placeholder="e.g. Full Name"
+                                  className="w-full border rounded-lg p-2.5 focus:ring-2 focus:ring-teal-500 outline-none"
+                                  autoFocus
+                                />
+                              </div>
+                              <div className="col-span-4">
+                                <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wider">Type</label>
+                                <select 
+                                  value={q.type}
+                                  onChange={(e) => updateQuestion(idx, 'type', e.target.value)}
+                                  className="w-full border rounded-lg p-2.5 focus:ring-2 focus:ring-teal-500 outline-none bg-white"
+                                >
+                                  <option value="text">Short Text</option>
+                                  <option value="textarea">Long Text (Paragraph)</option>
+                                  <option value="email">Email</option>
+                                  <option value="tel">Phone/WhatsApp</option>
+                                  <option value="dropdown">Dropdown Options</option>
+                                  <option value="checkbox">Checkbox</option>
+                                </select>
+                              </div>
+                              <div className="col-span-3 flex items-center justify-between pt-6">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                  <input 
+                                    type="checkbox" 
+                                    checked={q.required}
+                                    onChange={(e) => updateQuestion(idx, 'required', e.target.checked)}
+                                    className="w-4 h-4 text-teal-600 rounded focus:ring-teal-500"
+                                  />
+                                  <span className="text-sm font-medium text-gray-700">Required</span>
+                                </label>
+                              </div>
+                              
+                              {q.type === 'dropdown' && (
+                                <div className="col-span-12 mt-2">
+                                  <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wider">Dropdown Options (Comma Separated)</label>
+                                  <input 
+                                    type="text" 
+                                    value={q.options || ''}
+                                    onChange={(e) => updateQuestion(idx, 'options', e.target.value)}
+                                    placeholder="e.g. Option 1, Option 2, Option 3"
+                                    className="w-full border rounded-lg p-2.5 focus:ring-2 focus:ring-teal-500 outline-none"
+                                  />
+                                </div>
+                              )}
+                              
+                              <div className="col-span-12 flex justify-end mt-4">
+                                <button
+                                  onClick={() => setEditingQuestionId(null)}
+                                  className="px-6 py-2 bg-teal-600 text-white rounded-lg text-sm font-medium hover:bg-teal-700 transition-colors"
+                                >
+                                  Done
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between p-4">
+                            <div className="flex items-center gap-4">
+                              <GripVertical size={20} className="text-gray-300 cursor-grab" />
+                              <div className="flex flex-col">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-gray-800">{q.label || 'Untitled Question'}</span>
+                                  {q.required && <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-[10px] font-bold rounded-full uppercase tracking-wide">Required</span>}
+                                </div>
+                                <span className="text-xs text-gray-400 mt-0.5 capitalize">{q.type === 'tel' ? 'Phone/WhatsApp' : q.type}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-6 pr-2">
+                              <button 
+                                onClick={() => setEditingQuestionId(q.id)} 
+                                className="flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-gray-800 transition-colors"
+                              >
+                                <Edit size={16} /> Edit
+                              </button>
+                              <button 
+                                onClick={() => removeQuestion(idx)} 
+                                className="flex items-center gap-1.5 text-sm font-medium text-red-400 hover:text-red-600 transition-colors"
+                              >
+                                <Trash2 size={16} /> Delete
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
-
-                      <button 
-                        onClick={() => removeQuestion(idx)}
-                        className="pt-2 text-red-400 hover:text-red-600 p-2 rounded-lg hover:bg-red-50 transition-colors"
-                      >
-                        <Trash2 size={20} />
-                      </button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 
                 <button 
                   onClick={addQuestion}
-                  className="mt-4 flex items-center gap-2 text-teal-600 font-medium hover:text-teal-800 hover:bg-teal-50 px-4 py-2 rounded-lg transition-colors border border-dashed border-teal-200"
+                  className="mt-6 flex items-center justify-center gap-2 w-full text-teal-600 font-medium hover:text-teal-800 hover:bg-teal-50 p-4 rounded-xl transition-colors border-2 border-dashed border-teal-200"
                 >
                   <Plus size={18} />
-                  Add New Question
+                  Add Question
                 </button>
               </div>
             </div>
