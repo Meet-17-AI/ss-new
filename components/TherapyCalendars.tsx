@@ -186,7 +186,9 @@ export function TherapyCalendars() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredCalendars.length > 0 ? (
                   filteredCalendars.map((item, index) => {
-                    const fullLink = `${window.location.origin}/book/${item.slug}`;
+                    // Slug in DB might already have a leading slash, e.g. "/session-with-ishika"
+                    const cleanSlug = item.slug ? item.slug.replace(/^\/+/, '') : '';
+                    const fullLink = `${window.location.origin}/book/${cleanSlug}`;
                     return (
                       <tr 
                         key={`${item.id}-${index}`} 
