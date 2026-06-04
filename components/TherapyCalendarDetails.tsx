@@ -284,17 +284,17 @@ export function TherapyCalendarDetails() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Therapy Name *</label>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Therapy Type *</label>
                   <select
                     value={formData.title}
                     onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                     className="w-full border rounded-lg p-3 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-teal-500 outline-none transition-all"
                     disabled={!formData.therapist_id}
                   >
-                    <option value="">Select Therapy Specialization</option>
-                    {dynamicTherapyOptions.map((opt, i) => (
-                      <option key={i} value={opt.trim()}>{opt.trim()}</option>
-                    ))}
+                    <option value="">Select Therapy Type</option>
+                    <option value="Individual Therapy">Individual Therapy</option>
+                    <option value="Adolescent Therapy">Adolescent Therapy</option>
+                    <option value="Couple Therapy">Couple Therapy</option>
                     <option value="Free Consultation">Free Consultation</option>
                     <option value="Other">Other (Custom)</option>
                   </select>
