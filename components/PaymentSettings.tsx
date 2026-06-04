@@ -129,6 +129,7 @@ export const PaymentSettings: React.FC = () => {
                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-600 border border-red-200">
                     Disconnected
                   </span>
+                )}
               </div>
               <p className="text-sm text-gray-500 mt-1">
                 Click to configure keys and settings.
