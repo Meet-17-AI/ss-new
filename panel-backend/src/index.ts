@@ -7325,9 +7325,10 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 app.get('/api/therapy-services', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT ts.*, (t.google_refresh_token IS NOT NULL) as google_calendar_connected
+      SELECT ts.*, (t.google_refresh_token IS NOT NULL) as google_calendar_connected, s.availability
       FROM therapy_services ts
       LEFT JOIN therapists t ON ts.therapist_id = t.therapist_id
+      LEFT JOIN therapist_schedules s ON ts.schedule_id = s.schedule_id
       ORDER BY ts.therapist_name, ts.title
     `);
     res.json(result.rows);
@@ -7337,16 +7338,43 @@ app.get('/api/therapy-services', async (req, res) => {
   }
 });
 
+app.get('/api/therapist-schedules/:therapist_id', async (req, res) => {
+  try {
+    const { therapist_id } = req.params;
+    const result = await pool.query(`
+      SELECT schedule_id, name, availability 
+      FROM therapist_schedules 
+      WHERE therapist_id = $1 
+      ORDER BY created_at DESC
+    `, [therapist_id]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching therapist schedules:', error);
+    res.status(500).json({ error: 'Failed to fetch schedules' });
+  }
+});
+
 app.post('/api/therapy-services', async (req, res) => {
   try {
-    const { title, duration, type, description, charges, therapist_id, therapist_name, payment_gateway } = req.body;
+    const { 
+      title, duration, type, description, charges, therapist_id, therapist_name, 
+      payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled
+    } = req.body;
+    
     const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + therapist_name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Math.random().toString(36).substring(2, 7);
     
     const result = await pool.query(`
-      INSERT INTO therapy_services (title, duration, type, description, charges, slug, therapist_id, therapist_name, payment_gateway)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO therapy_services (
+        title, duration, type, description, charges, slug, therapist_id, therapist_name, 
+        payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
       RETURNING *
-    `, [title, duration || '50 Mins', type, description, charges, slug, therapist_id, therapist_name, payment_gateway || 'Razorpay']);
+    `, [
+      title, duration || '50 Mins', type, description, charges, slug, therapist_id, therapist_name, 
+      payment_gateway || 'Razorpay', schedule_id || null, JSON.stringify(form_questions || []), 
+      requires_tnc ?? true, is_payment_enabled ?? true
+    ]);
     
     res.json(result.rows[0]);
   } catch (error) {
@@ -7358,7 +7386,10 @@ app.post('/api/therapy-services', async (req, res) => {
 app.put('/api/therapy-services/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, type, description, charges, therapist_id, therapist_name, payment_gateway } = req.body;
+    const { 
+      title, type, description, charges, therapist_id, therapist_name, 
+      payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled
+    } = req.body;
     
     const result = await pool.query(`
       UPDATE therapy_services 
@@ -7368,10 +7399,18 @@ app.put('/api/therapy-services/:id', async (req, res) => {
           charges = COALESCE($4, charges),
           therapist_id = COALESCE($5, therapist_id),
           therapist_name = COALESCE($6, therapist_name),
-          payment_gateway = COALESCE($7, payment_gateway)
-      WHERE id = $8
+          payment_gateway = COALESCE($7, payment_gateway),
+          schedule_id = COALESCE($8, schedule_id),
+          form_questions = COALESCE($9::jsonb, form_questions),
+          requires_tnc = COALESCE($10, requires_tnc),
+          is_payment_enabled = COALESCE($11, is_payment_enabled)
+      WHERE id = $12
       RETURNING *
-    `, [title, type, description, charges, therapist_id, therapist_name, payment_gateway, id]);
+    `, [
+      title, type, description, charges, therapist_id, therapist_name, 
+      payment_gateway, schedule_id, form_questions ? JSON.stringify(form_questions) : null, 
+      requires_tnc, is_payment_enabled, id
+    ]);
     
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Therapy service not found' });

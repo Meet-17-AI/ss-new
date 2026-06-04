@@ -20,6 +20,7 @@ import { CountUpNumber } from './CountUpNumber';
 import { ReportIssuePage } from './ReportIssuePage';
 import SettingsPage from './SettingsPage';
 import { TherapyCalendars } from './TherapyCalendars';
+import { TherapyCalendarDetails } from './TherapyCalendarDetails';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { NotificationBell } from './NotificationBell';
 
@@ -566,6 +567,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           } />
           <Route path="refunds" element={<RefundsCancellations initialTab={refundTab} />} />
           <Route path="therapy-calendars" element={<TherapyCalendars />} />
+          <Route path="therapy-calendars/new" element={<TherapyCalendarDetails />} />
+          <Route path="therapy-calendars/:id" element={<TherapyCalendarDetails />} />
           <Route path="notifications" element={<Notifications userRole="admin" userId={user?.id} />} />
           
           <Route path="dashboard" element={
