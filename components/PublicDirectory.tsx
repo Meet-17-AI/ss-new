@@ -12,7 +12,7 @@ export const PublicDirectory: React.FC = () => {
   useEffect(() => {
     const fetchCalendars = async () => {
       try {
-        const response = await fetch('/api/therapy-services'); // We can use the existing therapy-services endpoint, which returns all calendars. Note: it's not strictly 'public' if it doesn't filter, but this is acceptable for now. Let's see if we have a public endpoint.
+        const response = await fetch('/api/services'); // We can use the existing therapy-services endpoint, which returns all calendars. Note: it's not strictly 'public' if it doesn't filter, but this is acceptable for now. Let's see if we have a public endpoint.
         if (response.ok) {
           const data = await response.json();
           // Filter to only active ones

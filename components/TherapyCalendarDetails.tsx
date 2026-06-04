@@ -98,7 +98,7 @@ export function TherapyCalendarDetails() {
 
       if (isEdit) {
         setLoading(true);
-        const calRes = await fetch('/api/therapy-services');
+        const calRes = await fetch('/api/services');
         if (calRes.ok) {
           const allCals: TherapyService[] = await calRes.json();
           const target = allCals.find(c => c.id === Number(id));
@@ -167,7 +167,7 @@ export function TherapyCalendarDetails() {
 
     try {
       setSaving(true);
-      const url = isEdit ? `/api/therapy-services/${id}` : '/api/therapy-services';
+      const url = isEdit ? `/api/services/${id}` : '/api/services';
       const method = isEdit ? 'PUT' : 'POST';
 
       const res = await fetch(url, {
