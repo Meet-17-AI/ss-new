@@ -25,8 +25,8 @@ import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from './lib/timezone';
 import { startDashboardApiBookingSync } from './dashboardApiBookingSync';
 import { uploadFile } from './lib/minio';
-import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendSOSAdminEmail } from './lib/email';
-import { sendSOSAdminWhatsapp } from './automations/index';
+import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail } from './lib/email';
+import { sendSOSAdminWhatsapp, sendSOSAdminEmail } from './automations/index';
 
 // Configure multer for memory storage
 const upload = multer({
