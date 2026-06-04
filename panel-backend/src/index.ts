@@ -5939,7 +5939,8 @@ app.post('/api/create-booking', async (req, res) => {
     }
 
     try {
-      await fetch('http://localhost:3002/api/webhooks/new-booking', {
+      const port = process.env.PORT || 3002;
+      await fetch(`http://localhost:${port}/api/webhooks/new-booking`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ booking_id })

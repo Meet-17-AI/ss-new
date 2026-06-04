@@ -27,7 +27,8 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return;
     }
 
-    const socketUrl = import.meta.env.VITE_API_URL || 'http://localhost:3002';
+    const defaultUrl = import.meta.env.PROD ? 'https://safestories-panel.onrender.com' : 'http://localhost:3002';
+    const socketUrl = import.meta.env.VITE_API_URL || defaultUrl;
     
     const socketInstance = io(socketUrl, {
       transports: ['websocket'],
