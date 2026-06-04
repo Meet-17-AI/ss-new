@@ -3,8 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader, Save, Plus, Trash2, GripVertical, Edit } from 'lucide-react';
 import { Toast } from './Toast';
 // @ts-ignore
-import ReactQuill from 'react-quill';
-import 'react-quill/dist/quill.snow.css';
+import ReactQuill from 'react-quill-new';
+import 'react-quill-new/dist/quill.snow.css';
 
 interface Therapist {
   therapist_id: string;
