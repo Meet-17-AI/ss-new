@@ -169,17 +169,10 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
       .then(data => {
         if (data.success) {
           setPaymentConfig(data);
-          if (data.activeGateway === 'razorpay') {
-            const script = document.createElement('script');
-            script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-            script.async = true;
-            document.head.appendChild(script);
-          } else if (data.activeGateway === 'cashfree') {
-            const script = document.createElement('script');
-            script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
-            script.async = true;
-            document.head.appendChild(script);
-          }
+          const script = document.createElement('script');
+          script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+          script.async = true;
+          document.head.appendChild(script);
         }
       })
       .catch(err => console.error('Error fetching payment config:', err));
@@ -349,54 +342,6 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
     }
 
     try {
-      if (paymentConfig.activeGateway === 'cashfree') {
-        // --- CASHFREE FLOW ---
-        const orderResponse = await fetch('/api/cashfree/create-order', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            amount: amountVal,
-            customerName: payload.clientName,
-            customerPhone: payload.clientWhatsApp,
-            customerEmail: payload.clientEmail
-          }),
-        });
-        
-        if (!orderResponse.ok) {
-          const errorMsg = await orderResponse.json();
-          throw new Error(errorMsg.error || 'Failed to initialize Cashfree payment order');
-        }
-
-        const orderData = await orderResponse.json();
-        
-        const cashfree = await (window as any).Cashfree({ mode: paymentConfig.environment });
-        
-        const checkoutOptions = {
-          paymentSessionId: orderData.payment_session_id,
-          redirectTarget: "_modal"
-        };
-        
-        cashfree.checkout(checkoutOptions).then(async (result: any) => {
-          if (result.error) {
-            console.error('❌ Cashfree payment error:', result.error);
-            alert(result.error.message || 'Payment failed or cancelled.');
-            setIsSubmitting(false);
-          }
-          if (result.redirect) {
-            console.log("Cashfree Payment completed/redirected");
-          }
-          if (result.paymentDetails) {
-            console.log('💳 Cashfree Payment Details:', result.paymentDetails);
-            const paymentDetails = {
-              payment_id: result.paymentDetails.paymentId || orderData.order_id,
-              payment_gateway: 'Cashfree',
-              payment_name: `${payload.clientName} - ${payload.therapyName}`
-            };
-            await submitBooking(paymentDetails);
-          }
-        });
-
-      } else {
         // --- RAZORPAY FLOW ---
         const orderResponse = await fetch('/api/razorpay/create-order', {
           method: 'POST',
@@ -447,9 +392,8 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
           }
         };
 
-        const rzp = new (window as any).Razorpay(options);
-        rzp.open();
-      }
+        const razorpay = new (window as any).Razorpay(options);
+        razorpay.open();
     } catch (err: any) {
       console.error('❌ Payment checkout error:', err);
       alert(err.message || 'Payment initiation failed. Please try again.');

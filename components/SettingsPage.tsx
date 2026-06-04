@@ -309,7 +309,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, user }) => {
               </div>
               <div>
                 <h3 className="text-lg font-semibold text-gray-800">Payment Gateways</h3>
-                <p className="text-sm text-gray-500 mt-2">Configure Razorpay or Cashfree and set active payment methods</p>
+                <p className="text-sm text-gray-500 mt-2">Configure Razorpay and set active payment methods</p>
               </div>
             </div>
 

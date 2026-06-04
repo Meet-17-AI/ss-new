@@ -18,6 +18,8 @@ global.fetch = (async (url: any, options: any) => {
 
 
 import multer from 'multer';
+import crypto from 'crypto';
+import Razorpay from 'razorpay';
 import { randomUUID } from 'crypto';
 import pool from './lib/db';
 import { startSessionRemindersCron } from './automations/cron';
@@ -5710,19 +5712,59 @@ app.post('/api/payment-settings', authenticateToken, async (req, res) => {
     const check = await pool.query('SELECT COUNT(*) FROM payment_settings');
     if (parseInt(check.rows[0].count) === 0) {
       await pool.query(
-        'INSERT INTO payment_settings (active_gateway, razorpay_key_id, razorpay_key_secret, cashfree_app_id, cashfree_secret_key, cashfree_environment) VALUES ($1, $2, $3, $4, $5, $6)',
-        [settings.active_gateway, settings.razorpay_key_id, settings.razorpay_key_secret, settings.cashfree_app_id, settings.cashfree_secret_key, settings.cashfree_environment]
+        'INSERT INTO payment_settings (active_gateway, razorpay_key_id, razorpay_key_secret) VALUES ($1, $2, $3)',
+        ['razorpay', settings.razorpay_key_id, settings.razorpay_key_secret]
       );
     } else {
       await pool.query(
-        'UPDATE payment_settings SET active_gateway = $1, razorpay_key_id = $2, razorpay_key_secret = $3, cashfree_app_id = $4, cashfree_secret_key = $5, cashfree_environment = $6',
-        [settings.active_gateway, settings.razorpay_key_id, settings.razorpay_key_secret, settings.cashfree_app_id, settings.cashfree_secret_key, settings.cashfree_environment]
+        'UPDATE payment_settings SET active_gateway = $1, razorpay_key_id = $2, razorpay_key_secret = $3',
+        ['razorpay', settings.razorpay_key_id, settings.razorpay_key_secret]
       );
     }
     res.json({ message: 'Settings saved successfully' });
   } catch (error) {
     console.error('Error saving payment settings:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+// POST /api/razorpay/create-order
+app.post('/api/razorpay/create-order', async (req, res) => {
+  try {
+    const { amount } = req.body;
+    if (!amount || isNaN(amount)) {
+      return res.status(400).json({ error: 'Valid amount is required' });
+    }
+
+    const { rows } = await pool.query('SELECT razorpay_key_id, razorpay_key_secret FROM payment_settings ORDER BY id ASC LIMIT 1');
+    if (rows.length === 0 || !rows[0].razorpay_key_id || !rows[0].razorpay_key_secret) {
+      return res.status(500).json({ error: 'Razorpay API keys are not configured in Admin Settings.' });
+    }
+
+    const { razorpay_key_id, razorpay_key_secret } = rows[0];
+
+    const razorpay = new Razorpay({
+      key_id: razorpay_key_id,
+      key_secret: razorpay_key_secret,
+    });
+
+    const options = {
+      amount: Math.round(amount * 100),
+      currency: 'INR',
+      receipt: 'receipt_' + Date.now()
+    };
+
+    const order = await razorpay.orders.create(options);
+
+    if (!order) {
+      return res.status(500).json({ error: 'Failed to create order with Razorpay' });
+    }
+
+    res.json({ order_id: order.id, amount: order.amount, currency: order.currency });
+  } catch (error: any) {
+    console.error('Error creating Razorpay order:', error);
+    res.status(500).json({ error: error.message || 'Error communicating with Razorpay' });
   }
 });
 

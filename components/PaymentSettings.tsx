@@ -5,25 +5,19 @@ interface PaymentConfig {
   active_gateway: string;
   razorpay_key_id: string;
   razorpay_key_secret: string;
-  cashfree_app_id: string;
-  cashfree_secret_key: string;
-  cashfree_environment: string;
 }
 
 export const PaymentSettings: React.FC = () => {
   const [settings, setSettings] = useState<PaymentConfig>({
     active_gateway: 'razorpay',
     razorpay_key_id: '',
-    razorpay_key_secret: '',
-    cashfree_app_id: '',
-    cashfree_secret_key: '',
-    cashfree_environment: 'sandbox'
+    razorpay_key_secret: ''
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
   
-  const [editingGateway, setEditingGateway] = useState<'razorpay' | 'cashfree' | null>(null);
+  const [editingGateway, setEditingGateway] = useState<'razorpay' | null>(null);
 
   useEffect(() => {
     fetchSettings();
@@ -50,6 +44,8 @@ export const PaymentSettings: React.FC = () => {
     try {
       setSaving(true);
       setMessage(null);
+      // Ensure active_gateway is always razorpay
+      updatedSettings.active_gateway = 'razorpay';
       const res = await fetch('/api/payment-settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -75,11 +71,6 @@ export const PaymentSettings: React.FC = () => {
     setSettings(prev => ({ ...prev, [key]: value }));
   };
 
-  const toggleActiveGateway = async (gateway: 'razorpay' | 'cashfree') => {
-    const updatedSettings = { ...settings, active_gateway: gateway };
-    await handleSave(updatedSettings);
-  };
-
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
@@ -90,26 +81,6 @@ export const PaymentSettings: React.FC = () => {
   }
 
   const isRazorpayConnected = !!(settings.razorpay_key_id && settings.razorpay_key_secret);
-  const isCashfreeConnected = !!(settings.cashfree_app_id && settings.cashfree_secret_key);
-
-  const gateways = [
-    {
-      id: 'razorpay' as const,
-      name: 'Razorpay',
-      initial: 'R',
-      color: '#02042b',
-      connected: isRazorpayConnected,
-      active: settings.active_gateway === 'razorpay'
-    },
-    {
-      id: 'cashfree' as const,
-      name: 'Cashfree',
-      initial: 'C',
-      color: '#f58634',
-      connected: isCashfreeConnected,
-      active: settings.active_gateway === 'cashfree'
-    }
-  ];
 
   return (
     <div className="p-6 flex flex-col h-full bg-white overflow-y-auto">
@@ -119,7 +90,7 @@ export const PaymentSettings: React.FC = () => {
             <CreditCard className="text-teal-600" /> Payment Gateways
           </h2>
           <p className="text-sm text-gray-500 mt-1">
-            Configure your payment providers and select the active gateway for public bookings.
+            Configure your Razorpay account to accept payments for public bookings.
           </p>
         </div>
       </div>
@@ -133,85 +104,60 @@ export const PaymentSettings: React.FC = () => {
 
       {/* List View */}
       <div className="flex-1 space-y-4">
-        {gateways.map((gateway) => (
-          <div
-            key={gateway.id}
-            className={`flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border transition-all cursor-pointer ${
-              gateway.active 
-                ? 'bg-teal-50/30 border-teal-200 shadow-sm' 
-                : 'bg-white border-gray-200 hover:border-gray-300'
-            }`}
-            onClick={() => setEditingGateway(gateway.id)}
-          >
-            <div className="flex items-center gap-4">
-              <div 
-                className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-sm"
-                style={{ backgroundColor: gateway.color }}
-              >
-                {gateway.initial}
-              </div>
-
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold text-gray-800 text-lg">{gateway.name}</span>
-                  
-                  {gateway.connected ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200">
-                      <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-                      Connected
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-600 border border-red-200">
-                      Disconnected
-                    </span>
-                  )}
-
-                  {gateway.active ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-800 border border-teal-200">
-                      <Check size={12} /> Active Gateway
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 border border-gray-200">
-                      Inactive
-                    </span>
-                  )}
-                </div>
-                <p className="text-sm text-gray-500 mt-1">
-                  Click to configure keys and settings.
-                </p>
-              </div>
+        <div
+          className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border transition-all cursor-pointer bg-teal-50/30 border-teal-200 shadow-sm"
+          onClick={() => setEditingGateway('razorpay')}
+        >
+          <div className="flex items-center gap-4">
+            <div 
+              className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-sm"
+              style={{ backgroundColor: '#02042b' }}
+            >
+              R
             </div>
 
-            <div className="mt-4 sm:mt-0 flex items-center gap-3">
-              {!gateway.active && gateway.connected && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleActiveGateway(gateway.id);
-                  }}
-                  disabled={saving}
-                  className="px-4 py-2 border border-teal-600 text-teal-600 hover:bg-teal-50 disabled:opacity-50 font-medium text-sm rounded-lg transition-colors flex items-center gap-2"
-                >
-                  Set as Active
-                </button>
-              )}
-              <button
-                className="px-4 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 font-medium text-sm rounded-lg transition-all flex items-center gap-2"
-              >
-                <Edit size={16} /> Configure
-              </button>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-gray-800 text-lg">Razorpay</span>
+                
+                {isRazorpayConnected ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                    Connected
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-600 border border-red-200">
+                    Disconnected
+                  </span>
+                )}
+
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-800 border border-teal-200">
+                  <Check size={12} /> Active Gateway
+                </span>
+              </div>
+              <p className="text-sm text-gray-500 mt-1">
+                Click to configure keys and settings.
+              </p>
             </div>
           </div>
-        ))}
+
+          <div className="mt-4 sm:mt-0 flex items-center gap-3">
+            <button
+              className="px-4 py-2 bg-gray-100 text-gray-700 hover:bg-gray-200 font-medium text-sm rounded-lg transition-all flex items-center gap-2"
+            >
+              <Edit size={16} /> Configure
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Edit Modal */}
-      {editingGateway && (
+      {editingGateway === 'razorpay' && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl overflow-hidden flex flex-col max-h-[90vh]">
             <div className="p-6 border-b border-gray-100 flex items-center justify-between">
               <h2 className="text-2xl font-bold text-gray-800 capitalize">
-                Configure {editingGateway}
+                Configure Razorpay
               </h2>
               <button 
                 onClick={() => setEditingGateway(null)}
@@ -222,64 +168,26 @@ export const PaymentSettings: React.FC = () => {
             </div>
 
             <div className="p-6 overflow-y-auto space-y-5">
-              {editingGateway === 'razorpay' ? (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Key ID</label>
-                    <input
-                      type="text"
-                      value={settings.razorpay_key_id}
-                      onChange={(e) => handleChange('razorpay_key_id', e.target.value)}
-                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent outline-none"
-                      placeholder="rzp_test_..."
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Key Secret</label>
-                    <input
-                      type="password"
-                      value={settings.razorpay_key_secret}
-                      onChange={(e) => handleChange('razorpay_key_secret', e.target.value)}
-                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent outline-none"
-                      placeholder="••••••••••••••••"
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Environment</label>
-                    <select 
-                      value={settings.cashfree_environment}
-                      onChange={(e) => handleChange('cashfree_environment', e.target.value)}
-                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none"
-                    >
-                      <option value="sandbox">Sandbox (Testing)</option>
-                      <option value="production">Production (Live)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">App ID</label>
-                    <input
-                      type="text"
-                      value={settings.cashfree_app_id}
-                      onChange={(e) => handleChange('cashfree_app_id', e.target.value)}
-                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none"
-                      placeholder="App ID..."
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Secret Key</label>
-                    <input
-                      type="password"
-                      value={settings.cashfree_secret_key}
-                      onChange={(e) => handleChange('cashfree_secret_key', e.target.value)}
-                      className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 outline-none"
-                      placeholder="••••••••••••••••"
-                    />
-                  </div>
-                </>
-              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Key ID</label>
+                <input
+                  type="text"
+                  value={settings.razorpay_key_id}
+                  onChange={(e) => handleChange('razorpay_key_id', e.target.value)}
+                  className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent outline-none"
+                  placeholder="rzp_test_..."
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Key Secret</label>
+                <input
+                  type="password"
+                  value={settings.razorpay_key_secret}
+                  onChange={(e) => handleChange('razorpay_key_secret', e.target.value)}
+                  className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-transparent outline-none"
+                  placeholder="••••••••••••••••"
+                />
+              </div>
             </div>
 
             <div className="p-6 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
