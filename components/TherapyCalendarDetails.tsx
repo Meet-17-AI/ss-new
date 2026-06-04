@@ -221,7 +221,7 @@ export function TherapyCalendarDetails() {
   }
 
   return (
-    <div className="flex-1 p-6 animate-fade-in bg-gray-50 overflow-y-auto">
+    <div className="p-6 animate-fade-in bg-gray-50 min-h-full pb-20">
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       
       <div className="flex items-center gap-4 mb-6">
