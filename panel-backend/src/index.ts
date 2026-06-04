@@ -7325,7 +7325,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 app.get('/api/therapy-services', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT ts.*, t.google_calendar_connected
+      SELECT ts.*, (t.google_refresh_token IS NOT NULL) as google_calendar_connected
       FROM therapy_services ts
       LEFT JOIN therapists t ON ts.therapist_id = t.therapist_id
       ORDER BY ts.therapist_name, ts.title
