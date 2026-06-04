@@ -2884,6 +2884,42 @@ app.get('/api/public/booking/:booking_id', async (req, res) => {
   }
 });
 
+// Public endpoint: fetch a therapy service by slug (used by public booking links)
+app.get('/api/public/services/:slug', async (req, res) => {
+  try {
+    let { slug } = req.params;
+    // Ensure slug starts with /
+    if (!slug.startsWith('/')) {
+      slug = '/' + slug;
+    }
+    const result = await pool.query(
+      'SELECT * FROM therapy_services WHERE slug = $1 AND is_active = true',
+      [slug]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+    const service = result.rows[0];
+    res.json({
+      title: service.title,
+      duration: service.duration,
+      type: service.type,
+      description: service.description,
+      detailedDescription: service.detailed_description,
+      editViewDescription: service.edit_view_description,
+      charges: service.charges,
+      slug: service.slug,
+      label: service.label,
+      owner: service.therapist_name,
+      therapist_id: service.therapist_id,
+      schedule_id: service.schedule_id
+    });
+  } catch (error: any) {
+    console.error('Error fetching public service:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 
 app.get('/api/appointments', async (req, res) => {
