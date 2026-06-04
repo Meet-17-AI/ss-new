@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader, Save, Plus, Trash2, GripVertical, Edit } from 'lucide-react';
 import { Toast } from './Toast';
+// @ts-ignore
+import ReactQuill from 'react-quill';
+import 'react-quill/dist/quill.snow.css';
 
 interface Therapist {
   therapist_id: string;
@@ -345,15 +348,17 @@ export function TherapyCalendarDetails() {
                 )}
               </div>
 
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Description</label>
-                <textarea
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  className="w-full border rounded-lg p-3 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-teal-500 outline-none transition-all min-h-[120px]"
-                  placeholder="Enter detailed description of the therapy session..."
-                />
-              </div>
+                <div className="mb-12">
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Description</label>
+                  <ReactQuill 
+                    theme="snow"
+                    value={formData.description}
+                    onChange={(val: string) => setFormData({ ...formData, description: val })}
+                    className="bg-white rounded-lg"
+                    style={{ height: '200px' }}
+                    placeholder="Enter detailed description of the therapy session..."
+                  />
+                </div>
 
               <div className="grid grid-cols-2 gap-6">
                 <div>
