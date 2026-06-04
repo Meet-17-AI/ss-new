@@ -5689,6 +5689,43 @@ app.get('/api/public/services/:slug', async (req, res) => {
 });
 
 // GET payment settings
+// GET /api/payment-settings (Admin)
+app.get('/api/payment-settings', authenticateToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM payment_settings ORDER BY id ASC LIMIT 1');
+    if (rows.length === 0) {
+      return res.json({ settings: {} });
+    }
+    res.json({ settings: rows[0] });
+  } catch (error) {
+    console.error('Error fetching payment settings:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/payment-settings (Admin)
+app.post('/api/payment-settings', authenticateToken, async (req, res) => {
+  try {
+    const { settings } = req.body;
+    const check = await pool.query('SELECT COUNT(*) FROM payment_settings');
+    if (parseInt(check.rows[0].count) === 0) {
+      await pool.query(
+        'INSERT INTO payment_settings (active_gateway, razorpay_key_id, razorpay_key_secret, cashfree_app_id, cashfree_secret_key, cashfree_environment) VALUES ($1, $2, $3, $4, $5, $6)',
+        [settings.active_gateway, settings.razorpay_key_id, settings.razorpay_key_secret, settings.cashfree_app_id, settings.cashfree_secret_key, settings.cashfree_environment]
+      );
+    } else {
+      await pool.query(
+        'UPDATE payment_settings SET active_gateway = $1, razorpay_key_id = $2, razorpay_key_secret = $3, cashfree_app_id = $4, cashfree_secret_key = $5, cashfree_environment = $6',
+        [settings.active_gateway, settings.razorpay_key_id, settings.razorpay_key_secret, settings.cashfree_app_id, settings.cashfree_secret_key, settings.cashfree_environment]
+      );
+    }
+    res.json({ message: 'Settings saved successfully' });
+  } catch (error) {
+    console.error('Error saving payment settings:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.get('/api/payment-settings/public', async (req, res) => {
   try {
     // Payments are temporarily disabled as per user request
@@ -7472,7 +7509,7 @@ app.get('/api/therapist-schedules/:therapist_id', async (req, res) => {
 app.post('/api/therapy-services', async (req, res) => {
   try {
     const { 
-      title, duration, type, description, charges, therapist_id, therapist_name, 
+      title, duration, type, therapy_type, description, charges, therapist_id, therapist_name, 
       payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled
     } = req.body;
     
@@ -7480,13 +7517,13 @@ app.post('/api/therapy-services', async (req, res) => {
     
     const result = await pool.query(`
       INSERT INTO therapy_services (
-        title, duration, type, description, charges, slug, therapist_id, therapist_name, 
+        title, duration, type, therapy_type, description, charges, slug, therapist_id, therapist_name, 
         payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
       RETURNING *
     `, [
-      title, duration || '50 Mins', type, description, charges, slug, therapist_id, therapist_name, 
+      title, duration || '50 Mins', type, therapy_type, description, charges, slug, therapist_id, therapist_name, 
       payment_gateway || 'Razorpay', schedule_id || null, JSON.stringify(form_questions || []), 
       requires_tnc ?? true, is_payment_enabled ?? true
     ]);
@@ -7502,7 +7539,7 @@ app.put('/api/therapy-services/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { 
-      title, type, description, charges, therapist_id, therapist_name, 
+      title, type, therapy_type, description, charges, therapist_id, therapist_name, 
       payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled
     } = req.body;
     
@@ -7510,19 +7547,20 @@ app.put('/api/therapy-services/:id', async (req, res) => {
       UPDATE therapy_services 
       SET title = COALESCE($1, title),
           type = COALESCE($2, type),
-          description = COALESCE($3, description),
-          charges = COALESCE($4, charges),
-          therapist_id = COALESCE($5, therapist_id),
-          therapist_name = COALESCE($6, therapist_name),
-          payment_gateway = COALESCE($7, payment_gateway),
-          schedule_id = COALESCE($8, schedule_id),
-          form_questions = COALESCE($9::jsonb, form_questions),
-          requires_tnc = COALESCE($10, requires_tnc),
-          is_payment_enabled = COALESCE($11, is_payment_enabled)
-      WHERE id = $12
+          therapy_type = COALESCE($3, therapy_type),
+          description = COALESCE($4, description),
+          charges = COALESCE($5, charges),
+          therapist_id = COALESCE($6, therapist_id),
+          therapist_name = COALESCE($7, therapist_name),
+          payment_gateway = COALESCE($8, payment_gateway),
+          schedule_id = COALESCE($9, schedule_id),
+          form_questions = COALESCE($10::jsonb, form_questions),
+          requires_tnc = COALESCE($11, requires_tnc),
+          is_payment_enabled = COALESCE($12, is_payment_enabled)
+      WHERE id = $13
       RETURNING *
     `, [
-      title, type, description, charges, therapist_id, therapist_name, 
+      title, type, therapy_type, description, charges, therapist_id, therapist_name, 
       payment_gateway, schedule_id, form_questions ? JSON.stringify(form_questions) : null, 
       requires_tnc, is_payment_enabled, id
     ]);

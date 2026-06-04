@@ -271,9 +271,8 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
 
     setIsSubmitting(true);
     const amountVal = parseFloat(sessionCharges.replace('₹', '').replace(',', '')) || 0;
-    // Temporarily disabled payments globally as per user request
-    // const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free') || amountVal === 0;
-    const isFree = true;
+    // Check if the session is free based on charges or actual amount
+    const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free') || amountVal === 0;
 
     const payload: any = {
       therapyName: getSimplifiedTherapyName(),

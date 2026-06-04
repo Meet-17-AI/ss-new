@@ -31,6 +31,7 @@ interface TherapyService {
   title: string;
   duration: string;
   type: string;
+  therapy_type?: string;
   description: string;
   charges: string;
   slug?: string;
@@ -72,6 +73,7 @@ export function TherapyCalendarDetails() {
     title: '',
     duration: '50 Mins',
     type: 'Online',
+    therapy_type: '',
     description: '',
     charges: '',
     therapist_id: '',
@@ -290,10 +292,22 @@ export function TherapyCalendarDetails() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Therapy Type *</label>
-                  <select
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Therapy Name *</label>
+                  <input
+                    type="text"
                     value={formData.title}
                     onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                    placeholder="e.g. Individual Counseling"
+                    className="w-full border rounded-lg p-3 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-teal-500 outline-none transition-all"
+                    disabled={!formData.therapist_id}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Therapy Type *</label>
+                  <select
+                    value={formData.therapy_type || ''}
+                    onChange={(e) => setFormData({ ...formData, therapy_type: e.target.value })}
                     className="w-full border rounded-lg p-3 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-teal-500 outline-none transition-all"
                     disabled={!formData.therapist_id}
                   >

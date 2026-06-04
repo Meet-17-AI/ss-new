@@ -12,6 +12,7 @@ import { SOSDocumentationView } from './components/SOSDocumentationView';
 import { PublicBookingContainer } from './components/PublicBookingContainer';
 import { BookingConfirmation } from './components/BookingConfirmation';
 import { SessionNotesPage } from './components/SessionNotesPage';
+import { PublicDirectory } from './components/PublicDirectory';
 import CRMApp from './src/crm/App';
 import { Monitor } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
@@ -159,6 +160,9 @@ const SOSRouterWrapper = () => {
 const BookRouterWrapper = () => {
   const params = useParams();
   const slug = params['*'] || '';
+  if (!slug) {
+    return <PublicDirectory />;
+  }
   return <PublicBookingContainer slug={slug} />;
 };
 
