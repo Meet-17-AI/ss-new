@@ -5028,41 +5028,48 @@ app.post('/api/fetch-slots', async (req, res) => {
           const therapistName = payload.therapistName;
           
           if (therapistName) {
-            const therapistResult = await pool.query(
-              'SELECT t.therapist_id, tr.schedule_id FROM therapists t LEFT JOIN therapist_resources tr ON t.therapist_id = tr.therapist_id WHERE t.name ILIKE $1 ORDER BY tr.schedule_id DESC NULLS LAST LIMIT 1',
-              [`%${therapistName.split(' ')[0]}%`]
-            );
-            
-            if (therapistResult.rows.length > 0 && therapistResult.rows[0].schedule_id) {
-              const scheduleId = therapistResult.rows[0].schedule_id;
+            if (therapistName === 'SafeStories') {
+              // SafeStories allows all slots
+            } else {
+              const therapistResult = await pool.query(
+                'SELECT t.therapist_id, tr.schedule_id FROM therapists t LEFT JOIN therapist_resources tr ON t.therapist_id = tr.therapist_id WHERE TRIM(LOWER(t.name)) = $1 ORDER BY tr.schedule_id DESC NULLS LAST LIMIT 1',
+                [therapistName.trim().toLowerCase()]
+              );
               
-              try {
-                const scheduleRes = await fetch(`https://n8n.srv1169280.hstgr.cloud/webhook/424780e4-8e10-4308-84fd-5925450cc123?scheduleId=${scheduleId}`);
-                if (scheduleRes.ok) {
-                  const scheduleData = await scheduleRes.json();
-                  if (Array.isArray(scheduleData) && scheduleData[0] && Array.isArray(scheduleData[0].availability)) {
-                    const availabilityRules = scheduleData[0].availability;
-                    
-                    const daysMap = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-                    
-                    const originalSlots = jsonResponse[0]["Available Slots"];
-                    const filteredSlots = originalSlots.filter((slotISO: string) => {
-                      const d = new Date(slotISO);
-                      const dayString = daysMap[d.getDay()];
+              if (therapistResult.rows.length > 0 && therapistResult.rows[0].schedule_id) {
+                const scheduleId = therapistResult.rows[0].schedule_id;
+                
+                try {
+                  const scheduleRes = await fetch(`https://n8n.srv1169280.hstgr.cloud/webhook/424780e4-8e10-4308-84fd-5925450cc123?scheduleId=${scheduleId}`);
+                  if (scheduleRes.ok) {
+                    const scheduleData = await scheduleRes.json();
+                    if (Array.isArray(scheduleData) && scheduleData[0] && Array.isArray(scheduleData[0].availability)) {
+                      const availabilityRules = scheduleData[0].availability;
                       
-                      const rule = availabilityRules.find((r: any) => r.day === dayString);
-                      if (rule && rule.is_available === false) {
-                        return false; // Remove this slot
-                      }
-                      return true;
-                    });
-                    
-                    console.log(`[Fetch Slots Filter] Original slots: ${originalSlots.length}, Filtered slots: ${filteredSlots.length}`);
-                    jsonResponse[0]["Available Slots"] = filteredSlots;
+                      const daysMap = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+                      
+                      const originalSlots = jsonResponse[0]["Available Slots"];
+                      const filteredSlots = originalSlots.filter((slotISO: string) => {
+                        const d = new Date(slotISO);
+                        const dayString = daysMap[d.getDay()];
+                        
+                        const rule = availabilityRules.find((r: any) => r.day === dayString);
+                        if (rule && rule.is_available === false) {
+                          return false; // Remove this slot
+                        }
+                        return true;
+                      });
+                      
+                      console.log(`[Fetch Slots Filter] Original slots: ${originalSlots.length}, Filtered slots: ${filteredSlots.length}`);
+                      jsonResponse[0]["Available Slots"] = filteredSlots;
+                    }
                   }
+                } catch (err) {
+                  console.error('[Fetch Slots Filter] Failed to apply availability rules:', err);
                 }
-              } catch (err) {
-                console.error('[Fetch Slots Filter] Failed to apply availability rules:', err);
+              } else {
+                console.log(`[Fetch Slots Filter] Therapist ${therapistName} has no schedule connected. Clearing all slots.`);
+                jsonResponse[0]["Available Slots"] = [];
               }
             }
           }

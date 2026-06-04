@@ -5510,8 +5510,8 @@ app.post('/api/fetch-slots', async (req, res) => {
       scheduleId = 999999;
     } else if (therapistName) {
       const therapistResult = await pool.query(
-        'SELECT t.therapist_id, tr.schedule_id FROM therapists t LEFT JOIN therapist_resources tr ON t.therapist_id = tr.therapist_id WHERE t.name ILIKE $1 ORDER BY tr.schedule_id DESC NULLS LAST LIMIT 1',
-        [`%${therapistName.split(' ')[0]}%`]
+        'SELECT t.therapist_id, tr.schedule_id FROM therapists t LEFT JOIN therapist_resources tr ON t.therapist_id = tr.therapist_id WHERE TRIM(LOWER(t.name)) = $1 ORDER BY tr.schedule_id DESC NULLS LAST LIMIT 1',
+        [therapistName.trim().toLowerCase()]
       );
       if (therapistResult.rows.length > 0) {
         therapistId = therapistResult.rows[0].therapist_id;

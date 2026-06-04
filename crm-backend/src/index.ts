@@ -5043,10 +5043,13 @@ app.post('/api/fetch-slots', async (req, res) => {
           const therapistName = payload.therapistName;
           
           if (therapistName) {
-            const therapistResult = await pool.query(
-              'SELECT t.therapist_id, tr.schedule_id FROM therapists t LEFT JOIN therapist_resources tr ON t.therapist_id = tr.therapist_id WHERE t.name ILIKE $1 ORDER BY tr.schedule_id DESC NULLS LAST LIMIT 1',
-              [`%${therapistName.split(' ')[0]}%`]
-            );
+            if (therapistName === 'SafeStories') {
+              // SafeStories allows all slots
+            } else {
+              const therapistResult = await pool.query(
+                'SELECT t.therapist_id, tr.schedule_id FROM therapists t LEFT JOIN therapist_resources tr ON t.therapist_id = tr.therapist_id WHERE TRIM(LOWER(t.name)) = $1 ORDER BY tr.schedule_id DESC NULLS LAST LIMIT 1',
+                [therapistName.trim().toLowerCase()]
+              );
             
             if (therapistResult.rows.length > 0 && therapistResult.rows[0].schedule_id) {
               const scheduleId = therapistResult.rows[0].schedule_id;
@@ -5077,7 +5080,11 @@ app.post('/api/fetch-slots', async (req, res) => {
                   }
                 }
               } catch (err) {
-                console.error('[Fetch Slots Filter] Failed to apply availability rules:', err);
+                  console.error('[Fetch Slots Filter] Failed to apply availability rules:', err);
+                }
+              } else {
+                console.log(`[Fetch Slots Filter] Therapist ${therapistName} has no schedule connected. Clearing all slots.`);
+                jsonResponse[0]["Available Slots"] = [];
               }
             }
           }
