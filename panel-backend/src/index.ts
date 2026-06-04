@@ -5692,7 +5692,7 @@ app.get('/api/public/services/:slug', async (req, res) => {
 
 // GET payment settings
 // GET /api/payment-settings (Admin)
-app.get('/api/payment-settings', authenticateToken, async (req, res) => {
+app.get('/api/payment-settings', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM payment_settings ORDER BY id ASC LIMIT 1');
     if (rows.length === 0) {
@@ -5706,7 +5706,7 @@ app.get('/api/payment-settings', authenticateToken, async (req, res) => {
 });
 
 // POST /api/payment-settings (Admin)
-app.post('/api/payment-settings', authenticateToken, async (req, res) => {
+app.post('/api/payment-settings', async (req, res) => {
   try {
     const { settings } = req.body;
     const check = await pool.query('SELECT COUNT(*) FROM payment_settings');
