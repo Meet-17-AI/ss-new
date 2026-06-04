@@ -1175,6 +1175,17 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           body: JSON.stringify(webhookData)
         });
 
+        // 2b. Trigger direct Whatsapp/Email alert via backend
+        try {
+          await fetch('/api/send-sos-alert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(webhookData)
+          });
+        } catch (alertError) {
+          console.error('⚠️ Direct SOS alert failed:', alertError);
+        }
+
         // 3. Update database with webhook status
         if (assessmentId) {
           await fetch(`/api/sos-assessments?id=${assessmentId}`, {

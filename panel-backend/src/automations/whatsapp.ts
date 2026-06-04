@@ -117,3 +117,42 @@ export async function sendSessionFeedbackRequest(booking_id: string, clientPhone
         [clientName]
     );
 }
+
+// 8. SOS Alert Admin
+export async function sendSOSAdminWhatsapp(
+    booking_id: string,
+    adminPhone: string,
+    clientName: string,
+    clientPhone: string,
+    therapistName: string,
+    sessionTimings: string,
+    mode: string,
+    totalCompletedBookings: string,
+    emergencyContactName: string,
+    emergencyContactNumber: string,
+    severityLevel: string,
+    currentRiskIndicator: string,
+    riskSummary: string,
+    documentationLink: string
+) {
+    return sendAiSensyMessage(
+        booking_id,
+        "sos_message_api_campaign",
+        adminPhone,
+        "SafeStories",
+        [
+            clientName,
+            clientPhone,
+            therapistName,
+            sessionTimings,
+            mode,
+            totalCompletedBookings,
+            emergencyContactName,
+            emergencyContactNumber,
+            severityLevel,
+            currentRiskIndicator,
+            riskSummary,
+            documentationLink
+        ]
+    );
+}
