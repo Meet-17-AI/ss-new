@@ -348,25 +348,26 @@ export function TherapyCalendarDetails() {
                 )}
               </div>
 
-                <div className="mb-12">
+                <div className="mb-8">
                   <label className="block text-sm font-semibold text-gray-700 mb-2">Description</label>
-                  <ReactQuill 
-                    theme="snow"
-                    value={formData.description}
-                    onChange={(val: string) => setFormData({ ...formData, description: val })}
-                    className="bg-white rounded-lg"
-                    style={{ height: '200px' }}
-                    placeholder="Enter detailed description of the therapy session..."
-                  />
+                  <div className="rounded-xl overflow-hidden border border-gray-200 focus-within:ring-2 focus-within:ring-teal-500 focus-within:border-teal-500 transition-all bg-white shadow-sm">
+                    <ReactQuill 
+                      theme="snow"
+                      value={formData.description}
+                      onChange={(val: string) => setFormData({ ...formData, description: val })}
+                      style={{ height: '200px' }}
+                      placeholder="Enter detailed description of the therapy session..."
+                    />
+                  </div>
                 </div>
 
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-2 gap-6 mb-4">
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">Location Type</label>
                   <select
                     value={formData.type}
                     onChange={(e) => setFormData({ ...formData, type: e.target.value })}
-                    className="w-full border rounded-lg p-3 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-teal-500 outline-none transition-all"
+                    className="w-full border border-gray-200 rounded-xl p-3 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-teal-500 outline-none transition-all shadow-sm"
                   >
                     <option value="Online">Online Video Call</option>
                     <option value="In Person">In Person</option>
@@ -374,13 +375,20 @@ export function TherapyCalendarDetails() {
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-2">Duration</label>
-                  <input
-                    type="text"
-                    value={formData.duration}
-                    onChange={(e) => setFormData({ ...formData, duration: e.target.value })}
-                    className="w-full border rounded-lg p-3 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-teal-500 outline-none transition-all"
-                    placeholder="e.g. 50 Mins"
-                  />
+                  <div className="flex items-stretch w-full border border-gray-200 rounded-xl bg-gray-50 focus-within:bg-white focus-within:ring-2 focus-within:ring-teal-500 overflow-hidden transition-all shadow-sm">
+                    <input
+                      type="number"
+                      min="1"
+                      step="5"
+                      value={formData.duration.replace(/\D/g, '')}
+                      onChange={(e) => setFormData({ ...formData, duration: `${e.target.value} Mins` })}
+                      className="w-full p-3 bg-transparent outline-none"
+                      placeholder="50"
+                    />
+                    <div className="px-4 text-gray-500 font-medium bg-gray-100 border-l border-gray-200 flex items-center justify-center pointer-events-none">
+                      Mins
+                    </div>
+                  </div>
                 </div>
               </div>
 
