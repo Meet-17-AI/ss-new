@@ -39,7 +39,7 @@ export function TherapyCalendars() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const calRes = await fetch('/api/therapy-services');
+      const calRes = await fetch('/api/services');
       if (!calRes.ok) throw new Error('Failed to fetch data');
       const calData = await calRes.json();
       setCalendars(calData);
