@@ -203,7 +203,7 @@ export function TherapyCalendarDetails() {
   }
 
   return (
-    <div className="h-full flex flex-col p-6 animate-fade-in bg-gray-50 overflow-y-auto">
+    <div className="flex-1 p-6 animate-fade-in bg-gray-50 overflow-y-auto">
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       
       <div className="flex items-center gap-4 mb-6">
@@ -233,7 +233,7 @@ export function TherapyCalendarDetails() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex flex-col mb-10">
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 mb-10 pb-6">
         {/* Tabs Header */}
         <div className="flex border-b">
           {['basic', 'form', 'payment'].map((tab) => (
