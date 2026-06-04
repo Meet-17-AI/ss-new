@@ -156,3 +156,58 @@ export async function sendSOSAdminWhatsapp(
         ]
     );
 }
+
+// 9. 1 Hour Reminder Online
+export async function send1HrReminderOnline(booking_id: string, clientPhone: string, inviteeName: string, resourceName: string, inviteeTime: string, joinUrl: string) {
+    return sendAiSensyMessage(
+        booking_id,
+        "1hr_onlinesession_reminder_api_campaign",
+        clientPhone,
+        "Safestories",
+        [inviteeName, resourceName, inviteeTime, joinUrl]
+    );
+}
+
+// 10. 1 Hour Reminder In-Person
+export async function send1HrReminderInPerson(booking_id: string, clientPhone: string, inviteeName: string, resourceName: string, inviteeTime: string) {
+    return sendAiSensyMessage(
+        booking_id,
+        "clientsessionreminder_1hr_inperson_pabbly_api",
+        clientPhone,
+        "Safestories",
+        [inviteeName, resourceName, inviteeTime]
+    );
+}
+
+// 11. 24 Hour Reminder Online
+export async function send24HrReminderOnline(booking_id: string, clientPhone: string, inviteeName: string, resourceName: string, inviteeTime: string, joinUrl: string) {
+    return sendAiSensyMessage(
+        booking_id,
+        "clientsessionreminder_24hr_onlinemeeting_pabbly_api",
+        clientPhone,
+        "Safestories",
+        [inviteeName, resourceName, inviteeTime, joinUrl]
+    );
+}
+
+// 12. 24 Hour Reminder In-Person
+export async function send24HrReminderInPerson(booking_id: string, clientPhone: string, inviteeName: string, resourceName: string, inviteeTime: string) {
+    return sendAiSensyMessage(
+        booking_id,
+        "clientsessionreminder_24hr_in_person_pabbly_api",
+        clientPhone,
+        "Safestories",
+        [inviteeName, resourceName, inviteeTime]
+    );
+}
+
+// 13. Post-Session Therapist Document Form
+export async function sendPostSessionTherapistForm(booking_id: string, therapistPhone: string, therapistName: string, inviteeName: string, inviteeTime: string, shortLink: string) {
+    return sendAiSensyMessage(
+        booking_id,
+        "session_completion_client_status_update_api",
+        therapistPhone,
+        therapistName,
+        [therapistName, inviteeName, inviteeTime, shortLink]
+    );
+}

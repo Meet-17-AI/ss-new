@@ -20,6 +20,7 @@ global.fetch = (async (url: any, options: any) => {
 import multer from 'multer';
 import { randomUUID } from 'crypto';
 import pool from './lib/db';
+import { startSessionRemindersCron } from './automations/cron';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from './lib/timezone';
@@ -7415,6 +7416,10 @@ function startPaymentLinkExpiryCron() {
     }
   }, 60000); // Check every 60 seconds
 }
+
+// Start crons
+startPaymentLinkExpiryCron();
+startSessionRemindersCron();
 
 // ==================== END PAYMENT LINK EXPIRATION APIs ====================
 
