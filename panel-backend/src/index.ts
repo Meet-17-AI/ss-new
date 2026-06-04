@@ -336,13 +336,6 @@ app.post('/api/native/fetch-slots', async (req, res) => {
           }
         }
       }
-    } else {
-       let current = new Date(`${payload.selectedDate}T10:00:00`);
-       const end = new Date(`${payload.selectedDate}T18:00:00`);
-       while (current < end) {
-         availableSlots.push(current.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }));
-         current.setMinutes(current.getMinutes() + 60);
-       }
     }
 
     if (therapistId) {
@@ -5572,22 +5565,6 @@ app.post('/api/fetch-slots', async (req, res) => {
           }
         }
       }
-    } else {
-       for (const dStr of daysToCheck) {
-         let current = new Date(`${dStr}T10:00:00+05:30`);
-         const end = new Date(`${dStr}T18:00:00+05:30`);
-         while (current < end) {
-           const slotEndCheck = new Date(current.getTime() + 50 * 60000);
-           if (slotEndCheck > end) break;
-           
-           availableSlots.push({ 
-              timestampMs: current.getTime(),
-              dateObj: new Date(current.getTime())
-           });
-           
-           current.setMinutes(current.getMinutes() + 30);
-         }
-       }
     }
 
     if (therapistId) {
