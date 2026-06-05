@@ -1,14 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, User, Search, Loader, Plus, Copy, ExternalLink } from 'lucide-react';
-import { Toast } from './Toast';
+import { User, Search, Loader, Plus, Copy, ExternalLink, ChevronDown, Trash2, Power } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-
-interface Therapist {
-  therapist_id: string;
-  name: string;
-  specializations: string[];
-  google_calendar_connected: boolean;
-}
 
 interface TherapyService {
   id: number;
@@ -23,6 +15,7 @@ interface TherapyService {
   payment_gateway: string;
   schedule_id?: number;
   google_calendar_connected?: boolean;
+  is_active?: boolean;
 }
 
 export function TherapyCalendars() {
@@ -31,6 +24,9 @@ export function TherapyCalendars() {
   const [searchTerm, setSearchTerm] = useState('');
   const [error, setError] = useState('');
   const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{ type: 'delete' | 'deactivate', id: number, title: string } | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleCopy = (e: React.MouseEvent, link: string, id: number) => {
@@ -60,10 +56,44 @@ export function TherapyCalendars() {
     }
   };
 
-  const filteredCalendars = calendars.filter(item => 
+  const filteredCalendars = calendars.filter(item =>
     item.therapist_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     item.title?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const handleDeleteCalendar = async () => {
+    if (!confirmDialog || confirmDialog.type !== 'delete') return;
+    try {
+      setActionLoading(true);
+      const res = await fetch(`/api/therapy-calendars/${confirmDialog.id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete calendar');
+      setCalendars(calendars.filter(c => c.id !== confirmDialog.id));
+      setConfirmDialog(null);
+      setExpandedId(null);
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete calendar');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeactivateCalendar = async () => {
+    if (!confirmDialog || confirmDialog.type !== 'deactivate') return;
+    try {
+      setActionLoading(true);
+      const res = await fetch(`/api/therapy-calendars/${confirmDialog.id}/deactivate`, { method: 'PATCH' });
+      if (!res.ok) throw new Error('Failed to deactivate calendar');
+      setCalendars(calendars.map(c =>
+        c.id === confirmDialog.id ? { ...c, is_active: false } : c
+      ));
+      setConfirmDialog(null);
+      setExpandedId(null);
+    } catch (err: any) {
+      setError(err.message || 'Failed to deactivate calendar');
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   return (
     <div className="h-full flex flex-col p-6 animate-fade-in bg-gray-50">
@@ -133,72 +163,99 @@ export function TherapyCalendars() {
                   filteredCalendars.map((item, index) => {
                     const cleanSlug = item.slug ? item.slug.replace(/^\/+/, '') : '';
                     const fullLink = `${window.location.origin}/book/${cleanSlug}`;
+                    const isExpanded = expandedId === item.id;
                     return (
-                      <tr 
-                        key={`${item.id}-${index}`} 
-                        className="hover:bg-teal-50 transition-colors cursor-pointer"
-                        onClick={() => navigate(`/admin/therapy-calendars/${item.id}`)}
-                      >
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm font-medium text-gray-900">
-                            {item.title}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="flex items-center">
-                            <div className="h-8 w-8 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold mr-3">
-                              <User size={16} />
+                      <React.Fragment key={`${item.id}-${index}`}>
+                        <tr
+                          className="hover:bg-teal-50 transition-colors cursor-pointer"
+                          onClick={() => setExpandedId(isExpanded ? null : item.id)}
+                        >
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <ChevronDown size={16} className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                              <div className="text-sm font-medium text-gray-900">
+                                {item.title}
+                              </div>
                             </div>
-                            <div className="text-sm font-medium text-gray-900">{item.therapist_name}</div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4" onClick={e => e.stopPropagation()}>
-                          <div className="flex items-center gap-2 max-w-xs">
-                            <a
-                              href={fullLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-sm text-teal-600 hover:text-teal-800 hover:underline truncate"
-                              title={fullLink}
-                            >
-                              {fullLink.replace(/^https?:\/\/[^/]+/, '')}
-                            </a>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          {item.google_calendar_connected ? (
-                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                              Google Connected
-                            </span>
-                          ) : (
-                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
-                              Not Connected
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={e => handleCopy(e, fullLink, item.id)}
-                              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-teal-700 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 transition-colors"
-                              title="Copy public link"
-                            >
-                              <Copy size={13} />
-                              {copiedId === item.id ? 'Copied!' : 'Copy Link'}
-                            </button>
-                            <a
-                              href={fullLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors"
-                              title="Open public booking page"
-                            >
-                              <ExternalLink size={13} />
-                              Open
-                            </a>
-                          </div>
-                        </td>
-                      </tr>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center">
+                              <div className="h-8 w-8 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold mr-3">
+                                <User size={16} />
+                              </div>
+                              <div className="text-sm font-medium text-gray-900">{item.therapist_name}</div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center gap-2 max-w-xs">
+                              <a
+                                href={fullLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-sm text-teal-600 hover:text-teal-800 hover:underline truncate"
+                                title={fullLink}
+                              >
+                                {fullLink.replace(/^https?:\/\/[^/]+/, '')}
+                              </a>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            {item.google_calendar_connected ? (
+                              <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                                Google Connected
+                              </span>
+                            ) : (
+                              <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                                Not Connected
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={e => handleCopy(e, fullLink, item.id)}
+                                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-teal-700 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 transition-colors"
+                                title="Copy public link"
+                              >
+                                <Copy size={13} />
+                                {copiedId === item.id ? 'Copied!' : 'Copy Link'}
+                              </button>
+                              <a
+                                href={fullLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors"
+                                title="Open public booking page"
+                              >
+                                <ExternalLink size={13} />
+                                Open
+                              </a>
+                            </div>
+                          </td>
+                        </tr>
+                        {isExpanded && (
+                          <tr className="bg-gray-50">
+                            <td colSpan={5} className="px-6 py-4">
+                              <div className="flex gap-3 border-t border-gray-200 pt-4">
+                                <button
+                                  onClick={() => setConfirmDialog({ type: 'deactivate', id: item.id, title: item.title })}
+                                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg hover:bg-yellow-100 transition-colors"
+                                >
+                                  <Power size={16} />
+                                  Deactivate Calendar
+                                </button>
+                                <button
+                                  onClick={() => setConfirmDialog({ type: 'delete', id: item.id, title: item.title })}
+                                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
+                                >
+                                  <Trash2 size={16} />
+                                  Delete Calendar
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     );
                   })
                 ) : (
@@ -210,6 +267,44 @@ export function TherapyCalendars() {
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {confirmDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-bold text-gray-900 mb-2">
+              {confirmDialog.type === 'delete' ? 'Delete Calendar' : 'Deactivate Calendar'}
+            </h3>
+            <p className="text-gray-600 mb-2">
+              <strong>{confirmDialog.title}</strong>
+            </p>
+            <p className="text-gray-600 mb-6">
+              {confirmDialog.type === 'delete'
+                ? 'This will delete the calendar permanently.'
+                : 'This will deactivate the calendar and stop accepting bookings.'}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                disabled={actionLoading}
+                className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDialog.type === 'delete' ? handleDeleteCalendar : handleDeactivateCalendar}
+                disabled={actionLoading}
+                className={`flex-1 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-50 ${
+                  confirmDialog.type === 'delete'
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : 'bg-yellow-600 hover:bg-yellow-700'
+                }`}
+              >
+                {actionLoading ? 'Processing...' : confirmDialog.type === 'delete' ? 'Delete' : 'Deactivate'}
+              </button>
+            </div>
           </div>
         </div>
       )}

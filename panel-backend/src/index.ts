@@ -5510,12 +5510,14 @@ app.post('/api/send-booking-link', async (req, res) => {
         }
       }
 
+      const params = campaignName === 'free_consultation_bookinglink_n8n' ? [] : [clientName];
+
       await sendAiSensyMessage(
         "manual_booking_link",
         campaignName,
         phone,
         clientName,
-        [clientName]
+        params
       );
 
       res.status(200).json({ success: true, message: 'Booking link sent successfully' });
@@ -8043,6 +8045,39 @@ app.put('/api/services/:id', async (req, res) => {
   } catch (error: any) {
     console.error('Error updating therapy service:', error);
     res.status(500).json({ error: error.message || 'Failed to update therapy service' });
+  }
+});
+
+// DELETE therapy calendar
+app.delete('/api/therapy-calendars/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query('DELETE FROM therapy_services WHERE id = $1 RETURNING id', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Therapy calendar not found' });
+    }
+    res.json({ success: true, message: 'Calendar deleted' });
+  } catch (error: any) {
+    console.error('Error deleting therapy calendar:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete calendar' });
+  }
+});
+
+// PATCH deactivate therapy calendar
+app.patch('/api/therapy-calendars/:id/deactivate', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      'UPDATE therapy_services SET is_active = false WHERE id = $1 RETURNING *',
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Therapy calendar not found' });
+    }
+    res.json({ success: true, message: 'Calendar deactivated', data: result.rows[0] });
+  } catch (error: any) {
+    console.error('Error deactivating therapy calendar:', error);
+    res.status(500).json({ error: error.message || 'Failed to deactivate calendar' });
   }
 });
 
