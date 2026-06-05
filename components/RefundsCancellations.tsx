@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Download } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Search, Download, Loader } from 'lucide-react';
 import * as XLSX from 'xlsx'
 
 interface Refund {
@@ -28,6 +28,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
   const [searchQuery, setSearchQuery] = useState('');
   const [refunds, setRefunds] = useState<Refund[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const tabs = [
     { id: 'all_payments', label: 'All Payments' },
@@ -39,6 +40,45 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     { id: 'Failed', label: 'Refund Failed' },
   ];
 
+  const fetchPayments = useCallback(async () => {
+    try {
+      setLoading(true);
+      const response = await fetch(`/api/payments?status=${activeTab}`);
+      if (!response.ok) {
+        console.error('Payment fetch failed:', response.status);
+        setPayments([]);
+        return;
+      }
+      const data = await response.json();
+      setPayments(Array.isArray(data) ? data : []);
+      setRefunds([]);
+    } catch (error) {
+      console.error('Error fetching payments:', error);
+      setPayments([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [activeTab]);
+
+  const fetchRefunds = useCallback(async () => {
+    try {
+      setLoading(true);
+      const response = await fetch(`/api/refunds?status=${activeTab}`);
+      if (!response.ok) {
+        console.error('Refund fetch failed:', response.status);
+        setRefunds([]);
+        return;
+      }
+      const data = await response.json();
+      setRefunds(Array.isArray(data) ? data : []);
+    } catch (error) {
+      console.error('Error fetching refunds:', error);
+      setRefunds([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [activeTab]);
+
   useEffect(() => {
     // Fetch payments for payment tabs
     if (['all_payments', 'completed', 'pending', 'expired'].includes(activeTab)) {
@@ -48,30 +88,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     else if (['all', 'Pending', 'Failed'].includes(activeTab)) {
       fetchRefunds();
     }
-  }, [activeTab]);
-
-  const fetchPayments = async () => {
-    try {
-      const response = await fetch(`/api/payments?status=${activeTab}`);
-      const data = await response.json();
-      setPayments(Array.isArray(data) ? data : []);
-      setRefunds([]);
-    } catch (error) {
-      console.error('Error fetching payments:', error);
-      setPayments([]);
-    }
-  };
-
-  const fetchRefunds = async () => {
-    try {
-      const response = await fetch(`/api/refunds?status=${activeTab}`);
-      const data = await response.json();
-      setRefunds(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.error('Error fetching refunds:', error);
-      setRefunds([]);
-    }
-  };
+  }, [activeTab, fetchPayments, fetchRefunds]);
 
   const isPaymentTab = ['all_payments', 'completed', 'pending', 'expired'].includes(activeTab);
   const safeRefunds = Array.isArray(refunds) ? refunds : [];
@@ -168,6 +185,11 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
 
       {/* Table */}
       <div className="bg-white rounded-lg border flex-1 flex flex-col">
+        {loading ? (
+          <div className="flex-1 flex items-center justify-center">
+            <Loader className="animate-spin text-teal-600" size={32} />
+          </div>
+        ) : (
         <div className="overflow-x-auto flex-1">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
@@ -247,6 +269,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
             </tbody>
           </table>
         </div>
+        )}
         <div className="px-6 py-4 border-t flex justify-between items-center">
           <span className="text-sm text-gray-600">Showing {isPaymentTab ? filteredPayments.length : filteredRefunds.length} of {isPaymentTab ? safePayments.length : safeRefunds.length} results</span>
           <div className="flex gap-2">
