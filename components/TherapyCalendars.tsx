@@ -167,12 +167,11 @@ export function TherapyCalendars() {
                     return (
                       <React.Fragment key={`${item.id}-${index}`}>
                         <tr
-                          className="hover:bg-teal-50 transition-colors cursor-pointer"
+                          className={`border-b cursor-pointer transition-colors ${isExpanded ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
                           onClick={() => setExpandedId(isExpanded ? null : item.id)}
                         >
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center gap-2">
-                              <ChevronDown size={16} className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                               <div className="text-sm font-medium text-gray-900">
                                 {item.title}
                               </div>
@@ -234,19 +233,19 @@ export function TherapyCalendars() {
                           </td>
                         </tr>
                         {isExpanded && (
-                          <tr className="bg-gray-50">
+                          <tr className="bg-gray-100">
                             <td colSpan={5} className="px-6 py-4">
-                              <div className="flex gap-3 border-t border-gray-200 pt-4">
+                              <div className="flex gap-2 justify-center items-center">
                                 <button
                                   onClick={() => setConfirmDialog({ type: 'deactivate', id: item.id, title: item.title })}
-                                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg hover:bg-yellow-100 transition-colors"
+                                  className="px-6 py-2 border border-gray-400 rounded-lg text-sm text-gray-700 hover:bg-white flex items-center gap-2"
                                 >
                                   <Power size={16} />
                                   Deactivate Calendar
                                 </button>
                                 <button
                                   onClick={() => setConfirmDialog({ type: 'delete', id: item.id, title: item.title })}
-                                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors"
+                                  className="px-6 py-2 border border-gray-400 rounded-lg text-sm text-gray-700 hover:bg-white flex items-center gap-2"
                                 >
                                   <Trash2 size={16} />
                                   Delete Calendar

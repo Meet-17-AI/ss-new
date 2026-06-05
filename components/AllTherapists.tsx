@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Search, ArrowLeft, User, Mail, Calendar as CalendarIcon, List, Eye, EyeOff, Edit, X, Upload, Link, ChevronDown, Copy, ExternalLink, Pencil, Check } from 'lucide-react';
+import { Search, ArrowLeft, User, Mail, Calendar as CalendarIcon, List, Eye, EyeOff, Edit, X, Upload, Link, ChevronDown, Copy, ExternalLink, Pencil, Check, Power } from 'lucide-react';
 import { Loader } from './Loader';
 import { Toast } from './Toast';
 import { TherapistCalendar } from './TherapistCalendar';
@@ -53,6 +53,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
   const [selectedTherapist, setSelectedTherapist] = useState<any>(null);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [clientAppointments, setClientAppointments] = useState<Appointment[]>([]);
+  const [selectedExpandedTherapistIndex, setSelectedExpandedTherapistIndex] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [clientDetailsLoading, setClientDetailsLoading] = useState(false);
@@ -2821,60 +2822,72 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                       </tr>
                     ) : (
                       filteredTherapists.map((therapist, index) => (
-                        <tr key={index} className="border-b hover:bg-gray-50">
-                          <td className="px-6 py-4">
-                            <button
-                              onClick={() => openTherapistDetails(therapist)}
-                              className="text-teal-700 hover:underline font-medium text-left"
-                            >
-                              {therapist.name}
-                            </button>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex flex-wrap gap-2">
-                              {therapist.specialization && therapist.specialization.split(',').map((spec: string, i: number) => (
-                                <span key={i} className="px-3 py-1 rounded-full text-xs font-medium" style={{ backgroundColor: '#2D757930', color: '#2D7579' }}>
-                                  {spec.trim()}
-                                </span>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-1">
-                              {therapist.average_rating ? (
-                                <>
-                                  <span className="text-yellow-500 font-medium text-sm">★</span>
-                                  <span className="font-medium">{therapist.average_rating}</span>
-                                </>
-                              ) : (
-                                <span className="text-gray-400 text-sm">No ratings</span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">{therapist.total_sessions_lifetime}</td>
-                          <td className="px-6 py-4">{therapist.sessions_this_month}</td>
-                          <td className="px-6 py-4">
-                            <div className="flex flex-col gap-2">
+                        <React.Fragment key={index}>
+                          <tr 
+                            className={`border-b cursor-pointer transition-colors ${selectedExpandedTherapistIndex === index ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
+                            onClick={() => setSelectedExpandedTherapistIndex(selectedExpandedTherapistIndex === index ? null : index)}
+                          >
+                            <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                onClick={() => openTherapistDetails(therapist)}
+                                className="text-teal-700 hover:underline font-medium text-left"
+                              >
+                                {therapist.name}
+                              </button>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex flex-wrap gap-2">
+                                {therapist.specialization && therapist.specialization.split(',').map((spec: string, i: number) => (
+                                  <span key={i} className="px-3 py-1 rounded-full text-xs font-medium" style={{ backgroundColor: '#2D757930', color: '#2D7579' }}>
+                                    {spec.trim()}
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-1">
+                                {therapist.average_rating ? (
+                                  <>
+                                    <span className="text-yellow-500 font-medium text-sm">★</span>
+                                    <span className="font-medium">{therapist.average_rating}</span>
+                                  </>
+                                ) : (
+                                  <span className="text-gray-400 text-sm">No ratings</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">{therapist.total_sessions_lifetime}</td>
+                            <td className="px-6 py-4">{therapist.sessions_this_month}</td>
+                            <td className="px-6 py-4">
                               <span className={`px-2 py-1 rounded-full text-xs font-medium text-center ${therapist.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                                 {therapist.is_active ? 'Active' : 'Inactive'}
                               </span>
-                              <button
-                                onClick={() => toggleTherapistStatus(therapist)}
-                                className="text-[10px] border px-2 py-1 rounded hover:bg-gray-50 transition-colors"
-                              >
-                                {therapist.is_active ? 'Deactivate' : 'Activate'}
-                              </button>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-2">
-                              <div className={`w-2 h-2 rounded-full ${therapist.isLive ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                              <span className={`text-sm font-medium ${therapist.isLive ? 'text-green-700' : 'text-red-700'}`}>
-                                {therapist.isLive ? 'In session' : 'Free'}
-                              </span>
-                            </div>
-                          </td>
-                        </tr>
+                            </td>
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-2">
+                                <div className={`w-2 h-2 rounded-full ${therapist.isLive ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                <span className={`text-sm font-medium ${therapist.isLive ? 'text-green-700' : 'text-red-700'}`}>
+                                  {therapist.isLive ? 'In session' : 'Free'}
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+                          {selectedExpandedTherapistIndex === index && (
+                            <tr className="bg-gray-100">
+                              <td colSpan={7} className="px-6 py-4">
+                                <div className="flex gap-2 justify-center items-center">
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); toggleTherapistStatus(therapist); }}
+                                    className="px-6 py-2 border border-gray-400 rounded-lg text-sm text-gray-700 hover:bg-white flex items-center gap-2"
+                                  >
+                                    <Power size={16} />
+                                    {therapist.is_active ? 'Deactivate Therapist' : 'Activate Therapist'}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       ))
                     )}
                   </tbody>
