@@ -20,16 +20,22 @@
   border-radius: 16px;
   box-shadow: 0 4px 32px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.04);
   display: grid;
-  grid-template-columns: 320px 1fr 280px;
+  grid-template-columns: 300px 1fr 280px;
   border: 1px solid #e8edf2;
   overflow: hidden;
 }
 
 /* ─── Common Pane ─── */
 .bp-pane {
-  padding: 40px 36px;
+  padding: 40px 32px;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+}
+
+.bp-summary {
+  border-right: 1px solid #e8edf2;
+  overflow: hidden;
 }
 
 .bp-calendar {
@@ -67,7 +73,15 @@
 }
 
 /* Plain text description */
-.bp-desc      { color: #4b5563; font-size: 14px; line-height: 1.8; flex: 1; }
+.bp-desc      {
+  color: #4b5563;
+  font-size: 14px;
+  line-height: 1.8;
+  flex: 1;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
 .bp-desc-line { margin-bottom: 0; }
 
 /* HTML description from Quill editor — style all generated elements */
@@ -76,6 +90,9 @@
   font-size: 14px;
   line-height: 1.8;
   flex: 1;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 .bp-desc-html p {
   margin: 0 0 12px 0;
@@ -186,6 +203,8 @@
   max-width: 38px;
   width: 100%;
   margin: 0 auto;
+  position: relative;
+  z-index: 1;
 }
 .cal-day:hover:not(.empty):not(.selected):not(.disabled) { background: #f1f5f9; color: #0f172a; }
 .cal-day.selected {
