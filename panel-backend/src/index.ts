@@ -5179,7 +5179,7 @@ app.get('/api/payments', async (req, res) => {
         payment_amount: row.payment_amount || row.invitee_payment_amount || 0,
         razorpay_order_id: row.razorpay_order_id || null,
         payment_id: row.payment_id || null,
-        created_at: row.created_at
+        created_at: row.created_at || row.invitee_created_at
       };
     };
 
@@ -5204,7 +5204,7 @@ app.get('/api/payments', async (req, res) => {
          FROM bookings
          WHERE (booking_status = 'payment_pending' OR payment_status = 'Pending')
            AND invitee_payment_amount IS NOT NULL AND invitee_payment_amount > 0
-         ORDER BY created_at DESC`
+         ORDER BY invitee_created_at DESC`
       );
       rows.push(...pRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
     }
@@ -5215,7 +5215,7 @@ app.get('/api/payments', async (req, res) => {
         `SELECT *, invitee_payment_amount AS payment_amount
          FROM bookings
          WHERE booking_status = 'payment_failed' OR payment_status = 'Failed'
-         ORDER BY created_at DESC`
+         ORDER BY invitee_created_at DESC`
       );
       rows.push(...fRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
     }
