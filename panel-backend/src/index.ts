@@ -3430,10 +3430,18 @@ app.post('/api/request-feedback', async (req, res) => {
 // Webhook to receive feedback rating from WhatsApp/automation
 app.post('/api/webhook/feedback', async (req, res) => {
   try {
-    const { name, phone, rating } = req.body;
+    console.log('[Feedback Webhook] Received Headers:', req.headers);
+    console.log('[Feedback Webhook] Received Body:', req.body);
+    
+    const { name, phone, rating } = req.body || {};
     
     if (!phone || rating === undefined) {
-      return res.status(400).json({ error: 'Missing phone or rating' });
+      console.log('[Feedback Webhook Error] Missing fields. phone:', phone, 'rating:', rating);
+      return res.status(400).json({ 
+        error: 'Missing phone or rating', 
+        receivedBody: req.body,
+        hint: "Make sure you set the Header 'Content-Type: application/json' in AiSensy and the JSON keys match 'phone' and 'rating'."
+      });
     }
 
     // Clean phone number to match database format (usually +91... or without)
