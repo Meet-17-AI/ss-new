@@ -74,15 +74,17 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
   };
 
   const isPaymentTab = ['all_payments', 'completed', 'pending', 'expired'].includes(activeTab);
+  const safeRefunds = Array.isArray(refunds) ? refunds : [];
+  const safePayments = Array.isArray(payments) ? payments : [];
   const filteredRefunds = !isPaymentTab
-    ? refunds.filter(refund => 
-        refund.client_name.toLowerCase().includes(searchQuery.toLowerCase())
+    ? safeRefunds.filter(refund =>
+        (refund.client_name || '').toLowerCase().includes(searchQuery.toLowerCase())
       )
     : [];
-  
+
   const filteredPayments = isPaymentTab
-    ? payments.filter(payment => 
-        payment.client_name.toLowerCase().includes(searchQuery.toLowerCase())
+    ? safePayments.filter(payment =>
+        (payment.client_name || '').toLowerCase().includes(searchQuery.toLowerCase())
       )
     : [];
 
@@ -246,7 +248,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
           </table>
         </div>
         <div className="px-6 py-4 border-t flex justify-between items-center">
-          <span className="text-sm text-gray-600">Showing {isPaymentTab ? filteredPayments.length : filteredRefunds.length} of {isPaymentTab ? payments.length : refunds.length} results</span>
+          <span className="text-sm text-gray-600">Showing {isPaymentTab ? filteredPayments.length : filteredRefunds.length} of {isPaymentTab ? safePayments.length : safeRefunds.length} results</span>
           <div className="flex gap-2">
             <button className="p-2 border rounded hover:bg-gray-50">←</button>
             <button className="p-2 border rounded hover:bg-gray-50">→</button>
