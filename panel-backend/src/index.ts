@@ -3085,13 +3085,38 @@ app.post('/api/cancel-booking', async (req, res) => {
       }
     }
 
-    // 4. Send WhatsApp via AiSensy
+    // 4. Determine if session was paid (case-insensitive)
+    const isPaid = Number(bookingDetails.invitee_payment_amount) > 0 ||
+                   (bookingDetails.payment_status || '').toLowerCase() === 'paid';
+
+    // 5. Initiate Razorpay refund if paid and payment_id is stored
+    if (isPaid && bookingDetails.payment_id && bookingDetails.payment_id !== 'manual_bypass') {
+      try {
+        const { rows: rzpRows } = await pool.query(
+          'SELECT razorpay_key_id, razorpay_key_secret FROM payment_settings ORDER BY id ASC LIMIT 1'
+        );
+        if (rzpRows.length > 0 && rzpRows[0].razorpay_key_id) {
+          const rzpInst = new Razorpay({
+            key_id: rzpRows[0].razorpay_key_id,
+            key_secret: rzpRows[0].razorpay_key_secret
+          });
+          await (rzpInst.payments as any).refund(bookingDetails.payment_id, { speed: 'normal' });
+          await pool.query(
+            `UPDATE bookings SET refund_status = 'initiated', updated_at = NOW() WHERE booking_id = $1`,
+            [booking_id]
+          );
+          console.log(`[Cancel Booking] Razorpay refund initiated for payment ${bookingDetails.payment_id}`);
+        }
+      } catch (refundErr: any) {
+        console.error('[Cancel Booking] Razorpay refund initiation failed:', refundErr?.message || refundErr);
+      }
+    }
+
+    // 6. Send WhatsApp via AiSensy
     if (notify !== false) {
       try {
         const { sendBookingCancelledRefundClient, sendBookingCancelledNoRefundClient } = await import('./automations/index.js');
-        
-        const isPaid = bookingDetails.invitee_payment_amount > 0 || bookingDetails.payment_status === 'paid';
-        
+
         if (isPaid) {
           await sendBookingCancelledRefundClient(
             booking_id,
@@ -5780,6 +5805,209 @@ app.post('/api/razorpay/create-order', async (req, res) => {
   }
 });
 
+// Verify Razorpay HMAC signature and confirm a pending booking.
+// Called by the frontend after Razorpay's success handler fires.
+app.post('/api/razorpay/verify-payment', async (req, res) => {
+  const { bookingId, razorpayPaymentId, razorpayOrderId, razorpaySignature, ...payload } = req.body;
+  try {
+    // 1. Check booking exists and is still pending
+    const bookingCheck = await pool.query(
+      `SELECT * FROM bookings WHERE booking_id = $1 AND booking_status = 'payment_pending'`,
+      [bookingId]
+    );
+    if (bookingCheck.rows.length === 0) {
+      return res.status(400).json({ error: 'Booking not found or already processed' });
+    }
+    const booking = bookingCheck.rows[0];
+
+    // 2. Verify Razorpay HMAC-SHA256 signature
+    const { rows: keyRows } = await pool.query(
+      'SELECT razorpay_key_secret FROM payment_settings ORDER BY id ASC LIMIT 1'
+    );
+    if (!keyRows.length || !keyRows[0].razorpay_key_secret) {
+      return res.status(500).json({ error: 'Payment configuration missing' });
+    }
+    const crypto = require('crypto');
+    const generated = crypto
+      .createHmac('sha256', keyRows[0].razorpay_key_secret)
+      .update(`${razorpayOrderId}|${razorpayPaymentId}`)
+      .digest('hex');
+    if (generated !== razorpaySignature) {
+      console.error(`[verify-payment] Signature mismatch for booking ${bookingId}`);
+      return res.status(400).json({ error: 'Payment verification failed – invalid signature' });
+    }
+
+    // 3. Resolve therapist (for Google Calendar)
+    const therapistName = payload.therapistName || booking.booking_host_name || 'Unknown Therapist';
+    let therapistId = payload.therapistId || booking.therapist_id || null;
+    let therapist: any = null;
+    if (therapistName !== 'SafeStories' && therapistName !== 'Unknown Therapist') {
+      const qParam = therapistId ? therapistId : `%${therapistName.split(' ')[0]}%`;
+      const qStr = therapistId
+        ? 'SELECT * FROM therapists WHERE therapist_id = $1 LIMIT 1'
+        : 'SELECT * FROM therapists WHERE name ILIKE $1 LIMIT 1';
+      const tRes = await pool.query(qStr, [qParam]);
+      if (tRes.rows.length > 0) { therapist = tRes.rows[0]; therapistId = therapist.therapist_id; }
+    }
+
+    // 4. Build time strings from stored booking dates
+    const { randomUUID } = require('crypto');
+    const startAt = new Date(booking.booking_start_at);
+    const endAt   = new Date(booking.booking_end_at);
+    const formatTime = (d: Date) => d.toLocaleTimeString('en-US', {
+      hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata'
+    });
+    const dayName   = startAt.toLocaleDateString('en-US', { weekday: 'long',   timeZone: 'Asia/Kolkata' });
+    const monthName = startAt.toLocaleDateString('en-US', { month:   'short',  timeZone: 'Asia/Kolkata' });
+    const dateNum   = startAt.toLocaleDateString('en-US', { day:     'numeric',timeZone: 'Asia/Kolkata' });
+    const yearNum   = startAt.toLocaleDateString('en-US', { year:    'numeric',timeZone: 'Asia/Kolkata' });
+    const startTimeStr = formatTime(startAt);
+    const endTimeStr   = formatTime(endAt);
+    const hostTime = `${dayName}, ${monthName} ${dateNum}, ${yearNum} at ${startTimeStr} - ${endTimeStr} IST`;
+
+    const clientTz = payload.clientTimezone || payload.timezone || 'Asia/Kolkata';
+    const fmtClient = (d: Date) => d.toLocaleTimeString('en-US', {
+      hour: '2-digit', minute: '2-digit', hour12: true, timeZone: clientTz
+    });
+    const cDay   = startAt.toLocaleDateString('en-US', { weekday: 'long',   timeZone: clientTz });
+    const cMonth = startAt.toLocaleDateString('en-US', { month:   'short',  timeZone: clientTz });
+    const cDate  = startAt.toLocaleDateString('en-US', { day:     'numeric',timeZone: clientTz });
+    const cYear  = startAt.toLocaleDateString('en-US', { year:    'numeric',timeZone: clientTz });
+    let tzShort = 'IST';
+    if (clientTz !== 'Asia/Kolkata') {
+      try {
+        const parts = new Intl.DateTimeFormat('en-US', { timeZone: clientTz, timeZoneName: 'short' }).formatToParts(startAt);
+        tzShort = parts.find(p => p.type === 'timeZoneName')?.value || clientTz;
+      } catch { tzShort = clientTz; }
+    }
+    const inviteeTime = `${cDay}, ${cMonth} ${cDate}, ${cYear} at ${fmtClient(startAt)} - ${fmtClient(endAt)} ${tzShort}`;
+
+    const maskedEmailRes = await pool.query(
+      'SELECT masked_email FROM masked_emails WHERE id = $1', [booking.mask_id]
+    );
+    const maskedEmail = maskedEmailRes.rows[0]?.masked_email || booking.invitee_email;
+
+    // 5. Create Google Calendar event (best-effort)
+    let hasCalendar = false;
+    let meetLink = '';
+    let google_event_id: string | null = null;
+    if (therapist && therapist.google_refresh_token) {
+      try {
+        const oauth2Client = await getAuthenticatedClient(therapist);
+        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+        const isOnline = (payload.sessionMode || '') === 'online' ||
+                         booking.booking_mode?.toLowerCase().includes('online');
+        const eventBody: any = {
+          summary: `${payload.therapyName || booking.booking_resource_name} - ${payload.clientName || booking.invitee_name}`,
+          description: `Session via SafeStories.\nClient: ${payload.clientName || booking.invitee_name}\nEmail: ${maskedEmail}\nMode: ${payload.sessionMode || 'online'}\nNotes: ${payload.notes || 'None'}`,
+          start: { dateTime: startAt.toISOString(), timeZone: 'Asia/Kolkata' },
+          end:   { dateTime: endAt.toISOString(),   timeZone: 'Asia/Kolkata' },
+          attendees: [{ email: maskedEmail }]
+        };
+        if (isOnline) {
+          eventBody.conferenceData = {
+            createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } }
+          };
+        } else {
+          eventBody.location = 'SafeStories Office - Lullanagar, Pune, Maharashtra 411040 | https://share.google/3tnQB1ORUWCJcmZyv';
+        }
+        const calEvent = await calendar.events.insert({
+          calendarId: 'primary',
+          conferenceDataVersion: isOnline ? 1 : 0,
+          requestBody: eventBody
+        });
+        google_event_id = calEvent.data.id || null;
+        if (isOnline) meetLink = calEvent.data.hangoutLink || '';
+        hasCalendar = true;
+      } catch (calErr) {
+        console.error('[verify-payment] Google Calendar event creation failed:', calErr);
+      }
+    }
+
+    // 6. Update booking: confirmed + payment info
+    const joinLink = (hasCalendar && (payload.sessionMode === 'online' || booking.booking_mode?.toLowerCase().includes('online')))
+      ? meetLink : (booking.booking_joining_link || null);
+    await pool.query(
+      `UPDATE bookings
+       SET booking_status = 'confirmed', payment_status = 'Paid',
+           payment_id = $1, invitee_payment_gateway = 'Razorpay', razorpay_order_id = $2,
+           booking_joining_link = $3, google_event_id = $4,
+           booking_invitee_time = $5, booking_host_time = $6,
+           updated_at = NOW()
+       WHERE booking_id = $7`,
+      [razorpayPaymentId, razorpayOrderId, joinLink, google_event_id || booking.google_event_id,
+       inviteeTime, hostTime, bookingId]
+    );
+
+    const clientName  = payload.clientName  || booking.invitee_name;
+    const clientEmail = payload.clientEmail || booking.invitee_email;
+    const clientPhone = payload.clientWhatsApp || booking.invitee_phone;
+    const therapyName = payload.therapyName  || booking.booking_resource_name;
+    const sessionMode = payload.sessionMode  || 'online';
+    const checkinUrl  = booking.public_booking_checkin_url;
+
+    // 7. Send confirmation emails (best-effort)
+    try {
+      await sendClientBookingConfirmationEmail(clientEmail, {
+        clientName,
+        inviteeTimeStr: inviteeTime,
+        sessionName: therapyName,
+        dateStr: `${dayName}, ${monthName} ${dateNum}, ${yearNum}`,
+        timeRangeStr: `${startTimeStr} - ${endTimeStr}`,
+        duration: 50,
+        joinLink: hasCalendar ? meetLink : sessionMode,
+        checkinUrl,
+        calendarStartRaw: startAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z',
+        calendarEndRaw:   endAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
+      });
+      await pool.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at)
+         VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)`,
+        [bookingId, 'client_confirmation_email', clientEmail, 'success', JSON.stringify({ sent: true })]
+      );
+      const adminEmail = process.env.ADMIN_EMAIL || 'admin@safestories.in';
+      await sendAdminBookingConfirmationEmail(adminEmail, {
+        clientName, clientPhone, clientEmail,
+        sessionName: therapyName, sessionTiming: hostTime, sessionMode: sessionMode,
+        therapistName, therapistEmail: therapist?.contact_info || 'Not available'
+      });
+    } catch (emailErr: any) {
+      console.error('[verify-payment] Email send failed:', emailErr);
+    }
+
+    // 8. Send WhatsApp confirmation (best-effort)
+    try {
+      const { sendBookingConfirmedClient } = await import('./automations/whatsapp.js');
+      await sendBookingConfirmedClient(bookingId, clientPhone, clientName, therapyName, inviteeTime, checkinUrl);
+      await pool.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at)
+         VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)`,
+        [bookingId, 'client_confirmation_whatsapp', clientPhone, 'success', JSON.stringify({ sent: true })]
+      );
+    } catch (waErr) {
+      console.error('[verify-payment] WhatsApp send failed:', waErr);
+    }
+
+    // 9. Internal new-booking webhook for CRM pipeline movement
+    try {
+      const port = process.env.PORT || 3002;
+      await fetch(`http://localhost:${port}/api/webhooks/new-booking`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ booking_id: bookingId })
+      });
+    } catch (e) {
+      console.error('[verify-payment] Internal webhook failed:', e);
+    }
+
+    console.log(`[verify-payment] ✅ Booking ${bookingId} confirmed. Payment: ${razorpayPaymentId}`);
+    res.json({ success: true, booking_id: bookingId });
+  } catch (error: any) {
+    console.error('❌ Error in verify-payment:', error);
+    res.status(500).json({ error: error.message || 'Payment verification failed' });
+  }
+});
+
 app.get('/api/payment-settings/public', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT active_gateway, razorpay_key_id FROM payment_settings ORDER BY id ASC LIMIT 1');
@@ -5945,8 +6173,9 @@ app.post('/api/create-booking', async (req, res) => {
         booking_resource_name, booking_start_at, booking_end_at,
         booking_invitee_time, booking_host_time, invitee_payment_amount, invitee_payment_currency,
         booking_status, public_booking_checkin_url,
-        booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id, google_event_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
+        booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id, google_event_id,
+        payment_id, payment_status, invitee_payment_gateway
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
       [
         booking_id,
         invitee_id,
@@ -5960,7 +6189,7 @@ app.post('/api/create-booking', async (req, res) => {
         endAt.toISOString(),
         inviteeTime,
         hostTime,
-        payload.paymentDetails?.amount || 0,
+        payload.amount || payload.paymentDetails?.amount || 0,
         'INR',
         'confirmed',
         publicBookingCheckinUrl,
@@ -5969,7 +6198,10 @@ app.post('/api/create-booking', async (req, res) => {
         payload.sessionMode === 'online' ? 'Online Video Call' : 'In Person (Pune)',
         hasCalendar && payload.sessionMode === 'online' ? meetLink : null,
         maskId,
-        google_event_id
+        google_event_id,
+        payload.payment_id || payload.razorpay_payment_id || null,
+        payload.payment_id ? 'Paid' : (payload.isFreeConsultation ? 'Free' : 'Pending'),
+        payload.payment_gateway || null
       ]
     );
 
@@ -6055,6 +6287,78 @@ app.post('/api/create-booking', async (req, res) => {
   } catch (error) {
     console.error('❌ Error in create-booking endpoint:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Create a minimal "pending" booking record before Razorpay opens.
+// Holds the slot in DB (payment_pending) for up to 15 minutes; confirmed by verify-payment.
+app.post('/api/create-pending-booking', async (req, res) => {
+  try {
+    const payload = req.body;
+    const booking_id = Math.floor(100000 + Math.random() * 900000).toString();
+    const invitee_id = Math.floor(100000 + Math.random() * 900000).toString();
+
+    const maskInsertRes = await pool.query(
+      `INSERT INTO masked_emails (real_email, created_at) VALUES ($1, CURRENT_TIMESTAMP)
+       ON CONFLICT (real_email) DO UPDATE SET real_email = EXCLUDED.real_email
+       RETURNING id`,
+      [payload.clientEmail]
+    );
+    const maskId = maskInsertRes.rows[0].id;
+
+    let startAt = new Date(`${payload.date} ${payload.slot} GMT+0530`);
+    if (isNaN(startAt.getTime())) startAt = new Date();
+    const endAt = new Date(startAt.getTime() + 50 * 60000);
+
+    const therapistName = payload.therapistName || 'Unknown Therapist';
+    let therapistId = payload.therapistId || null;
+    if (therapistName === 'SafeStories') {
+      therapistId = 'SafeStories';
+    } else if (therapistName !== 'Unknown Therapist' && !therapistId) {
+      const tRes = await pool.query(
+        'SELECT therapist_id FROM therapists WHERE name ILIKE $1 LIMIT 1',
+        [`%${therapistName.split(' ')[0]}%`]
+      );
+      if (tRes.rows.length > 0) therapistId = tRes.rows[0].therapist_id;
+    }
+
+    const origin = req.get('origin') || 'http://localhost:3004';
+    const shortCode = await createShortUrl(`${origin}/booking-confirmation/${booking_id}`);
+    const publicBookingCheckinUrl = `${origin}/r/${shortCode}`;
+
+    await pool.query(
+      `INSERT INTO bookings (
+        booking_id, invitee_id, source, invitee_name, invitee_email, invitee_phone, invitee_timezone,
+        booking_resource_name, booking_start_at, booking_end_at,
+        invitee_payment_amount, invitee_payment_currency,
+        booking_status, payment_status, invitee_payment_gateway,
+        razorpay_order_id, public_booking_checkin_url,
+        booking_host_name, therapist_id, booking_mode, mask_id,
+        booking_invitee_time, booking_host_time
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+      [
+        booking_id, invitee_id, 'Direct Booking',
+        payload.clientName || 'Unknown Client',
+        payload.clientEmail,
+        payload.clientWhatsApp,
+        payload.timezone || 'Asia/Kolkata',
+        payload.therapyName || 'Session',
+        startAt.toISOString(), endAt.toISOString(),
+        payload.amount || 0, 'INR',
+        'payment_pending', 'Pending', 'Razorpay',
+        payload.razorpayOrderId,
+        publicBookingCheckinUrl,
+        therapistName, therapistId,
+        payload.sessionMode === 'online' ? 'Online Video Call' : 'In Person (Pune)',
+        maskId,
+        '', ''
+      ]
+    );
+
+    res.json({ success: true, booking_id });
+  } catch (error: any) {
+    console.error('Error creating pending booking:', error);
+    res.status(500).json({ error: error.message || 'Failed to create pending booking' });
   }
 });
 
@@ -7503,15 +7807,28 @@ function startPaymentLinkExpiryCron() {
   console.log('[Cron] Starting Payment Link Expiry background job...');
   setInterval(async () => {
     try {
+      // Expire old-style "waiting_for_payment" links
       const result = await pool.query(
-        `UPDATE bookings 
+        `UPDATE bookings
          SET booking_status = 'Canceled', updated_at = NOW()
          WHERE booking_status = 'waiting_for_payment'
            AND created_at < NOW() - INTERVAL '15 minutes'
-         RETURNING booking_id, invitee_email, booking_start_at`
+         RETURNING booking_id`
       );
       if (result.rows.length > 0) {
-        console.log(`[Cron] Expired ${result.rows.length} unpaid payment links and freed up their slots.`);
+        console.log(`[Cron] Expired ${result.rows.length} waiting_for_payment links.`);
+      }
+
+      // Expire "payment_pending" bookings (created via create-pending-booking before Razorpay)
+      const pending = await pool.query(
+        `UPDATE bookings
+         SET booking_status = 'payment_failed', payment_status = 'Failed', updated_at = NOW()
+         WHERE booking_status = 'payment_pending'
+           AND created_at < NOW() - INTERVAL '15 minutes'
+         RETURNING booking_id`
+      );
+      if (pending.rows.length > 0) {
+        console.log(`[Cron] Expired ${pending.rows.length} unpaid pending bookings (slots freed).`);
       }
     } catch (err) {
       console.error('[Cron] Error expiring payment links:', err);
@@ -7724,6 +8041,10 @@ async function runStartupMigrations() {
     await pool.query(`ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS form_questions JSONB DEFAULT '[]'::jsonb`);
     await pool.query(`ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS schedule_id INTEGER`);
     await pool.query(`ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS slug TEXT`);
+    // Bookings: payment tracking columns
+    await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_id TEXT`);
+    await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_status TEXT`);
+    await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS razorpay_order_id TEXT`);
     console.log('✅ Startup migrations complete');
   } catch (err) {
     console.error('⚠️ Startup migration warning (non-fatal):', err);

@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import Lottie from 'lottie-react';
 import sessionBookedAnimation from '../session-booked.json';
 import {
-  ChevronLeft, ChevronRight, Globe, Clock, Check,
+  ChevronLeft, ChevronRight, Globe, Clock, Check, X,
   CalendarCheck, User, Mail, MessageSquare, Video, MapPin, CreditCard,
-  MessageCircle, Info, Calendar as CalendarIcon, ExternalLink, ChevronDown
+  MessageCircle, Info, Calendar as CalendarIcon, ExternalLink, ChevronDown,
+  AlertCircle
 } from 'lucide-react';
 import moment from 'moment';
 import './BookingPage.css';
@@ -69,6 +70,8 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   const [paymentConfig, setPaymentConfig] = useState<any>(null);
   const [countdown, setCountdown] = useState(5);
   const [redirectUrl, setRedirectUrl] = useState<string | null>(null);
+  const [pendingBookingId, setPendingBookingId] = useState<string | null>(null);
+  const [paymentFailed, setPaymentFailed] = useState(false);
 
   // Timezone support
   const [clientTimezone, setClientTimezone] = useState(() => {
@@ -362,58 +365,92 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
     }
 
     try {
-        // --- RAZORPAY FLOW ---
-        const orderResponse = await fetch('/api/razorpay/create-order', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ amount: amountVal }),
-        });
+      // Step 1 — Create Razorpay order
+      const orderResponse = await fetch('/api/razorpay/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: amountVal }),
+      });
+      if (!orderResponse.ok) {
+        const errorMsg = await orderResponse.json();
+        throw new Error(errorMsg.error || 'Failed to initialize payment order');
+      }
+      const orderData = await orderResponse.json();
 
-        if (!orderResponse.ok) {
-          const errorMsg = await orderResponse.json();
-          throw new Error(errorMsg.error || 'Failed to initialize payment order');
-        }
+      // Step 2 — Create a pending booking to hold the slot (15-min window)
+      const pendingRes = await fetch('/api/create-pending-booking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, razorpayOrderId: orderData.order_id }),
+      });
+      if (!pendingRes.ok) {
+        const pendingErr = await pendingRes.json();
+        throw new Error(pendingErr.error || 'Failed to reserve booking slot');
+      }
+      const { booking_id: newPendingId } = await pendingRes.json();
+      setPendingBookingId(newPendingId);
 
-        const orderData = await orderResponse.json();
-        const rzpKeyId = paymentConfig.publicKey || import.meta.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_G751156172c7';
+      const rzpKeyId = paymentConfig.publicKey || import.meta.env.VITE_RAZORPAY_KEY_ID;
 
-        const options = {
-          key: rzpKeyId,
-          amount: orderData.amount,
-          currency: orderData.currency,
-          name: 'SafeStories',
-          description: `${payload.therapyName} with ${payload.therapistName}`,
-          order_id: orderData.order_id,
-          handler: async function (response: any) {
-            console.log('💳 Razorpay Payment Succeeded:', response.razorpay_payment_id);
-            const paymentDetails = {
-              razorpay_payment_id: response.razorpay_payment_id,
-              razorpay_order_id: response.razorpay_order_id,
-              razorpay_signature: response.razorpay_signature,
-              payment_id: response.razorpay_payment_id,
-              payment_gateway: 'Razorpay',
-              payment_name: `${payload.clientName} - ${payload.therapyName}`
-            };
-            await submitBooking(paymentDetails);
-          },
-          prefill: {
-            name: payload.clientName,
-            email: payload.clientEmail,
-            contact: payload.clientWhatsApp
-          },
-          theme: {
-            color: '#0f766e' // Brand premium Teal matching SafeStories
-          },
-          modal: {
-            ondismiss: function () {
-              setIsSubmitting(false);
-              console.log('Payment checkout closed by user');
+      // Step 3 — Open Razorpay modal
+      const options = {
+        key: rzpKeyId,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        name: 'SafeStories',
+        description: `${payload.therapyName} with ${payload.therapistName}`,
+        order_id: orderData.order_id,
+        handler: async function (response: any) {
+          console.log('💳 Razorpay payment succeeded:', response.razorpay_payment_id);
+          try {
+            // Step 4 — Verify signature server-side + confirm booking + send notifications
+            const verifyRes = await fetch('/api/razorpay/verify-payment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                bookingId: newPendingId,
+                razorpayPaymentId: response.razorpay_payment_id,
+                razorpayOrderId: response.razorpay_order_id,
+                razorpaySignature: response.razorpay_signature,
+                ...payload
+              }),
+            });
+            if (verifyRes.ok) {
+              const verifyData = await verifyRes.json();
+              setBookedDetails(payload);
+              if (isPublic) {
+                setRedirectUrl(`${window.location.origin}/booking-confirmation/${verifyData.booking_id}`);
+              }
+              setShowSuccessModal(true);
+            } else {
+              const errData = await verifyRes.json();
+              alert(`Payment verification failed: ${errData.error || 'Please contact support.'}`);
             }
+          } catch (verifyErr: any) {
+            console.error('❌ verify-payment error:', verifyErr);
+            alert('Error confirming payment. Please contact support with your payment reference.');
+          } finally {
+            setIsSubmitting(false);
           }
-        };
+        },
+        prefill: {
+          name: payload.clientName,
+          email: payload.clientEmail,
+          contact: payload.clientWhatsApp
+        },
+        theme: { color: '#0f766e' },
+        modal: {
+          ondismiss: function () {
+            // Payment window closed without success — show failure UI
+            setPaymentFailed(true);
+            setIsSubmitting(false);
+            console.log('[Razorpay] Checkout dismissed without payment');
+          }
+        }
+      };
 
-        const razorpay = new (window as any).Razorpay(options);
-        razorpay.open();
+      const razorpay = new (window as any).Razorpay(options);
+      razorpay.open();
     } catch (err: any) {
       console.error('❌ Payment checkout error:', err);
       alert(err.message || 'Payment initiation failed. Please try again.');
@@ -875,6 +912,46 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
               >
                 Done
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Payment Failed Modal */}
+        {paymentFailed && !showSuccessModal && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[1000] p-4 animate-in fade-in duration-300">
+            <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl text-center">
+              <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-5">
+                <AlertCircle size={30} className="text-red-500" />
+              </div>
+              <h2 className="text-xl font-bold text-gray-900 mb-2">Payment Incomplete</h2>
+              <p className="text-gray-500 text-sm mb-1">
+                Your slot is held for <strong>15 minutes</strong>. You can retry payment before it expires.
+              </p>
+              <p className="text-gray-400 text-xs mb-7">
+                If your money was deducted, it will be automatically refunded within 5–7 business days.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setPaymentFailed(false);
+                    setPendingBookingId(null);
+                    handleBookingSubmit();
+                  }}
+                  className="flex-1 bg-teal-700 text-white font-semibold py-3 rounded-xl hover:bg-teal-800 transition-colors"
+                >
+                  Try Again
+                </button>
+                <button
+                  onClick={() => {
+                    setPaymentFailed(false);
+                    setPendingBookingId(null);
+                    setView('selection');
+                  }}
+                  className="flex-1 border border-gray-200 text-gray-600 font-semibold py-3 rounded-xl hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         )}

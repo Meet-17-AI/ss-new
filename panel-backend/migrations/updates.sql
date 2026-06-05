@@ -15,3 +15,8 @@ ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS requires_tnc BOOLEAN NOT N
 ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS payment_gateway TEXT DEFAULT 'Razorpay';
 ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS form_questions JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS schedule_id INTEGER;
+
+-- bookings: payment tracking columns
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_id TEXT;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_status TEXT;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS razorpay_order_id TEXT;
