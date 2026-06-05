@@ -10,7 +10,7 @@ const resend = new Resend(resendApiKey);
 // 1. SOS Alert Admin
 export async function sendSOSAdminEmail(booking_id: string, adminEmail: string, details: any) {
   const mailOptions = {
-    from: 'SafeStories <no-reply@safestories.in>',
+    from: 'Resend <onboarding@resend.dev>',
     to: adminEmail,
     subject: `SOS Alert Raised | Immediate Attention Required - ${details.clientName}`,
     html: `<p>Hello!<br /><br /> An SOS has been raised following a therapy session. Please review the details below and initiate the required safety steps as per risk protocol. <br /><br />Client Details <br />● Client Name:&nbsp;${details.clientName}<br />● Client Phone Number:&nbsp;${details.clientPhone}<br /> ● Therapist Name:&nbsp;${details.therapistName}<br />● Last Session Date &amp; Time:&nbsp;${details.sessionTimings}<br />● Mode of Session:&nbsp;${details.mode}<br />● Number of sessions:&nbsp;${details.totalCompletedBookings}<br />● Emergency Contact Name:&nbsp;${details.emergencyContactName}<br />●&nbsp;Emergency Contact Number:&nbsp;${details.emergencyContactNumber}<br /><br />SOS Summary <br />● Risk Severity (1-5):&nbsp;${details.severityLevel}<br />● Current Risk Indicators:&nbsp;${details.currentRiskIndicator}<br />● Risk summary:&nbsp;${details.riskSummary}<br /><br />Link to client&rsquo;s documentation profile: ${details.documentationLink}.<br /><br /><br />Thank you for responding promptly and supporting client safety.</p>`
@@ -34,7 +34,7 @@ export async function sendSOSAdminEmail(booking_id: string, adminEmail: string, 
 // OTP Email for Admin
 export async function sendAdminOTPEmail(adminEmail: string, action: string, otp: string) {
   const mailOptions = {
-    from: 'SafeStories <no-reply@safestories.in>',
+    from: 'Resend <onboarding@resend.dev>',
     to: adminEmail,
     subject: `Admin Action OTP - ${action}`,
     html: `<p>Hello Admin,<br /><br />An OTP has been requested for the following sensitive action: <strong>${action}</strong>.<br /><br />Your OTP is: <strong>${otp}</strong><br /><br />This OTP is valid for 5 minutes. If you did not request this, please ignore this email.</p>`

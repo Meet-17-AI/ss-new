@@ -318,7 +318,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
   };
 
   const handleVerifyOtp = async () => {
-    if (!otpInput || !pendingOtpId || !pendingTherapist) return;
+    if (!otpInput || !pendingOtpId || !pendingTherapist || otpLoading) return;
     setOtpLoading(true);
     try {
       const res = await fetch('/api/otp/verify', {

@@ -70,6 +70,7 @@ export function TherapyCalendars() {
     if (!confirmDialog || confirmDialog.type !== 'delete') return;
     try {
       setActionLoading(true);
+      setError('');
       const res = await fetch('/api/otp/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -93,8 +94,9 @@ export function TherapyCalendars() {
   };
 
   const handleVerifyDeleteOtp = async () => {
-    if (!otpInput || !pendingOtpId || !pendingDeleteId) return;
+    if (!otpInput || !pendingOtpId || !pendingDeleteId || otpLoading) return;
     setOtpLoading(true);
+    setError('');
     try {
       const res = await fetch('/api/otp/verify', {
         method: 'POST',
@@ -103,6 +105,7 @@ export function TherapyCalendars() {
       });
       const data = await res.json();
       if (data.success) {
+        setError('');
         // Now actually delete
         const delRes = await fetch(`/api/therapy-calendars/${pendingDeleteId}`, { method: 'DELETE' });
         if (!delRes.ok) throw new Error('Failed to delete calendar');
