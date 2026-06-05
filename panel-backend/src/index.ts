@@ -7572,71 +7572,98 @@ app.get('/api/therapist-schedules/:therapist_id', async (req, res) => {
 
 app.post('/api/services', async (req, res) => {
   try {
-    const { 
-      title, duration, type, therapy_type, description, charges, therapist_id, therapist_name, 
+    const {
+      title, duration, type, therapy_type, description, charges, therapist_id, therapist_name,
       payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled
     } = req.body;
-    
+
+    if (!title || !therapist_name) {
+      return res.status(400).json({ error: 'title and therapist_name are required' });
+    }
+
     // Slug stored WITH leading "/" so it matches the /api/public/services/:slug lookup
-    const slugBase = '/' + title.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + therapist_name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Math.random().toString(36).substring(2, 7);
+    const safeTitle = String(title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const safeName  = String(therapist_name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const slugBase  = `/${safeTitle}-${safeName}-${Math.random().toString(36).substring(2, 7)}`;
 
     const result = await pool.query(`
       INSERT INTO therapy_services (
         title, duration, type, therapy_type, description, charges, slug, therapist_id, therapist_name,
         payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled, is_active
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, true)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, true)
       RETURNING *
     `, [
-      title, duration || '50 Mins', type, therapy_type, description, charges, slugBase, therapist_id, therapist_name,
-      payment_gateway || 'Razorpay', schedule_id || null, JSON.stringify(form_questions || []),
-      requires_tnc ?? true, is_payment_enabled ?? true
+      title,
+      duration || '50 Mins',
+      type || 'Online',
+      therapy_type || null,
+      description || '',
+      charges || '0',
+      slugBase,
+      therapist_id,
+      therapist_name,
+      payment_gateway || 'Razorpay',
+      schedule_id ? Number(schedule_id) : null,
+      JSON.stringify(form_questions || []),
+      requires_tnc ?? true,
+      is_payment_enabled ?? true
     ]);
-    
+
     res.json(result.rows[0]);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error creating therapy service:', error);
-    res.status(500).json({ error: 'Failed to create therapy service' });
+    res.status(500).json({ error: error.message || 'Failed to create therapy service' });
   }
 });
 
 app.put('/api/services/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { 
-      title, type, therapy_type, description, charges, therapist_id, therapist_name, 
+    const {
+      title, type, therapy_type, description, charges, therapist_id, therapist_name,
       payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled
     } = req.body;
-    
+
     const result = await pool.query(`
-      UPDATE therapy_services 
-      SET title = COALESCE($1, title),
-          type = COALESCE($2, type),
-          therapy_type = COALESCE($3, therapy_type),
-          description = COALESCE($4, description),
-          charges = COALESCE($5, charges),
-          therapist_id = COALESCE($6, therapist_id),
-          therapist_name = COALESCE($7, therapist_name),
-          payment_gateway = COALESCE($8, payment_gateway),
-          schedule_id = COALESCE($9, schedule_id),
-          form_questions = COALESCE($10::jsonb, form_questions),
-          requires_tnc = COALESCE($11, requires_tnc),
-          is_payment_enabled = COALESCE($12, is_payment_enabled)
+      UPDATE therapy_services
+      SET title             = COALESCE($1,  title),
+          type              = COALESCE($2,  type),
+          therapy_type      = COALESCE($3,  therapy_type),
+          description       = COALESCE($4,  description),
+          charges           = COALESCE($5,  charges),
+          therapist_id      = COALESCE($6,  therapist_id),
+          therapist_name    = COALESCE($7,  therapist_name),
+          payment_gateway   = COALESCE($8,  payment_gateway),
+          schedule_id       = COALESCE($9,  schedule_id),
+          form_questions    = COALESCE($10::jsonb, form_questions),
+          requires_tnc      = COALESCE($11, requires_tnc),
+          is_payment_enabled= COALESCE($12, is_payment_enabled)
       WHERE id = $13
       RETURNING *
     `, [
-      title, type, therapy_type, description, charges, therapist_id, therapist_name, 
-      payment_gateway, schedule_id, form_questions ? JSON.stringify(form_questions) : null, 
-      requires_tnc, is_payment_enabled, id
+      title || null,
+      type || null,
+      therapy_type || null,
+      description || null,
+      charges || null,
+      therapist_id || null,
+      therapist_name || null,
+      payment_gateway || null,
+      schedule_id ? Number(schedule_id) : null,
+      form_questions ? JSON.stringify(form_questions) : null,
+      requires_tnc ?? null,
+      is_payment_enabled ?? null,
+      id
     ]);
-    
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Therapy service not found' });
     }
     res.json(result.rows[0]);
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error updating therapy service:', error);
-    res.status(500).json({ error: 'Failed to update therapy service' });
+    res.status(500).json({ error: error.message || 'Failed to update therapy service' });
   }
 });
 
@@ -7687,8 +7714,25 @@ io.on('connection', (socket) => {
   });
 });
 
-httpServer.listen(PORT, () => {
+async function runStartupMigrations() {
+  try {
+    await pool.query(`ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS therapy_type TEXT`);
+    await pool.query(`ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true`);
+    await pool.query(`ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS is_payment_enabled BOOLEAN NOT NULL DEFAULT true`);
+    await pool.query(`ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS requires_tnc BOOLEAN NOT NULL DEFAULT true`);
+    await pool.query(`ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS payment_gateway TEXT DEFAULT 'Razorpay'`);
+    await pool.query(`ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS form_questions JSONB DEFAULT '[]'::jsonb`);
+    await pool.query(`ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS schedule_id INTEGER`);
+    await pool.query(`ALTER TABLE therapy_services ADD COLUMN IF NOT EXISTS slug TEXT`);
+    console.log('✅ Startup migrations complete');
+  } catch (err) {
+    console.error('⚠️ Startup migration warning (non-fatal):', err);
+  }
+}
+
+httpServer.listen(PORT, async () => {
   console.log(`\nAPI server running on http://localhost:${PORT}`);
+  await runStartupMigrations();
   startDashboardApiBookingSync();
   startPaymentLinkExpiryCron();
 }).on('error', (err: any) => {

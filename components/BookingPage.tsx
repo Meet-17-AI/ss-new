@@ -149,10 +149,20 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   };
   const isCoupleSession = session.title.toLowerCase().includes('couple');
   const isAdolescentSession = session.title.toLowerCase().includes('adolescent');
-  const safeDesc = session.detailedDescription || session.description || '';
-  const descLines = safeDesc.split('\n').filter(Boolean);
-  const preview = descLines.slice(0, 3);
-  const hasMore = descLines.length > 3;
+  const rawDesc = session.detailedDescription || session.description || '';
+
+  // If description looks like HTML (from Quill editor), render it as HTML.
+  // Otherwise treat as plain markdown-style text.
+  const isHtml = /<[a-z][\s\S]*>/i.test(rawDesc);
+
+  // Strip unsafe tags but keep formatting (p, strong, em, ul, ol, li, br, h1-h6)
+  const sanitizeHtml = (html: string): string => {
+    return html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/on\w+="[^"]*"/gi, '')
+      .replace(/on\w+='[^']*'/gi, '');
+  };
 
   // Auto-redirect countdown when payment link is set
   useEffect(() => {
@@ -444,8 +454,6 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
     return days;
   };
 
-  const visibleLines = showFull ? descLines : preview;
-
   const COUNTRY_CODES = [
     { code: '+91', label: 'IND' },
     { code: '+1', label: 'USA/CAN' },
@@ -488,18 +496,25 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
 
           <h1 className="bp-title">{session.title}</h1>
 
-          <div className="bp-desc">
-            {safeDesc.split('\n\n').map((paragraph, i) => {
-              const parts = paragraph.split('**');
-              return (
-                <p key={i} className="bp-desc-line" style={i > 0 ? { marginTop: 16 } : {}}>
-                  {parts.map((part, index) =>
-                    index % 2 === 1 ? <strong key={index}>{part}</strong> : part
-                  )}
-                </p>
-              );
-            })}
-          </div>
+          {isHtml ? (
+            <div
+              className="bp-desc bp-desc-html"
+              dangerouslySetInnerHTML={{ __html: sanitizeHtml(rawDesc) }}
+            />
+          ) : (
+            <div className="bp-desc">
+              {rawDesc.split('\n\n').filter(Boolean).map((paragraph, i) => {
+                const parts = paragraph.split('**');
+                return (
+                  <p key={i} className="bp-desc-line" style={i > 0 ? { marginTop: 14 } : {}}>
+                    {parts.map((part, index) =>
+                      index % 2 === 1 ? <strong key={index}>{part}</strong> : part
+                    )}
+                  </p>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {view === 'selection' ? (
@@ -543,26 +558,21 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
               </div>
 
               {/* Timezone selector */}
-              <div style={{ position: 'relative', marginBottom: 12 }}>
-                <button
-                  onClick={() => setShowTzDropdown(v => !v)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#21615D', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', width: '100%' }}
-                >
+              <div className="bp-tz-wrapper">
+                <button className="bp-tz-btn" onClick={() => setShowTzDropdown(v => !v)}>
                   <Globe size={13} />
-                  <span style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span className="bp-tz-label">
                     {getTzAbbr(clientTimezone)} — {COMMON_TIMEZONES.find(t => t.value === clientTimezone)?.label || clientTimezone}
                   </span>
                   <ChevronDown size={13} />
                 </button>
                 {showTzDropdown && (
-                  <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.1)', maxHeight: 220, overflowY: 'auto' }}>
+                  <div className="bp-tz-dropdown">
                     {COMMON_TIMEZONES.map(tz => (
                       <div
                         key={tz.value}
                         onClick={() => { setClientTimezone(tz.value); setShowTzDropdown(false); }}
-                        style={{ padding: '8px 12px', fontSize: 12, cursor: 'pointer', background: clientTimezone === tz.value ? '#f0fdf4' : 'transparent', color: clientTimezone === tz.value ? '#21615D' : '#374151', fontWeight: clientTimezone === tz.value ? 600 : 400 }}
-                        onMouseEnter={e => (e.currentTarget.style.background = '#f9fafb')}
-                        onMouseLeave={e => (e.currentTarget.style.background = clientTimezone === tz.value ? '#f0fdf4' : 'transparent')}
+                        className={`bp-tz-option${clientTimezone === tz.value ? ' active' : ''}`}
                       >
                         {tz.label}
                       </div>
