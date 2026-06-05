@@ -138,6 +138,24 @@ export function TherapyCalendars() {
     }
   };
 
+  const handleActivateCalendar = async () => {
+    if (!confirmDialog || confirmDialog.type !== 'activate') return;
+    try {
+      setActionLoading(true);
+      const res = await fetch(`/api/therapy-calendars/${confirmDialog.id}/activate`, { method: 'PATCH' });
+      if (!res.ok) throw new Error('Failed to activate calendar');
+      setCalendars(calendars.map(c =>
+        c.id === confirmDialog.id ? { ...c, is_active: true } : c
+      ));
+      setConfirmDialog(null);
+      setExpandedId(null);
+    } catch (err: any) {
+      setError(err.message || 'Failed to activate calendar');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col p-6 animate-fade-in bg-gray-50">
       <div className="flex justify-between items-center mb-6">
