@@ -3437,6 +3437,7 @@ app.get('/api/appointments', async (req, res) => {
       LEFT JOIN free_consultation_pretherapy_notes fcn ON b.booking_id = fcn.booking_id
       LEFT JOIN pretherapy_call_forms pcf ON b.booking_id::text = pcf.booking_id::text
       LEFT JOIN client_case_history cch ON b.booking_id = cch.booking_id
+      WHERE b.booking_status NOT IN ('payment_pending', 'payment_failed')
       ORDER BY b.booking_start_at DESC
     `);
 
@@ -5077,56 +5078,81 @@ app.get('/api/payments', async (req, res) => {
   try {
     const { status } = req.query;
 
-    let query = 'SELECT * FROM dashboard_api_booking WHERE payment_amount IS NOT NULL AND payment_amount > 0';
-
-    if (status && status !== 'all_payments') {
-      if (status === 'completed') {
-        query += " AND payment_status = 'Completed'";
-      } else if (status === 'pending') {
-        query += " AND payment_status = 'Pending'";
-      } else if (status === 'expired') {
-        query += " AND payment_status = 'Failed'";
-      }
-    }
-
-    query += ' ORDER BY created_at DESC';
-
-    const result = await pool.query(query);
-
-    const payments = result.rows.map(row => {
+    // Helper to format a booking row into the payments shape
+    const formatRow = (row: any, startAtField: string, endAtField: string) => {
       let formattedTimings = 'N/A';
-      if (row.start_at) {
-        const date = new Date(row.start_at);
-        const endDate = new Date(row.end_at || date.getTime() + (50 * 60 * 1000));
-
-        const formatTime = (d: Date) => {
-          const hours = d.getHours();
-          const minutes = d.getMinutes();
-          const ampm = hours >= 12 ? 'PM' : 'AM';
-          const hour12 = hours % 12 || 12;
-          return `${hour12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+      const startRaw = row[startAtField];
+      if (startRaw) {
+        const date = new Date(startRaw);
+        const endDate = new Date(row[endAtField] || date.getTime() + 50 * 60 * 1000);
+        const pad = (n: number) => String(n).padStart(2, '0');
+        const fmt = (d: Date) => {
+          const h = d.getHours(); const m = d.getMinutes();
+          const ampm = h >= 12 ? 'PM' : 'AM'; const h12 = h % 12 || 12;
+          return `${h12}:${pad(m)} ${ampm}`;
         };
-
-        const weekday = date.toLocaleDateString('en-US', { weekday: 'long' });
-        const month = date.toLocaleDateString('en-US', { month: 'short' });
-        const day = date.getDate();
-        const year = date.getFullYear();
-
-        formattedTimings = `${weekday}, ${month} ${day}, ${year} at ${formatTime(date)} - ${formatTime(endDate)} IST`;
+        const weekday = date.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
+        const month   = date.toLocaleDateString('en-US', { month: 'short',  timeZone: 'Asia/Kolkata' });
+        const day     = date.toLocaleDateString('en-US', { day: 'numeric',  timeZone: 'Asia/Kolkata' });
+        const year    = date.toLocaleDateString('en-US', { year: 'numeric', timeZone: 'Asia/Kolkata' });
+        formattedTimings = `${weekday}, ${month} ${day}, ${year} at ${fmt(date)} - ${fmt(endDate)} IST`;
       }
-
       return {
+        booking_id: row.booking_id,
         client_name: row.invitee_name,
         session_name: row.booking_resource_name,
         session_timings: formattedTimings,
         payment_status: row.payment_status,
         invitee_phone: row.invitee_phone || '',
         invitee_email: row.invitee_email || '',
-        payment_amount: row.payment_amount || 0
+        payment_amount: row.payment_amount || row.invitee_payment_amount || 0,
+        razorpay_order_id: row.razorpay_order_id || null,
+        payment_id: row.payment_id || null,
+        created_at: row.created_at
       };
-    });
+    };
 
-    res.json(payments);
+    let rows: any[] = [];
+
+    if (!status || status === 'all_payments' || status === 'completed') {
+      // Completed payments: from dashboard_api_booking (existing Calendly + direct confirmed bookings)
+      const dRes = await pool.query(
+        `SELECT *, invitee_name, booking_resource_name, payment_amount, payment_status
+         FROM dashboard_api_booking
+         WHERE payment_amount IS NOT NULL AND payment_amount > 0
+           AND payment_status = 'Completed'
+         ORDER BY created_at DESC`
+      );
+      rows.push(...dRes.rows.map(r => formatRow(r, 'start_at', 'end_at')));
+    }
+
+    if (!status || status === 'all_payments' || status === 'pending') {
+      // Pending payments: bookings table (payment_pending or Pending payment_status, amount > 0)
+      const pRes = await pool.query(
+        `SELECT *, invitee_payment_amount AS payment_amount
+         FROM bookings
+         WHERE (booking_status = 'payment_pending' OR payment_status = 'Pending')
+           AND invitee_payment_amount IS NOT NULL AND invitee_payment_amount > 0
+         ORDER BY created_at DESC`
+      );
+      rows.push(...pRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
+    }
+
+    if (!status || status === 'all_payments' || status === 'expired') {
+      // Failed payments
+      const fRes = await pool.query(
+        `SELECT *, invitee_payment_amount AS payment_amount
+         FROM bookings
+         WHERE booking_status = 'payment_failed' OR payment_status = 'Failed'
+         ORDER BY created_at DESC`
+      );
+      rows.push(...fRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
+    }
+
+    // Sort combined results by created_at desc
+    rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    res.json(rows);
   } catch (error) {
     console.error('Error fetching payments:', error);
     res.status(500).json({ error: 'Failed to fetch payments' });
@@ -5802,6 +5828,25 @@ app.post('/api/razorpay/create-order', async (req, res) => {
   } catch (error: any) {
     console.error('Error creating Razorpay order:', error);
     res.status(500).json({ error: error.message || 'Error communicating with Razorpay' });
+  }
+});
+
+// Called by frontend payment.failed event to mark a pending booking as failed immediately
+// (rather than waiting for the 15-min cron) when a Razorpay payment attempt fails.
+app.post('/api/mark-payment-failed', async (req, res) => {
+  try {
+    const { bookingId, razorpayPaymentId } = req.body;
+    if (!bookingId) return res.status(400).json({ error: 'bookingId required' });
+    await pool.query(
+      `UPDATE bookings
+       SET payment_status = 'Failed', payment_id = COALESCE($1, payment_id), updated_at = NOW()
+       WHERE booking_id = $2 AND booking_status = 'payment_pending'`,
+      [razorpayPaymentId || null, bookingId]
+    );
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('Error marking payment failed:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 

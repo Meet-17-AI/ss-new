@@ -450,6 +450,26 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
       };
 
       const razorpay = new (window as any).Razorpay(options);
+
+      // Capture payment failure event (fires while modal is still open for retry)
+      razorpay.on('payment.failed', function (response: any) {
+        console.warn('[Razorpay] Payment attempt failed:', {
+          code: response?.error?.code,
+          description: response?.error?.description,
+          reason: response?.error?.reason,
+          payment_id: response?.error?.metadata?.payment_id,
+          order_id: response?.error?.metadata?.order_id
+        });
+        // Mark the pending booking as payment_failed so it shows correctly in admin panel
+        if (newPendingId) {
+          fetch('/api/mark-payment-failed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bookingId: newPendingId, razorpayPaymentId: response?.error?.metadata?.payment_id })
+          }).catch(() => {}); // best-effort, don't block
+        }
+      });
+
       razorpay.open();
     } catch (err: any) {
       console.error('❌ Payment checkout error:', err);
