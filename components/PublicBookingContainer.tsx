@@ -22,14 +22,19 @@ export const PublicBookingContainer: React.FC<PublicBookingContainerProps> = ({ 
         const response = await fetch(`/api/public/services/${slug}`);
         if (response.ok) {
           const dbService = await response.json();
-          foundSession = dbService;
+          // Map all DB fields so BookingPage gets the full service config
+          foundSession = {
+            ...dbService,
+            // BookingPage expects 'owner' as the therapist name
+            owner: dbService.owner || dbService.therapist_name,
+          };
           therapistName = dbService.owner;
         }
       } catch (err) {
         console.error('Error fetching public service from DB:', err);
       }
 
-      // 2. Fallback to hardcoded therapistData if not found in DB
+      // 2. Fallback to hardcoded therapistData if not found in DB (legacy bookings)
       if (!foundSession) {
         for (const [name, data] of Object.entries(therapistData)) {
           const match = data.services.find(s => s.slug === `/${slug}`);

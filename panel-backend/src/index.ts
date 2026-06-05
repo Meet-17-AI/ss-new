@@ -5503,10 +5503,23 @@ app.post('/api/fetch-slots', async (req, res) => {
     console.log('--- NATIVE FETCH SLOTS ---');
 
     const therapistName = payload.selectedTherapist || payload.therapistName;
-    let scheduleId = null;
-    let therapistId = null;
+    let scheduleId: number | null = null;
+    let therapistId: string | null = null;
 
-    if (therapistName === 'SafeStories') {
+    // When the service already knows its own schedule, use it directly (most reliable path)
+    if (payload.scheduleId) {
+      scheduleId = Number(payload.scheduleId);
+      // Still resolve therapistId for booking deconfliction (filter out existing bookings)
+      if (payload.therapistId) {
+        therapistId = payload.therapistId;
+      } else if (therapistName && therapistName !== 'SafeStories') {
+        const tRes = await pool.query(
+          'SELECT therapist_id FROM therapists WHERE TRIM(LOWER(name)) = $1 LIMIT 1',
+          [therapistName.trim().toLowerCase()]
+        );
+        if (tRes.rows.length > 0) therapistId = tRes.rows[0].therapist_id;
+      }
+    } else if (therapistName === 'SafeStories') {
       scheduleId = 999999;
     } else if (therapistName) {
       const therapistResult = await pool.query(
@@ -5653,30 +5666,38 @@ app.delete('/api/services/:id', async (req, res) => {
 app.get('/api/public/services/:slug', async (req, res) => {
   try {
     let { slug } = req.params;
-    if (!slug.startsWith('/')) {
-      slug = '/' + slug;
-    }
-    const result = await pool.query('SELECT * FROM therapy_services WHERE slug = $1 AND is_active = true', [slug]);
+    // Normalise: stored slugs always have a leading "/"
+    if (!slug.startsWith('/')) slug = '/' + slug;
+
+    const result = await pool.query(
+      'SELECT * FROM therapy_services WHERE slug = $1 AND is_active = true',
+      [slug]
+    );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Service not found' });
     }
-    const service = result.rows[0];
+    const s = result.rows[0];
     res.json({
-      title: service.title,
-      duration: service.duration,
-      type: service.type,
-      description: service.description,
-      detailedDescription: service.detailed_description,
-      editViewDescription: service.edit_view_description,
-      charges: service.charges,
-      slug: service.slug,
-      label: service.label,
-      owner: service.therapist_name,
-      therapist_id: service.therapist_id,
-      schedule_id: service.schedule_id
+      id: s.id,
+      title: s.title,
+      duration: s.duration,
+      type: s.type,
+      therapy_type: s.therapy_type,
+      description: s.description,
+      // "detailedDescription" is what BookingPage renders — use the description column
+      detailedDescription: s.description || '',
+      charges: s.charges,
+      slug: s.slug,
+      owner: s.therapist_name,
+      therapist_id: s.therapist_id,
+      schedule_id: s.schedule_id,
+      form_questions: s.form_questions || [],
+      is_payment_enabled: s.is_payment_enabled ?? true,
+      payment_gateway: s.payment_gateway || 'Razorpay',
+      requires_tnc: s.requires_tnc ?? true,
     });
   } catch (error) {
-    console.error('Error fetching service:', error);
+    console.error('Error fetching public service:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -7556,18 +7577,19 @@ app.post('/api/services', async (req, res) => {
       payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled
     } = req.body;
     
-    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + therapist_name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Math.random().toString(36).substring(2, 7);
-    
+    // Slug stored WITH leading "/" so it matches the /api/public/services/:slug lookup
+    const slugBase = '/' + title.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + therapist_name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + Math.random().toString(36).substring(2, 7);
+
     const result = await pool.query(`
       INSERT INTO therapy_services (
-        title, duration, type, therapy_type, description, charges, slug, therapist_id, therapist_name, 
-        payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled
+        title, duration, type, therapy_type, description, charges, slug, therapist_id, therapist_name,
+        payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled, is_active
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, true)
       RETURNING *
     `, [
-      title, duration || '50 Mins', type, therapy_type, description, charges, slug, therapist_id, therapist_name, 
-      payment_gateway || 'Razorpay', schedule_id || null, JSON.stringify(form_questions || []), 
+      title, duration || '50 Mins', type, therapy_type, description, charges, slugBase, therapist_id, therapist_name,
+      payment_gateway || 'Razorpay', schedule_id || null, JSON.stringify(form_questions || []),
       requires_tnc ?? true, is_payment_enabled ?? true
     ]);
     

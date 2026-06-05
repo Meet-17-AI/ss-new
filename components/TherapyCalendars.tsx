@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, User, Search, Loader, Plus } from 'lucide-react';
+import { Calendar, User, Search, Loader, Plus, Copy, ExternalLink } from 'lucide-react';
 import { Toast } from './Toast';
 import { useNavigate } from 'react-router-dom';
 
@@ -30,7 +30,16 @@ export function TherapyCalendars() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [error, setError] = useState('');
+  const [copiedId, setCopiedId] = useState<number | null>(null);
   const navigate = useNavigate();
+
+  const handleCopy = (e: React.MouseEvent, link: string, id: number) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(link).then(() => {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    });
+  };
 
   useEffect(() => {
     fetchData();
@@ -109,10 +118,13 @@ export function TherapyCalendars() {
                     Therapist Name
                   </th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Calendar Link
+                    Public Booking Link
                   </th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Sync Status
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
                   </th>
                 </tr>
               </thead>
@@ -140,15 +152,18 @@ export function TherapyCalendars() {
                             <div className="text-sm font-medium text-gray-900">{item.therapist_name}</div>
                           </div>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                          <a 
-                            href={fullLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm text-teal-600 hover:text-teal-800 hover:underline flex items-center gap-1"
-                          >
-                            {fullLink.replace(/^https?:\/\//, '')}
-                          </a>
+                        <td className="px-6 py-4" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center gap-2 max-w-xs">
+                            <a
+                              href={fullLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm text-teal-600 hover:text-teal-800 hover:underline truncate"
+                              title={fullLink}
+                            >
+                              {fullLink.replace(/^https?:\/\/[^/]+/, '')}
+                            </a>
+                          </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           {item.google_calendar_connected ? (
@@ -161,12 +176,34 @@ export function TherapyCalendars() {
                             </span>
                           )}
                         </td>
+                        <td className="px-6 py-4 whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={e => handleCopy(e, fullLink, item.id)}
+                              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-teal-700 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 transition-colors"
+                              title="Copy public link"
+                            >
+                              <Copy size={13} />
+                              {copiedId === item.id ? 'Copied!' : 'Copy Link'}
+                            </button>
+                            <a
+                              href={fullLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors"
+                              title="Open public booking page"
+                            >
+                              <ExternalLink size={13} />
+                              Open
+                            </a>
+                          </div>
+                        </td>
                       </tr>
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan={4} className="px-6 py-10 text-center text-gray-500">
+                    <td colSpan={5} className="px-6 py-10 text-center text-gray-500">
                       No therapy calendars found.
                     </td>
                   </tr>

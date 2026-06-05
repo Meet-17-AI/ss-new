@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Loader, Save, Plus, Trash2, GripVertical, Edit } from 'lucide-react';
+import { ArrowLeft, Loader, Save, Plus, Trash2, GripVertical, Edit, Link, Copy, ExternalLink } from 'lucide-react';
 import { Toast } from './Toast';
 // @ts-ignore
 import ReactQuill from 'react-quill-new';
@@ -65,6 +65,7 @@ export function TherapyCalendarDetails() {
   const [loading, setLoading] = useState(isEdit ? true : false);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const [therapists, setTherapists] = useState<Therapist[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -84,6 +85,21 @@ export function TherapyCalendarDetails() {
     requires_tnc: true,
     is_payment_enabled: true
   });
+
+  const getPublicLink = () => {
+    if (!formData.slug) return '';
+    const cleanSlug = formData.slug.replace(/^\/+/, '');
+    return `${window.location.origin}/book/${cleanSlug}`;
+  };
+
+  const handleCopyLink = () => {
+    const link = getPublicLink();
+    if (!link) return;
+    navigator.clipboard.writeText(link).then(() => {
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    });
+  };
 
   useEffect(() => {
     fetchInitialData();
@@ -178,8 +194,18 @@ export function TherapyCalendarDetails() {
 
       if (!res.ok) throw new Error('Failed to save');
 
+      const result = await res.json();
       setToast({ message: `Calendar ${isEdit ? 'updated' : 'created'} successfully!`, type: 'success' });
-      setTimeout(() => navigate('/admin/therapy-calendars'), 1500);
+
+      if (isEdit) {
+        // Refresh the current form data with any server changes (e.g. updated slug)
+        setFormData(prev => ({ ...prev, ...result }));
+        setTimeout(() => navigate('/admin/therapy-calendars'), 1500);
+      } else {
+        // After creation, navigate to the edit page of the newly created service
+        // so the admin can immediately see and copy the generated public link
+        setTimeout(() => navigate(`/admin/therapy-calendars/${result.id}`), 1200);
+      }
     } catch (err) {
       console.error('Save error:', err);
       setToast({ message: 'Failed to save calendar', type: 'error' });
@@ -252,6 +278,36 @@ export function TherapyCalendarDetails() {
           </button>
         </div>
       </div>
+
+      {/* Public Booking Link Banner — shown whenever a slug exists */}
+      {isEdit && formData.slug && (
+        <div className="flex items-center gap-3 bg-teal-600 text-white rounded-xl px-5 py-3 mb-6 shadow-sm">
+          <Link size={18} className="shrink-0" />
+          <span className="text-sm font-medium shrink-0">Public Booking Link:</span>
+          <a
+            href={getPublicLink()}
+            target="_blank"
+            rel="noreferrer"
+            className="text-sm text-teal-100 hover:text-white hover:underline flex-1 truncate"
+          >
+            {getPublicLink()}
+          </a>
+          <button
+            onClick={handleCopyLink}
+            className="flex items-center gap-1.5 shrink-0 bg-teal-700 hover:bg-teal-800 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+          >
+            {linkCopied ? 'Copied!' : <><Copy size={13} /> Copy</>}
+          </button>
+          <a
+            href={getPublicLink()}
+            target="_blank"
+            rel="noreferrer"
+            className="shrink-0 bg-teal-700 hover:bg-teal-800 p-1.5 rounded-lg transition-colors"
+          >
+            <ExternalLink size={14} />
+          </a>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 mb-10 pb-6">
         {/* Tabs Header */}
@@ -406,14 +462,6 @@ export function TherapyCalendarDetails() {
                 </div>
               </div>
 
-              {isEdit && formData.slug && (
-                <div className="bg-teal-50 p-4 rounded-lg border border-teal-100">
-                  <span className="text-sm font-medium text-teal-800">Public Booking Link: </span>
-                  <a href={`${window.location.origin}/book/${formData.slug.replace(/^\/+/, '')}`} target="_blank" rel="noreferrer" className="text-sm text-teal-600 hover:underline">
-                    {`${window.location.origin}/book/${formData.slug.replace(/^\/+/, '')}`}
-                  </a>
-                </div>
-              )}
             </div>
           )}
 

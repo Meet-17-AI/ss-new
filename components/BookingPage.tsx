@@ -12,12 +12,20 @@ import './BookingPage.css';
 interface BookingPageProps {
   session: {
     title: string;
-    detailedDescription: string;
+    detailedDescription?: string;
     duration: string;
     charges: string;
     owner: string;
     slug: string;
     label?: string;
+    therapist_id?: string;
+    schedule_id?: number | null;
+    form_questions?: any[];
+    is_payment_enabled?: boolean;
+    payment_gateway?: string;
+    requires_tnc?: boolean;
+    type?: string;
+    description?: string;
   };
   onBack?: () => void;
   isPublic?: boolean;
@@ -141,7 +149,8 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   };
   const isCoupleSession = session.title.toLowerCase().includes('couple');
   const isAdolescentSession = session.title.toLowerCase().includes('adolescent');
-  const descLines = session.detailedDescription.split('\n').filter(Boolean);
+  const safeDesc = session.detailedDescription || session.description || '';
+  const descLines = safeDesc.split('\n').filter(Boolean);
   const preview = descLines.slice(0, 3);
   const hasMore = descLines.length > 3;
 
@@ -203,6 +212,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
       selectedTherapy: getSimplifiedTherapyName(),
       selectedTherapist: session.owner === 'SafeStories' ? 'SafeStories' : session.owner,
       therapistId: session.therapist_id || undefined,
+      scheduleId: session.schedule_id || undefined,
       selectedDate: date.format('YYYY-MM-DD'),
       isFreeConsultation: session.charges === '₹0' || session.charges === '0' || (typeof session.charges === 'string' && session.charges.toLowerCase().includes('free')),
       timezone: 'Asia/Kolkata',
@@ -264,8 +274,8 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
 
     setIsSubmitting(true);
     const amountVal = parseFloat(sessionCharges.replace('₹', '').replace(',', '')) || 0;
-    // Check if the session is free based on charges or actual amount
-    const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free') || amountVal === 0;
+    // Free if charges are zero OR if the service has payment disabled
+    const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free') || amountVal === 0 || session.is_payment_enabled === false;
 
     const payload: any = {
       therapyName: getSimplifiedTherapyName(),
@@ -479,7 +489,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
           <h1 className="bp-title">{session.title}</h1>
 
           <div className="bp-desc">
-            {session.detailedDescription.split('\n\n').map((paragraph, i) => {
+            {safeDesc.split('\n\n').map((paragraph, i) => {
               const parts = paragraph.split('**');
               return (
                 <p key={i} className="bp-desc-line" style={i > 0 ? { marginTop: 16 } : {}}>
@@ -780,18 +790,20 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
                 </div>
               </div>
 
-              <div className="bp-reg-section">
-                <h3 className="bp-section-title">Select Price</h3>
-                <div className="bp-option-card active">
-                  <div className="bp-option-header">
-                    <div className="bp-option-icon">
-                      <strong>₹{parseFloat(session.charges.replace('₹', '')).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
+              {session.is_payment_enabled !== false && (
+                <div className="bp-reg-section">
+                  <h3 className="bp-section-title">Select Price</h3>
+                  <div className="bp-option-card active">
+                    <div className="bp-option-header">
+                      <div className="bp-option-icon">
+                        <strong>₹{parseFloat((sessionCharges || session.charges).replace('₹', '') || '0').toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
+                      </div>
+                      <Check size={16} className="bp-check-icon" />
                     </div>
-                    <Check size={16} className="bp-check-icon" />
+                    <p className="bp-option-desc">Session Charges</p>
                   </div>
-                  <p className="bp-option-desc">Session Charges</p>
                 </div>
-              </div>
+              )}
 
               {(isAdolescentSession) && (
                 <div className="bp-add-guests">
