@@ -3131,26 +3131,45 @@ app.post('/api/cancel-booking', async (req, res) => {
     const isPaid = Number(bookingDetails.invitee_payment_amount) > 0 ||
                    (bookingDetails.payment_status || '').toLowerCase() === 'paid';
 
-    // 5. Initiate Razorpay refund if paid and payment_id is stored
+    // Check if cancellation is within 24 hours of session start
+    const sessionStartTimeStr = bookingDetails.booking_start_at || bookingDetails.booking_invitee_time;
+    let isWithin24Hours = false;
+    if (sessionStartTimeStr) {
+      const startTime = new Date(sessionStartTimeStr).getTime();
+      const now = Date.now();
+      const hoursDifference = (startTime - now) / (1000 * 60 * 60);
+      isWithin24Hours = hoursDifference <= 24 && hoursDifference > 0;
+      // If it's already past the start time, consider it within 24 hours (no refund)
+      if (hoursDifference <= 0) isWithin24Hours = true;
+    }
+
+    let isRefundInitiated = false;
+
+    // 5. Initiate Razorpay refund if paid, not manual_bypass, and cancelled BEFORE 24 hours
     if (isPaid && bookingDetails.payment_id && bookingDetails.payment_id !== 'manual_bypass') {
-      try {
-        const { rows: rzpRows } = await pool.query(
-          'SELECT razorpay_key_id, razorpay_key_secret FROM payment_settings ORDER BY id ASC LIMIT 1'
-        );
-        if (rzpRows.length > 0 && rzpRows[0].razorpay_key_id) {
-          const rzpInst = new Razorpay({
-            key_id: rzpRows[0].razorpay_key_id,
-            key_secret: rzpRows[0].razorpay_key_secret
-          });
-          await (rzpInst.payments as any).refund(bookingDetails.payment_id, { speed: 'normal' });
-          await pool.query(
-            `UPDATE bookings SET refund_status = 'initiated', updated_at = NOW() WHERE booking_id = $1`,
-            [booking_id]
+      if (!isWithin24Hours) {
+        try {
+          const { rows: rzpRows } = await pool.query(
+            'SELECT razorpay_key_id, razorpay_key_secret FROM payment_settings ORDER BY id ASC LIMIT 1'
           );
-          console.log(`[Cancel Booking] Razorpay refund initiated for payment ${bookingDetails.payment_id}`);
+          if (rzpRows.length > 0 && rzpRows[0].razorpay_key_id) {
+            const rzpInst = new Razorpay({
+              key_id: rzpRows[0].razorpay_key_id,
+              key_secret: rzpRows[0].razorpay_key_secret
+            });
+            await (rzpInst.payments as any).refund(bookingDetails.payment_id, { speed: 'normal' });
+            await pool.query(
+              `UPDATE bookings SET refund_status = 'initiated', updated_at = NOW() WHERE booking_id = $1`,
+              [booking_id]
+            );
+            isRefundInitiated = true;
+            console.log(`[Cancel Booking] Razorpay refund initiated for payment ${bookingDetails.payment_id}`);
+          }
+        } catch (refundErr: any) {
+          console.error('[Cancel Booking] Razorpay refund initiation failed:', refundErr?.message || refundErr);
         }
-      } catch (refundErr: any) {
-        console.error('[Cancel Booking] Razorpay refund initiation failed:', refundErr?.message || refundErr);
+      } else {
+        console.log(`[Cancel Booking] No refund for ${booking_id} (cancelled within 24h of start)`);
       }
     }
 
@@ -3159,22 +3178,24 @@ app.post('/api/cancel-booking', async (req, res) => {
       try {
         const { sendBookingCancelledRefundClient, sendBookingCancelledNoRefundClient } = await import('./automations/index.js');
 
-        if (isPaid) {
+        if (isPaid && isRefundInitiated) {
           await sendBookingCancelledRefundClient(
             booking_id,
             bookingDetails.invitee_phone,
             bookingDetails.invitee_name,
             bookingDetails.booking_resource_name || 'Session',
-            bookingDetails.booking_start_at || bookingDetails.booking_invitee_time
+            sessionStartTimeStr
           );
-        } else {
+        } else if (isPaid && !isRefundInitiated) {
           await sendBookingCancelledNoRefundClient(
             booking_id,
             bookingDetails.invitee_phone,
             bookingDetails.invitee_name,
             bookingDetails.booking_resource_name || 'Session',
-            bookingDetails.booking_start_at || bookingDetails.booking_invitee_time
+            sessionStartTimeStr
           );
+        } else {
+          console.log(`[Cancel Booking] Free session ${booking_id}, skipping cancellation WhatsApp message`);
         }
       } catch (waErr) {
         console.error('[Cancel Booking] Failed to send AiSensy cancellation:', waErr);
