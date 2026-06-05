@@ -466,8 +466,11 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ bookingId: newPendingId, razorpayPaymentId: response?.error?.metadata?.payment_id })
-          }).catch(() => {}); // best-effort, don't block
+          }).catch(() => {});
         }
+        // Razorpay's UPI flow never visually updates the modal on failure —
+        // close it programmatically so ondismiss fires and shows our error UI.
+        razorpay.close();
       });
 
       razorpay.open();

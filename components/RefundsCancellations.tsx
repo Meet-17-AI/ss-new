@@ -54,10 +54,11 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     try {
       const response = await fetch(`/api/payments?status=${activeTab}`);
       const data = await response.json();
-      setPayments(data);
+      setPayments(Array.isArray(data) ? data : []);
       setRefunds([]);
     } catch (error) {
       console.error('Error fetching payments:', error);
+      setPayments([]);
     }
   };
 
@@ -65,9 +66,10 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     try {
       const response = await fetch(`/api/refunds?status=${activeTab}`);
       const data = await response.json();
-      setRefunds(data);
+      setRefunds(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Error fetching refunds:', error);
+      setRefunds([]);
     }
   };
 
