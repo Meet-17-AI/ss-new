@@ -20,14 +20,14 @@
   border-radius: 16px;
   box-shadow: 0 4px 32px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.04);
   display: grid;
-  grid-template-columns: 300px 1fr 280px;
+  grid-template-columns: 340px 1fr 280px;
   border: 1px solid #e8edf2;
   overflow: hidden;
 }
 
 /* ─── Common Pane ─── */
 .bp-pane {
-  padding: 40px 32px;
+  padding: 40px 28px;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -35,7 +35,8 @@
 
 .bp-summary {
   border-right: 1px solid #e8edf2;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .bp-calendar {
