@@ -6268,9 +6268,7 @@ app.post('/api/create-booking', async (req, res) => {
       }
     }
 
-    const originalCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
-    const shortCode = await createShortUrl(originalCheckinUrl);
-    const publicBookingCheckinUrl = `${origin}/r/${shortCode}`;
+    const publicBookingCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
 
     await pool.query(
       `INSERT INTO bookings (
@@ -6428,8 +6426,7 @@ app.post('/api/create-pending-booking', async (req, res) => {
     }
 
     const origin = req.get('origin') || 'http://localhost:3004';
-    const shortCode = await createShortUrl(`${origin}/booking-confirmation/${booking_id}`);
-    const publicBookingCheckinUrl = `${origin}/r/${shortCode}`;
+    const publicBookingCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
 
     await pool.query(
       `INSERT INTO bookings (
