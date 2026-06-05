@@ -27,6 +27,11 @@ export function TherapyCalendars() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{ type: 'delete' | 'deactivate' | 'activate', id: number, title: string } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [otpModalVisible, setOtpModalVisible] = useState(false);
+  const [otpInput, setOtpInput] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [pendingOtpId, setPendingOtpId] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const navigate = useNavigate();
 
   const handleCopy = (e: React.MouseEvent, link: string, id: number) => {
@@ -65,15 +70,53 @@ export function TherapyCalendars() {
     if (!confirmDialog || confirmDialog.type !== 'delete') return;
     try {
       setActionLoading(true);
-      const res = await fetch(`/api/therapy-calendars/${confirmDialog.id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete calendar');
-      setCalendars(calendars.filter(c => c.id !== confirmDialog.id));
-      setConfirmDialog(null);
-      setExpandedId(null);
-    } catch (err: any) {
-      setError(err.message || 'Failed to delete calendar');
-    } finally {
+      const res = await fetch('/api/otp/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: `Delete Calendar - ${confirmDialog.title}` })
+      });
+      const data = await res.json();
       setActionLoading(false);
+      
+      if (data.success) {
+        setPendingOtpId(data.otpId);
+        setPendingDeleteId(confirmDialog.id);
+        setConfirmDialog(null);
+        setOtpModalVisible(true);
+      } else {
+        setError('Failed to send OTP');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to send OTP for deletion');
+      setActionLoading(false);
+    }
+  };
+
+  const handleVerifyDeleteOtp = async () => {
+    if (!otpInput || !pendingOtpId || !pendingDeleteId) return;
+    setOtpLoading(true);
+    try {
+      const res = await fetch('/api/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ otpId: pendingOtpId, otp: otpInput })
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Now actually delete
+        const delRes = await fetch(`/api/therapy-calendars/${pendingDeleteId}`, { method: 'DELETE' });
+        if (!delRes.ok) throw new Error('Failed to delete calendar');
+        setCalendars(calendars.filter(c => c.id !== pendingDeleteId));
+        setExpandedId(null);
+        setOtpModalVisible(false);
+        setOtpInput('');
+      } else {
+        setError(data.error || 'Invalid OTP');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to verify OTP');
+    } finally {
+      setOtpLoading(false);
     }
   };
 
@@ -320,6 +363,40 @@ export function TherapyCalendars() {
                 }`}
               >
                 {actionLoading ? 'Processing...' : confirmDialog.type === 'delete' ? 'Delete' : confirmDialog.type === 'activate' ? 'Activate' : 'Deactivate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {otpModalVisible && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]">
+          <div className="bg-white rounded-xl shadow-lg p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Admin OTP Verification</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Please enter the 6-digit OTP sent to the admin's Email and WhatsApp to confirm deletion.
+            </p>
+            <input
+              type="text"
+              maxLength={6}
+              value={otpInput}
+              onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ''))}
+              placeholder="Enter OTP"
+              className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-teal-500 outline-none text-center text-xl tracking-widest mb-6"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setOtpModalVisible(false); setOtpInput(''); }}
+                disabled={otpLoading}
+                className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleVerifyDeleteOtp}
+                disabled={otpLoading || otpInput.length !== 6}
+                className="flex-1 px-4 py-2 text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {otpLoading ? 'Verifying...' : 'Verify & Delete'}
               </button>
             </div>
           </div>

@@ -57,6 +57,11 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
   const [loading, setLoading] = useState(true);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [clientDetailsLoading, setClientDetailsLoading] = useState(false);
+  const [otpModalVisible, setOtpModalVisible] = useState(false);
+  const [otpInput, setOtpInput] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [pendingOtpId, setPendingOtpId] = useState<string | null>(null);
+  const [pendingTherapist, setPendingTherapist] = useState<any>(null);
 
   const formatClientName = (name: string): string => {
     if (!name) return name;
@@ -261,6 +266,39 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
   const toggleTherapistStatus = async (therapist: any) => {
     try {
       const newStatus = !therapist.is_active;
+
+      // If deactivating, trigger OTP flow
+      if (!newStatus) {
+        setOtpLoading(true);
+        setPendingTherapist(therapist);
+        setOtpModalVisible(true);
+        const res = await fetch('/api/otp/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: `Deactivate Therapist - ${therapist.name}` })
+        });
+        const data = await res.json();
+        setOtpLoading(false);
+        if (data.success) {
+          setPendingOtpId(data.otpId);
+          setToast({ message: 'OTP sent to Admin Email and WhatsApp', type: 'success' });
+        } else {
+          setToast({ message: 'Failed to send OTP', type: 'error' });
+          setOtpModalVisible(false);
+        }
+        return;
+      }
+
+      // If activating, proceed directly
+      await executeTherapistStatusUpdate(therapist, newStatus);
+    } catch (err) {
+      setToast({ message: 'Error initiating status update', type: 'error' });
+      setOtpLoading(false);
+    }
+  };
+
+  const executeTherapistStatusUpdate = async (therapist: any, newStatus: boolean) => {
+    try {
       const response = await fetch(`/api/admin/therapists/${therapist.therapist_id}/status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -276,6 +314,30 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       }
     } catch (err) {
       setToast({ message: 'Error updating status', type: 'error' });
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!otpInput || !pendingOtpId || !pendingTherapist) return;
+    setOtpLoading(true);
+    try {
+      const res = await fetch('/api/otp/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ otpId: pendingOtpId, otp: otpInput })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setOtpModalVisible(false);
+        setOtpInput('');
+        await executeTherapistStatusUpdate(pendingTherapist, false);
+      } else {
+        setToast({ message: data.error || 'Invalid OTP', type: 'error' });
+      }
+    } catch (err) {
+      setToast({ message: 'Error verifying OTP', type: 'error' });
+    } finally {
+      setOtpLoading(false);
     }
   };
 
@@ -2905,6 +2967,40 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
         )}
       </div>
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      {otpModalVisible && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[100]">
+          <div className="bg-white rounded-xl shadow-lg p-6 max-w-sm w-full mx-4">
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Admin OTP Verification</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Please enter the 6-digit OTP sent to the admin's Email and WhatsApp to confirm deactivation.
+            </p>
+            <input
+              type="text"
+              maxLength={6}
+              value={otpInput}
+              onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ''))}
+              placeholder="Enter OTP"
+              className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-teal-500 outline-none text-center text-xl tracking-widest mb-6"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setOtpModalVisible(false); setOtpInput(''); }}
+                disabled={otpLoading}
+                className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleVerifyOtp}
+                disabled={otpLoading || otpInput.length !== 6}
+                className="flex-1 px-4 py-2 text-sm font-medium text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {otpLoading ? 'Verifying...' : 'Verify'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

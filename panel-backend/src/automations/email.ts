@@ -30,3 +30,27 @@ export async function sendSOSAdminEmail(booking_id: string, adminEmail: string, 
     await logAutomationFailure(booking_id, 'email_sos_alert_admin', adminEmail, error.message || String(error));
   }
 }
+
+// OTP Email for Admin
+export async function sendAdminOTPEmail(adminEmail: string, action: string, otp: string) {
+  const mailOptions = {
+    from: 'SafeStories <no-reply@safestories.in>',
+    to: adminEmail,
+    subject: `Admin Action OTP - ${action}`,
+    html: `<p>Hello Admin,<br /><br />An OTP has been requested for the following sensitive action: <strong>${action}</strong>.<br /><br />Your OTP is: <strong>${otp}</strong><br /><br />This OTP is valid for 5 minutes. If you did not request this, please ignore this email.</p>`
+  };
+
+  try {
+    const { data, error } = await resend.emails.send(mailOptions);
+    if (error) {
+      console.error('❌ Error sending Admin OTP email:', error);
+      await logAutomationFailure('admin-otp', 'email_admin_otp', adminEmail, JSON.stringify(error));
+    } else {
+      console.log('✅ Admin OTP email sent successfully', data);
+      await logAutomationSuccess('admin-otp', 'email_admin_otp', adminEmail, data);
+    }
+  } catch (error: any) {
+    console.error('❌ Exception sending Admin OTP email:', error);
+    await logAutomationFailure('admin-otp', 'email_admin_otp', adminEmail, error.message || String(error));
+  }
+}

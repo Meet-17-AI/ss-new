@@ -30,6 +30,7 @@ import { startDashboardApiBookingSync } from './dashboardApiBookingSync';
 import { uploadFile } from './lib/minio';
 import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail } from './lib/email';
 import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage } from './automations/index';
+import { generateAdminOTP, verifyAdminOTP } from './otp';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -7950,6 +7951,32 @@ startPaymentLinkExpiryCron();
 startSessionRemindersCron();
 
 // ==================== END PAYMENT LINK EXPIRATION APIs ====================
+
+// ==================== OTP APIs ====================
+app.post('/api/otp/generate', async (req, res) => {
+  try {
+    const { action } = req.body;
+    if (!action) return res.status(400).json({ error: 'Action is required' });
+    const otpId = await generateAdminOTP(action);
+    res.json({ success: true, otpId });
+  } catch (error: any) {
+    console.error('Error generating OTP:', error);
+    res.status(500).json({ error: 'Failed to generate OTP' });
+  }
+});
+
+app.post('/api/otp/verify', async (req, res) => {
+  try {
+    const { otpId, otp } = req.body;
+    if (!otpId || !otp) return res.status(400).json({ error: 'Missing otpId or otp' });
+    const isValid = verifyAdminOTP(otpId, otp);
+    if (!isValid) return res.status(400).json({ error: 'Invalid or expired OTP' });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error verifying OTP:', error);
+    res.status(500).json({ error: 'Failed to verify OTP' });
+  }
+});
 
 // Global error handler - must be after all routes
 app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
