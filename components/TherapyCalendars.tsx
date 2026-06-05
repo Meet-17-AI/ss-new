@@ -25,7 +25,7 @@ export function TherapyCalendars() {
   const [error, setError] = useState('');
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [confirmDialog, setConfirmDialog] = useState<{ type: 'delete' | 'deactivate', id: number, title: string } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{ type: 'delete' | 'deactivate' | 'activate', id: number, title: string } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const navigate = useNavigate();
 
@@ -151,6 +151,9 @@ export function TherapyCalendars() {
                     Public Booking Link
                   </th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Sync Status
                   </th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -199,6 +202,17 @@ export function TherapyCalendars() {
                             </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
+                            {item.is_active !== false ? (
+                              <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                                Active
+                              </span>
+                            ) : (
+                              <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                                Inactive
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
                             {item.google_calendar_connected ? (
                               <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
                                 Google Connected
@@ -234,14 +248,14 @@ export function TherapyCalendars() {
                         </tr>
                         {isExpanded && (
                           <tr className="bg-gray-100">
-                            <td colSpan={5} className="px-6 py-4">
+                            <td colSpan={6} className="px-6 py-4">
                               <div className="flex gap-2 justify-center items-center">
                                 <button
-                                  onClick={() => setConfirmDialog({ type: 'deactivate', id: item.id, title: item.title })}
+                                  onClick={() => setConfirmDialog({ type: item.is_active !== false ? 'deactivate' : 'activate', id: item.id, title: item.title })}
                                   className="px-6 py-2 border border-gray-400 rounded-lg text-sm text-gray-700 hover:bg-white flex items-center gap-2"
                                 >
                                   <Power size={16} />
-                                  Deactivate Calendar
+                                  {item.is_active !== false ? 'Deactivate Calendar' : 'Activate Calendar'}
                                 </button>
                                 <button
                                   onClick={() => setConfirmDialog({ type: 'delete', id: item.id, title: item.title })}
@@ -259,7 +273,7 @@ export function TherapyCalendars() {
                   })
                 ) : (
                   <tr>
-                    <td colSpan={5} className="px-6 py-10 text-center text-gray-500">
+                    <td colSpan={6} className="px-6 py-10 text-center text-gray-500">
                       No therapy calendars found.
                     </td>
                   </tr>
@@ -274,7 +288,7 @@ export function TherapyCalendars() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-lg font-bold text-gray-900 mb-2">
-              {confirmDialog.type === 'delete' ? 'Delete Calendar' : 'Deactivate Calendar'}
+              {confirmDialog.type === 'delete' ? 'Delete Calendar' : confirmDialog.type === 'activate' ? 'Activate Calendar' : 'Deactivate Calendar'}
             </h3>
             <p className="text-gray-600 mb-2">
               <strong>{confirmDialog.title}</strong>
@@ -282,6 +296,8 @@ export function TherapyCalendars() {
             <p className="text-gray-600 mb-6">
               {confirmDialog.type === 'delete'
                 ? 'This will delete the calendar permanently.'
+                : confirmDialog.type === 'activate'
+                ? 'This will activate the calendar and allow accepting bookings.'
                 : 'This will deactivate the calendar and stop accepting bookings.'}
             </p>
             <div className="flex gap-3">
@@ -293,15 +309,17 @@ export function TherapyCalendars() {
                 Cancel
               </button>
               <button
-                onClick={confirmDialog.type === 'delete' ? handleDeleteCalendar : handleDeactivateCalendar}
+                onClick={confirmDialog.type === 'delete' ? handleDeleteCalendar : confirmDialog.type === 'activate' ? handleActivateCalendar : handleDeactivateCalendar}
                 disabled={actionLoading}
                 className={`flex-1 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-50 ${
                   confirmDialog.type === 'delete'
                     ? 'bg-red-600 hover:bg-red-700'
+                    : confirmDialog.type === 'activate'
+                    ? 'bg-green-600 hover:bg-green-700'
                     : 'bg-yellow-600 hover:bg-yellow-700'
                 }`}
               >
-                {actionLoading ? 'Processing...' : confirmDialog.type === 'delete' ? 'Delete' : 'Deactivate'}
+                {actionLoading ? 'Processing...' : confirmDialog.type === 'delete' ? 'Delete' : confirmDialog.type === 'activate' ? 'Activate' : 'Deactivate'}
               </button>
             </div>
           </div>
