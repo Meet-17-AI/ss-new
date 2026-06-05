@@ -1518,16 +1518,57 @@ app.get('/api/therapists', async (req, res) => {
       WHERE u.role = 'therapist' AND COALESCE(t.is_active, true) = true
       ORDER BY COALESCE(u.full_name, u.name)
     `);
-    
+
     const formattedTherapists = therapists.rows.map(row => ({
       ...row,
       specializations: row.specialization ? row.specialization.split(',').map((s: string) => s.trim()) : []
     }));
-    
+
     res.json(formattedTherapists);
   } catch (err) {
     console.error('Error fetching therapists:', err);
     res.status(500).json({ error: 'Failed to fetch therapists' });
+  }
+});
+
+// DELETE therapist
+app.delete('/api/therapists/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Soft delete: mark therapist as inactive and delete their therapy services
+    const therapistRes = await pool.query(
+      'UPDATE therapists SET is_active = false WHERE therapist_id = $1 RETURNING therapist_id',
+      [id]
+    );
+    if (therapistRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Therapist not found' });
+    }
+    // Delete all therapy services for this therapist
+    await pool.query('DELETE FROM therapy_services WHERE therapist_id = $1', [id]);
+    res.json({ success: true, message: 'Therapist deleted' });
+  } catch (error: any) {
+    console.error('Error deleting therapist:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete therapist' });
+  }
+});
+
+// PATCH deactivate therapist
+app.patch('/api/therapists/:id/deactivate', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      'UPDATE therapists SET is_active = false WHERE therapist_id = $1 RETURNING *',
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Therapist not found' });
+    }
+    // Also deactivate all their therapy services
+    await pool.query('UPDATE therapy_services SET is_active = false WHERE therapist_id = $1', [id]);
+    res.json({ success: true, message: 'Therapist deactivated', data: result.rows[0] });
+  } catch (error: any) {
+    console.error('Error deactivating therapist:', error);
+    res.status(500).json({ error: error.message || 'Failed to deactivate therapist' });
   }
 });
 
@@ -6098,6 +6139,10 @@ app.post('/api/create-booking', async (req, res) => {
       const therapistRes = await pool.query(queryStr, [queryParam]);
       if (therapistRes.rows.length > 0) {
         therapist = therapistRes.rows[0];
+        // Check if therapist is active
+        if (therapist.is_active === false) {
+          return res.status(403).json({ error: 'This therapist is no longer accepting bookings' });
+        }
         therapistId = therapist.therapist_id;
       }
     }
