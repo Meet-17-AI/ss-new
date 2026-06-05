@@ -29,7 +29,7 @@ import { convertToIST } from './lib/timezone';
 import { startDashboardApiBookingSync } from './dashboardApiBookingSync';
 import { uploadFile } from './lib/minio';
 import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail } from './lib/email';
-import { sendSOSAdminWhatsapp, sendSOSAdminEmail } from './automations/index';
+import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage } from './automations/index';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -5492,50 +5492,41 @@ app.post('/api/send-booking-link', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: clientName is required' });
     }
 
-    const webhookData = {
-      clientName,
-      email,
-      phone,
-      therapistName: therapistName || 'Safestories',
-      therapy: therapy || 'Free Consultation'
-    };
-
     try {
-      // Send to n8n webhook
-      const webhookUrl = process.env.N8N_WEBHOOK_SOS_EMAIL;
+      let campaignName = 'free_consultation_bookinglink_n8n';
 
-      const response = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'SafeStories-Backend/1.0'
-        },
-        body: JSON.stringify(webhookData)
-      });
-
-      const responseText = await response.text();
-
-      if (response.ok) {
-        res.status(200).json({ success: true, message: 'Booking link sent successfully' });
-      } else {
-        console.error('❌ Webhook failed:', response.status, response.statusText);
-        console.error('❌ Error response:', responseText);
-
-        // Return success to frontend but log the webhook issue
-        res.status(200).json({
-          success: true,
-          message: 'Request processed (webhook service unavailable)',
-          warning: 'n8n webhook returned error - check n8n dashboard'
-        });
+      if (therapy && therapy !== 'Free Consultation' && therapistName && therapistName !== 'Safestories') {
+        const campaignResult = await pool.query(
+          `SELECT campaign_name FROM aisensy_campaign_api 
+           WHERE TRIM(LOWER(therapy)) = TRIM(LOWER($1)) 
+           AND TRIM(LOWER(therapist_name)) ILIKE $2 LIMIT 1`,
+          [therapy, `%${therapistName.split(' ')[0]}%`]
+        );
+        
+        if (campaignResult.rows.length > 0 && campaignResult.rows[0].campaign_name) {
+          campaignName = campaignResult.rows[0].campaign_name;
+        } else {
+          console.warn(`[send-booking-link] No custom campaign found for ${therapy} / ${therapistName}. Falling back.`);
+        }
       }
-    } catch (fetchError) {
-      console.error('❌ Network error calling webhook:', fetchError);
 
-      // Return success to frontend but log the network issue
+      await sendAiSensyMessage(
+        "manual_booking_link",
+        campaignName,
+        phone,
+        clientName,
+        [clientName]
+      );
+
+      res.status(200).json({ success: true, message: 'Booking link sent successfully' });
+
+    } catch (apiError: any) {
+      console.error('❌ Error sending booking link via AiSensy:', apiError);
+
       res.status(200).json({
         success: true,
-        message: 'Request processed (webhook service unavailable)',
-        warning: 'Could not reach n8n webhook service'
+        message: 'Request processed (AiSensy service unavailable)',
+        warning: apiError.message || 'Could not reach AiSensy service'
       });
     }
   } catch (error) {
@@ -7752,6 +7743,32 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
     
     const paymentLink = `${baseUrl}/pay/${bookingId}`;
+
+    const formattedDate = new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    }).format(startObj);
+
+    if (clientPhone) {
+      await sendAiSensyMessage(
+        bookingId,
+        "send_paymentlink_client_n8n",
+        clientPhone,
+        clientName || "Client",
+        [
+          clientName || "Client",
+          serviceType || "Therapy Session",
+          formattedDate,
+          paymentLink
+        ]
+      );
+    }
 
     res.json({ success: true, paymentLink, bookingId });
   } catch (err) {
