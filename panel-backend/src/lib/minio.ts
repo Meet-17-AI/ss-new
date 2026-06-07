@@ -4,12 +4,20 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config({ path: '.env.local' });
 
+// Validate required MinIO configuration
+const requiredMinioVars = ['MINIO_ENDPOINT', 'MINIO_PORT', 'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY'];
+const missingMinioVars = requiredMinioVars.filter(v => !process.env[v]);
+if (missingMinioVars.length > 0) {
+  console.error('⚠️  Missing MinIO configuration variables:', missingMinioVars);
+  console.error('File upload functionality will be disabled');
+}
+
 export const minioClient = new Minio.Client({
-  endPoint: process.env.MINIO_ENDPOINT || 's3.fluidjobs.ai',
-  port: parseInt(process.env.MINIO_PORT || '9002'),
+  endPoint: process.env.MINIO_ENDPOINT || 'localhost',
+  port: parseInt(process.env.MINIO_PORT || '9000'),
   useSSL: process.env.MINIO_USE_SSL === 'true',
-  accessKey: process.env.MINIO_ACCESS_KEY || 'admin',
-  secretKey: process.env.MINIO_SECRET_KEY || 'Fluidbucket@2026',
+  accessKey: process.env.MINIO_ACCESS_KEY || '',
+  secretKey: process.env.MINIO_SECRET_KEY || '',
   region: 'us-east-1',
   pathStyle: true,
 });
@@ -73,9 +81,17 @@ export async function deleteFile(fileUrl: string): Promise<void> {
     if (urlParts.length < 2) {
       throw new Error('Invalid file URL');
     }
-    
-    const objectName = urlParts[1];
-    
+
+    let objectName = urlParts[1];
+
+    // Security: Prevent path traversal attacks
+    if (objectName.includes('..') || objectName.startsWith('/')) {
+      throw new Error('Invalid object name - path traversal not allowed');
+    }
+
+    // Normalize path to prevent bypasses
+    objectName = objectName.replace(/\\/g, '/'); // Convert backslashes to forward slashes
+
     await minioClient.removeObject(bucketName, objectName);
   } catch (error) {
     console.error('Error deleting file from MinIO:', error);

@@ -659,7 +659,8 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
       // Fetch client session type
       try {
-        const apiUrl = `/api/client-session-type?client_id=${encodeURIComponent(client.client_phone)}`;
+        const clientIdForType = client.client_phone || client.client_email || client.invitee_phone || client.invitee_email || '';
+        const apiUrl = `/api/client-session-type?client_id=${encodeURIComponent(clientIdForType)}`;
         const sessionTypeRes = await fetch(apiUrl);
         if (sessionTypeRes.ok) {
           const sessionTypeData = await sessionTypeRes.json();

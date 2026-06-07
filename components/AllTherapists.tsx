@@ -633,7 +633,8 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
     try {
       // Fetch client session type
       try {
-        const apiUrl = `/api/client-session-type?client_id=${encodeURIComponent(normalizedClient.invitee_phone)}`;
+        const clientIdForType = normalizedClient.invitee_phone || normalizedClient.invitee_email || '';
+        const apiUrl = `/api/client-session-type?client_id=${encodeURIComponent(clientIdForType)}`;
         const sessionTypeRes = await fetch(apiUrl);
         if (sessionTypeRes.ok) {
           const sessionTypeData = await sessionTypeRes.json();
@@ -656,11 +657,22 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       }
 
       const params = new URLSearchParams();
-      if (normalizedClient.invitee_email) params.append('email', normalizedClient.invitee_email);
-      if (normalizedClient.invitee_phone) {
+      if (normalizedClient.invitee_email && normalizedClient.invitee_email !== 'undefined' && normalizedClient.invitee_email !== 'null') {
+        params.append('email', normalizedClient.invitee_email.trim());
+      }
+      if (normalizedClient.invitee_phone && normalizedClient.invitee_phone !== 'undefined' && normalizedClient.invitee_phone !== 'null') {
         // Handle multiple phone numbers
         const phones = normalizedClient.invitee_phone.split(', ');
-        phones.forEach(phone => params.append('phone', phone.trim()));
+        phones.forEach(phone => {
+          if (phone.trim()) params.append('phone', phone.trim());
+        });
+      }
+
+      // Prevent empty queries that might cause backend issues
+      if (!params.has('email') && !params.has('phone')) {
+        setClientAppointments([]);
+        setClientDetailsLoading(false);
+        return;
       }
 
       const response = await fetch(`/api/client-details?${params.toString()}`);

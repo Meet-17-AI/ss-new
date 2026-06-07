@@ -1,22 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
-
-// Intercept fetch calls to N8N Webhooks
-const originalFetch = fetch;
-global.fetch = (async (url: any, options: any) => {
-  if (typeof url === 'string' && (url.includes('n8n') || url.includes('webhook'))) {
-    console.log('Intercepted n8n webhook call to:', url);
-    return {
-      ok: true,
-      text: async () => JSON.stringify([{"Available Slots": [], "success": true, "message": "Webhook removed"}]),
-      json: async () => ([{"Available Slots": [], "success": true, "message": "Webhook removed"}])
-    } as any;
-  }
-  return originalFetch(url, options);
-}) as any;
-
-
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import crypto from 'crypto';
 import Razorpay from 'razorpay';
@@ -79,8 +65,48 @@ const TIMESTAMP_COLUMN_MAP: Record<string, string> = {
 };
 
 const app = express();
-app.use(cors());
+
+// Secure CORS configuration
+const corsOptions = {
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:5174', 'http://localhost:3004'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+app.use(cors(corsOptions));
 app.use(express.json());
+
+// Environment variables
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
+const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '10');
+
+// Authentication middleware
+const authMiddleware = async (req: any, res: any, next: any) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) {
+    return res.status(401).json({ error: 'Missing authentication token' });
+  }
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+};
+
+// Authorization middleware - check user role
+const requireRole = (allowedRoles: string[]) => {
+  return (req: any, res: any, next: any) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    next();
+  };
+};
 
 // Helper function for URL shortener
 function generateShortCode() {
@@ -422,58 +448,53 @@ app.get('/api/admin/therapists-calendars', async (req, res) => {
 // ==================== END GOOGLE CALENDAR OAUTH CONFIG & ENDPOINTS ====================
 
 
-// Login endpoint
+// Login endpoint - with proper password hashing
 app.post('/api/login', async (req, res) => {
   try {
     const { username, password } = req.body;
 
+    // Validate input
+    if (!username || !password) {
+      return res.status(400).json({
+        success: false,
+        error: 'Username and password are required'
+      });
+    }
+
+    // Fetch user WITHOUT comparing password in database
     const result = await pool.query(
-      'SELECT * FROM users WHERE LOWER(username) = LOWER($1) AND password = $2',
-      [username, password]
+      'SELECT * FROM users WHERE LOWER(username) = LOWER($1)',
+      [username]
     );
 
-    if (result.rows.length > 0) {
-      const user = result.rows[0];
+    if (result.rows.length === 0) {
+      // Don't reveal if user exists
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid credentials'
+      });
+    }
 
-      // Check if user account is active
-      if (user.is_active === false) {
-        return res.status(403).json({ 
-          success: false, 
-          message: 'Your account has been disabled. Please contact support.' 
-        });
-      }
+    const user = result.rows[0];
 
-      // Role-based access control based on request origin
-      const origin = req.headers.origin || req.headers.referer || '';
-      const isCRM = origin.includes('crm.safestories.in') || origin.includes('localhost:5173');
-      const isDashboard = origin.includes('panel.safestories.in') || origin.includes('localhost:5174');
-      
-      console.log(`🔐 Login attempt - Origin: ${origin}, User: ${username}, Role: ${user.role}, isCRM: ${isCRM}, isDashboard: ${isDashboard}`);
-      
-      // If we can't determine origin, reject for security
-      if (!isCRM && !isDashboard && origin) {
-        console.log(`⚠️  Unknown origin: ${origin}`);
-      }
-      
-      // CRM: Only sales role can login
-      if (isCRM && user.role !== 'sales') {
-        console.log(`❌ CRM login blocked for role: ${user.role}`);
-        return res.status(401).json({ 
-          success: false, 
-          message: 'Invalid credentials' 
-        });
-      }
-      
-      // Dashboard: Only admin and therapist roles can login
-      if (isDashboard && user.role !== 'admin' && user.role !== 'therapist') {
-        console.log(`❌ Dashboard login blocked for role: ${user.role}`);
-        return res.status(401).json({ 
-          success: false, 
-          message: 'Invalid credentials' 
-        });
-      }
-      
-      console.log(`✅ Login successful for ${username} (${user.role})`);
+    // Check if user account is active
+    if (user.is_active === false) {
+      return res.status(403).json({
+        success: false,
+        error: 'Your account has been disabled. Please contact support.'
+      });
+    }
+
+    // Use bcrypt to verify password
+    const passwordMatch = await bcrypt.compare(password, user.password);
+    if (!passwordMatch) {
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid credentials'
+      });
+    }
+
+    console.log(`✅ Login successful for ${username} (${user.role})`);
 
 
       // For therapists, check their approval status and fetch schedule_id
@@ -2135,8 +2156,6 @@ app.post('/api/update-password', async (req, res) => {
 });
 
 // ==================== FORGOT PASSWORD ENDPOINTS ====================
-
-import crypto from 'crypto';
 
 // Helper function to generate 6-digit OTP
 function generateOTP(): string {
