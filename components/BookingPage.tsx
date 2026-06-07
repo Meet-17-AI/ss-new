@@ -152,7 +152,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   };
   const isCoupleSession = session.title.toLowerCase().includes('couple');
   const isAdolescentSession = session.title.toLowerCase().includes('adolescent');
-  const rawDesc = session.detailedDescription || session.description || '';
+  const rawDesc = (session.detailedDescription || session.description || '').replace(/&nbsp;/g, ' ');
 
   // If description looks like HTML (from Quill editor), render it as HTML.
   // Otherwise treat as plain markdown-style text.
@@ -161,6 +161,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   // Strip unsafe tags but keep formatting (p, strong, em, ul, ol, li, br, h1-h6)
   const sanitizeHtml = (html: string): string => {
     return html
+      .replace(/&nbsp;/g, ' ')
       .replace(/<script[\s\S]*?<\/script>/gi, '')
       .replace(/<style[\s\S]*?<\/style>/gi, '')
       .replace(/on\w+="[^"]*"/gi, '')
