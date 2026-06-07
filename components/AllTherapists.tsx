@@ -354,6 +354,16 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       const phoneToKey = new Map();
 
       (data.clients || []).forEach((client: Client) => {
+        // Skip clients without phone or email
+        if (!client.invitee_email && !client.invitee_phone) {
+          return;
+        }
+
+        // Skip if name is missing or invalid
+        if (!client.invitee_name || client.invitee_name.trim() === '') {
+          return;
+        }
+
         let key = null;
 
         // Check if email already exists
@@ -393,6 +403,11 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
           if (client.invitee_phone && !groupedClient.phoneNumbers.includes(client.invitee_phone)) {
             groupedClient.phoneNumbers.push(client.invitee_phone);
             phoneToKey.set(client.invitee_phone, key);
+          }
+
+          // Update to client with phone if current doesn't have one
+          if (!groupedClient.invitee_phone && client.invitee_phone) {
+            groupedClient.invitee_phone = client.invitee_phone;
           }
         }
       });
@@ -751,9 +766,14 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
         // Get invitee_question (remarks) from the most recent appointment that has it
         const aptWithRemarks = data.appointments.find((apt: any) => apt.invitee_question) || aptWithEmergency;
 
+        // Find the most recent appointment with a valid phone number
+        const aptWithPhone = data.appointments.find((apt: any) => apt.invitee_phone && apt.invitee_phone.trim() !== '') || aptWithEmergency;
+
         setSelectedClient((prev: any) => ({
           ...prev,
           invitee_name: prev.invitee_name === 'Loading...' ? (aptWithEmergency.invitee_name || aptWithEmergency.client_name || prev.invitee_name) : prev.invitee_name,
+          invitee_phone: aptWithPhone?.invitee_phone || prev.invitee_phone, // Update from most recent booking with phone
+          invitee_email: aptWithEmergency?.invitee_email || prev.invitee_email, // Update email if available
           emergency_contact_name: aptWithEmergency.emergency_contact_name,
           emergency_contact_relation: aptWithEmergency.emergency_contact_relation,
           emergency_contact_number: aptWithEmergency.emergency_contact_number,

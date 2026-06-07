@@ -3780,15 +3780,17 @@ app.get('/api/therapist-details', async (req, res) => {
       return res.status(400).json({ error: 'Therapist name is required' });
     }
 
-    // Get unique clients for this therapist
+    // Get unique clients for this therapist - filter out bookings with missing phone/email
     const clientsResult = await pool.query(`
-      SELECT DISTINCT 
+      SELECT DISTINCT
         invitee_name,
         invitee_email,
         invitee_phone,
         booking_start_at
       FROM bookings
-      WHERE booking_host_name ILIKE '%' || SPLIT_PART($1, ' ', 1) || '%'
+      WHERE booking_host_name = $1
+      AND (invitee_phone IS NOT NULL AND invitee_phone != '' OR invitee_email IS NOT NULL AND invitee_email != '')
+      AND invitee_name IS NOT NULL AND invitee_name != ''
       ORDER BY booking_start_at DESC
     `, [name]);
 
@@ -3846,9 +3848,9 @@ app.get('/api/therapist-details', async (req, res) => {
 
     const clients = Array.from(clientMap.values()).map(({ latest_booking_date, ...client }) => client);
 
-    // Get recent appointments for this therapist
+    // Get recent appointments for this therapist - filter out incomplete bookings
     const appointmentsResult = await pool.query(`
-      SELECT 
+      SELECT
         invitee_name,
         invitee_email,
         invitee_phone,
@@ -3859,7 +3861,9 @@ app.get('/api/therapist-details', async (req, res) => {
         booking_status,
         booking_mode as mode
       FROM bookings
-      WHERE booking_host_name ILIKE '%' || SPLIT_PART($1, ' ', 1) || '%'
+      WHERE booking_host_name = $1
+      AND (invitee_phone IS NOT NULL AND invitee_phone != '' OR invitee_email IS NOT NULL AND invitee_email != '')
+      AND invitee_name IS NOT NULL AND invitee_name != ''
       ORDER BY booking_start_at DESC
     `, [name]);
 
