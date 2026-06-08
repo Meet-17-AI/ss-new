@@ -766,9 +766,10 @@ ${apt.booking_mode} joining info${apt.booking_joining_link ? `\nVideo call link:
                                     setFeedbackTarget(apt);
                                     setShowFeedbackModal(true);
                                   }}
-                                  className="px-3 py-1.5 rounded-lg text-xs flex items-center justify-center gap-1.5 bg-white text-teal-700 border border-teal-700 hover:bg-teal-50 whitespace-nowrap mx-auto"
+                                  className="px-4 py-1.5 rounded-lg text-sm flex items-center justify-center gap-1.5 bg-white border border-teal-700 hover:bg-teal-50 whitespace-nowrap mx-auto"
                                 >
-                                  Request Feedback
+                                  <span>⭐</span>
+                                  <span className="text-blue-700 font-medium">Request</span>
                                 </button>
                               ) : '-'
                             )}
