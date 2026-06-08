@@ -3469,7 +3469,8 @@ app.post('/api/webhook/feedback', async (req, res) => {
       `SELECT booking_id 
        FROM bookings 
        WHERE invitee_phone LIKE $1 
-         AND (booking_status = 'COMPLETED' OR booking_status = 'PENDING_NOTES')
+         AND booking_status NOT IN ('cancelled', 'canceled', 'no_show', 'no show', 'payment_pending', 'payment_failed')
+         AND booking_start_at < NOW()
        ORDER BY booking_start_at DESC 
        LIMIT 1`,
       [phoneSearchPattern]
