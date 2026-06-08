@@ -7783,21 +7783,47 @@ app.post('/api/paperform-webhook/therapy-documentation', async (req, res) => {
 // 9. Check client session type (free consultation vs paid sessions)
 app.get('/api/client-session-type', async (req, res) => {
   try {
-    const { client_id } = req.query;
+    const { client_id, email, phone } = req.query;
 
-    console.log('🔍 [API] client-session-type called with client_id:', client_id);
+    console.log('🔍 [API] client-session-type called with client_id:', client_id, 'email:', email, 'phone:', phone);
 
-    if (!client_id) {
-      return res.status(400).json({ error: 'client_id is required' });
+    let queryConditions = [];
+    let queryParams = [];
+
+    if (client_id) {
+      queryParams.push(client_id);
+      queryConditions.push(`(invitee_phone = $${queryParams.length} OR invitee_email = $${queryParams.length})`);
     }
+    
+    if (email) {
+      queryParams.push(email);
+      queryConditions.push(`invitee_email = $${queryParams.length}`);
+    }
+
+    if (phone) {
+      const phones = String(phone).split(',').map(p => p.trim()).filter(Boolean);
+      const phoneConditions = phones.map(p => {
+        queryParams.push(p);
+        return `invitee_phone = $${queryParams.length}`;
+      });
+      if (phoneConditions.length > 0) {
+        queryConditions.push(`(${phoneConditions.join(' OR ')})`);
+      }
+    }
+
+    if (queryConditions.length === 0) {
+      return res.status(400).json({ error: 'client_id, email, or phone is required' });
+    }
+
+    const whereClause = queryConditions.join(' OR ');
 
     // Check if client has any PAID session bookings (non-free-consultation)
     const paidBookingsResult = await pool.query(
       `SELECT booking_id FROM bookings 
-       WHERE invitee_phone = $1 
+       WHERE (${whereClause})
        AND booking_resource_name NOT ILIKE '%free consultation%'
        LIMIT 1`,
-      [client_id]
+      queryParams
     );
     const hasPaidSessions = paidBookingsResult.rows.length > 0;
     console.log('💰 [API] Paid sessions found:', hasPaidSessions, '(', paidBookingsResult.rows.length, 'rows)');
@@ -7805,10 +7831,10 @@ app.get('/api/client-session-type', async (req, res) => {
     // Check if client has free consultation bookings
     const freeConsultBookingResult = await pool.query(
       `SELECT booking_id FROM bookings 
-       WHERE invitee_phone = $1 
+       WHERE (${whereClause})
        AND booking_resource_name ILIKE '%free consultation%'
        LIMIT 1`,
-      [client_id]
+      queryParams
     );
     const hasFreeConsultation = freeConsultBookingResult.rows.length > 0;
     console.log('🆓 [API] Free consultations found:', hasFreeConsultation, '(', freeConsultBookingResult.rows.length, 'rows)');

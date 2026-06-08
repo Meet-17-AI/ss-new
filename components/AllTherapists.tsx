@@ -648,8 +648,20 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
     try {
       // Fetch client session type
       try {
-        const clientIdForType = normalizedClient.invitee_phone || normalizedClient.invitee_email || '';
-        const apiUrl = `/api/client-session-type?client_id=${encodeURIComponent(clientIdForType)}`;
+        const sessionTypeParams = new URLSearchParams();
+        if (normalizedClient.invitee_email && normalizedClient.invitee_email !== 'undefined' && normalizedClient.invitee_email !== 'null') {
+          sessionTypeParams.append('email', normalizedClient.invitee_email.trim());
+        }
+        if (normalizedClient.invitee_phone && normalizedClient.invitee_phone !== 'undefined' && normalizedClient.invitee_phone !== 'null') {
+          const phones = normalizedClient.invitee_phone.split(', ');
+          phones.forEach(phone => {
+            if (phone.trim()) sessionTypeParams.append('phone', phone.trim());
+          });
+        }
+        if (!sessionTypeParams.has('email') && !sessionTypeParams.has('phone')) {
+          sessionTypeParams.append('client_id', normalizedClient.invitee_phone || normalizedClient.invitee_email || '');
+        }
+        const apiUrl = `/api/client-session-type?${sessionTypeParams.toString()}`;
         const sessionTypeRes = await fetch(apiUrl);
         if (sessionTypeRes.ok) {
           const sessionTypeData = await sessionTypeRes.json();
