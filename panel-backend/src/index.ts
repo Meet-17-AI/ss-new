@@ -5669,15 +5669,25 @@ app.post('/api/fetch-slots', async (req, res) => {
     }
 
     let availabilityRules = [];
+    let dateOverrides = [];
+    let exclusions = [];
     if (scheduleId) {
-      const schedRes = await pool.query('SELECT availability FROM therapist_schedules WHERE schedule_id = $1', [scheduleId]);
+      const schedRes = await pool.query('SELECT availability, date_overrides, exclusions FROM therapist_schedules WHERE schedule_id = $1', [scheduleId]);
       if (schedRes.rows.length > 0) {
         availabilityRules = schedRes.rows[0].availability;
+        dateOverrides = schedRes.rows[0].date_overrides || [];
+        exclusions = schedRes.rows[0].exclusions || [];
       }
     }
     
     if (typeof availabilityRules === 'string') {
       try { availabilityRules = JSON.parse(availabilityRules); } catch(e){}
+    }
+    if (typeof dateOverrides === 'string') {
+      try { dateOverrides = JSON.parse(dateOverrides); } catch(e){}
+    }
+    if (typeof exclusions === 'string') {
+      try { exclusions = JSON.parse(exclusions); } catch(e){}
     }
 
     let availableSlots = [];
@@ -5690,10 +5700,26 @@ app.post('/api/fetch-slots', async (req, res) => {
 
     if (Array.isArray(availabilityRules) && availabilityRules.length > 0) {
       for (const dStr of daysToCheck) {
-        const dObj = new Date(`${dStr}T12:00:00Z`);
-        const dayOfWeekIST = dObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' }).toLowerCase();
-        
-        const dayRule = availabilityRules.find((r) => r.day.toLowerCase() === dayOfWeekIST);
+        // 1. Check exclusions
+        const isExcluded = exclusions.some((ex: any) => ex.start === dStr || ex.end === dStr || ex.date === dStr);
+        if (isExcluded) continue;
+
+        // 2. Check date overrides
+        const override = dateOverrides.find((ov: any) => ov.date === dStr || ov.day === dStr);
+        let dayRule: any = null;
+
+        if (override) {
+          dayRule = {
+            day: dStr,
+            is_available: true,
+            times: override.availability || override.times || []
+          };
+        } else {
+          // 3. Fallback to weekly schedule
+          const dObj = new Date(`${dStr}T12:00:00Z`);
+          const dayOfWeekIST = dObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' }).toLowerCase();
+          dayRule = availabilityRules.find((r) => r.day.toLowerCase() === dayOfWeekIST);
+        }
         
         if (dayRule && dayRule.is_available && Array.isArray(dayRule.times)) {
           for (const timeBlock of dayRule.times) {
