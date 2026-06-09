@@ -576,6 +576,19 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
               })}
             </div>
           )}
+
+          <div style={{ marginTop: '32px', paddingTop: '24px', borderTop: '1px solid #e5e7eb' }}>
+            <div style={{ display: 'flex', gap: '16px', fontSize: '14px', fontWeight: '500', color: '#0d9488', marginBottom: '8px' }}>
+              <a href="https://safestories.in/privacy-policy" target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', color: '#0d9488' }} onMouseOver={e => e.currentTarget.style.textDecoration = 'underline'} onMouseOut={e => e.currentTarget.style.textDecoration = 'none'}>Privacy Policy</a>
+              <span style={{ color: '#d1d5db' }}>|</span>
+              <a href="https://safestories.in/tnc" target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', color: '#0d9488' }} onMouseOver={e => e.currentTarget.style.textDecoration = 'underline'} onMouseOut={e => e.currentTarget.style.textDecoration = 'none'}>Terms & Conditions</a>
+            </div>
+            <div style={{ fontSize: '12px', color: '#6b7280' }}>
+              <a href="https://safestories.in" target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', color: '#6b7280' }} onMouseOver={e => e.currentTarget.style.color = '#0d9488'} onMouseOut={e => e.currentTarget.style.color = '#6b7280'}>
+                &copy; 2025 SAFETY AND YOU WELLBEING CENTRE LLP All Rights Reserved!
+              </a>
+            </div>
+          </div>
         </div>
 
         {view === 'selection' ? (
@@ -826,7 +839,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
               </div>
 
               <div className="bp-form-field checkbox-field-container">
-                <p className="bp-terms-text">Please review the Terms & Conditions before completing your booking. <span className="req">*</span></p>
+                <p className="bp-terms-text">Please review the <a href="https://safestories.in/tnc" target="_blank" rel="noopener noreferrer" style={{ color: '#0d9488', textDecoration: 'none' }} onMouseOver={e => e.currentTarget.style.textDecoration = 'underline'} onMouseOut={e => e.currentTarget.style.textDecoration = 'none'}>Terms & Conditions</a> before completing your booking. <span className="req">*</span></p>
                 <div className="checkbox-field">
                   <label className="bp-checkbox-label">
                     <input type="checkbox" checked={formData.agreedTerms}
