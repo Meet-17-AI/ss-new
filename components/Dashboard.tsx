@@ -369,17 +369,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
         </div>
 
         <nav className="flex-1 px-4">
-          <div
-            className="rounded-xl px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:opacity-90"
-            style={{ backgroundColor: '#21615D' }}
-            onClick={() => {
-              resetAllStates();
-              navigate('/admin/create');
-            }}
-          >
-            <Plus size={20} className="text-white" />
-            <span className="text-white">Create</span>
-          </div>
+          {user?.username !== 'Test' && (
+            <div
+              className="rounded-xl px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:opacity-90"
+              style={{ backgroundColor: '#21615D' }}
+              onClick={() => {
+                resetAllStates();
+                navigate('/admin/create');
+              }}
+            >
+              <Plus size={20} className="text-white" />
+              <span className="text-white">Create</span>
+            </div>
+          )}
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer"
             style={{ backgroundColor: activeView === 'dashboard' ? '#F4A9365C' : 'transparent' }}
@@ -461,19 +463,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
 
         </nav>
 
-        <div className="px-4 mb-4 pt-4 border-t">
-          <div
-            className="rounded-lg px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'appSettings' ? '#F4A9365C' : 'transparent' }}
-            onClick={() => {
-              resetAllStates();
-              navigate('/admin/appSettings');
-            }}
-          >
-            <Settings size={20} className={activeView === 'appSettings' ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={activeView === 'appSettings' ? 'text-teal-700' : 'text-gray-700'}>Settings</span>
+        {user?.username !== 'Test' && (
+          <div className="px-4 mb-4 pt-4 border-t">
+            <div
+              className="rounded-lg px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
+              style={{ backgroundColor: activeView === 'appSettings' ? '#F4A9365C' : 'transparent' }}
+              onClick={() => {
+                resetAllStates();
+                navigate('/admin/appSettings');
+              }}
+            >
+              <Settings size={20} className={activeView === 'appSettings' ? 'text-teal-700' : 'text-gray-700'} />
+              <span className={activeView === 'appSettings' ? 'text-teal-700' : 'text-gray-700'}>Settings</span>
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="p-4 border-t relative" ref={profileMenuRef}>
           {/* Profile Dropdown Menu */}
@@ -680,7 +684,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
 
             {/* Stats Grid */}
             <div className="grid grid-cols-4 gap-4 mb-8">
-              {stats.map((stat, index) => (
+              {stats.filter(stat => !(user?.username === 'Test' && (stat.title === 'Revenue' || stat.title === 'Refunded'))).map((stat, index) => (
                 <div
                   key={index}
                   className={`bg-white rounded-lg p-6 border ${stat.clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : ''
@@ -773,7 +777,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                             <td className="px-6 py-4">{booking.therapist_name}</td>
                             <td className="px-6 py-4">{booking.booking_start_at}</td>
                           </tr>
-                          {selectedBookingIndex === index && (
+                          {selectedBookingIndex === index && user?.username !== 'Test' && (
                             <tr className="bg-gray-100">
                               <td colSpan={5} className="px-6 py-4">
                                 <div className="flex gap-2 justify-center items-center">

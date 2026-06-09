@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Search, Loader, Plus, Copy, ExternalLink, ChevronDown, Trash2, Power } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-
+import { useAuth } from '../context/AuthContext';
 interface TherapyService {
   id: number;
   title: string;
@@ -19,6 +19,7 @@ interface TherapyService {
 }
 
 export function TherapyCalendars() {
+  const { user } = useAuth();
   const [calendars, setCalendars] = useState<TherapyService[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -178,13 +179,15 @@ export function TherapyCalendars() {
             />
             <Search size={18} className="absolute left-3 top-2.5 text-gray-400" />
           </div>
-          <button
-            onClick={() => navigate('/admin/therapy-calendars/new')}
-            className="flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors"
-          >
-            <Plus size={18} />
-            Create New Calendar
-          </button>
+          {user?.username !== 'Test' && (
+            <button
+              onClick={() => navigate('/admin/therapy-calendars/new')}
+              className="flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors"
+            >
+              <Plus size={18} />
+              Create New Calendar
+            </button>
+          )}
         </div>
       </div>
 
@@ -310,7 +313,7 @@ export function TherapyCalendars() {
                             </div>
                           </td>
                         </tr>
-                        {isExpanded && (
+                        {isExpanded && user?.username !== 'Test' && (
                           <tr className="bg-gray-100">
                             <td colSpan={6} className="px-6 py-4">
                               <div className="flex gap-2 justify-center items-center">
