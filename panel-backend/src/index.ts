@@ -485,8 +485,14 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
-    // Use bcrypt to verify password
-    const passwordMatch = await bcrypt.compare(password, user.password);
+    // Support both plain text and bcrypt passwords for backward compatibility
+    let passwordMatch = false;
+    if (user.password.startsWith('$2a$') || user.password.startsWith('$2b$')) {
+      passwordMatch = await bcrypt.compare(password, user.password);
+    } else {
+      passwordMatch = (password === user.password);
+    }
+
     if (!passwordMatch) {
       return res.status(401).json({
         success: false,
