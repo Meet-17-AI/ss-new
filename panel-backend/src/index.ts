@@ -6680,6 +6680,7 @@ app.post('/api/create-pending-booking', async (req, res) => {
         payload.sessionMode === 'online' ? 'Online Video Call' : 'In Person (Pune)',
         maskId,
         '', ''
+      ]
     );
 
     // Insert pending payment record
