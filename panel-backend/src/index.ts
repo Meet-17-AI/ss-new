@@ -74,7 +74,11 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization']
 };
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(express.json({
+  verify: (req: any, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
 // Environment variables
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
@@ -6194,6 +6198,72 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
   console.log(`[verify-payment] ✅ Booking ${bookingId} confirmed. Payment: ${razorpayPaymentId}`);
 }
 
+app.post('/api/razorpay/webhook', async (req, res) => {
+  const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  if (!secret) {
+    console.error('Webhook secret not configured in .env');
+    return res.status(500).json({ error: 'Webhook secret not configured' });
+  }
+
+  const crypto = require('crypto');
+  const razorpaySignature = req.headers['x-razorpay-signature'] as string;
+  const rawBody = (req as any).rawBody;
+
+  if (!rawBody) {
+    console.error('No raw body available for webhook verification');
+    return res.status(400).send('No raw body');
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(rawBody.toString('utf8'))
+    .digest('hex');
+
+  if (expectedSignature !== razorpaySignature) {
+    console.error('Invalid signature in Razorpay webhook');
+    return res.status(400).send('Invalid signature');
+  }
+
+  try {
+    const event = req.body.event;
+
+    if (event === 'payment.captured' || event === 'order.paid') {
+      const paymentEntity = req.body.payload.payment.entity;
+      const razorpayOrderId = paymentEntity.order_id;
+      const razorpayPaymentId = paymentEntity.id;
+
+      if (!razorpayOrderId) {
+        return res.status(400).send('No order_id in webhook payload');
+      }
+
+      const bookingCheck = await pool.query(
+        `SELECT * FROM bookings WHERE razorpay_order_id = $1 AND booking_status = 'payment_pending'`,
+        [razorpayOrderId]
+      );
+
+      if (bookingCheck.rows.length === 0) {
+        console.log(`[Webhook] Booking for order ${razorpayOrderId} already processed or not pending.`);
+        return res.status(200).send('OK');
+      }
+
+      const booking = bookingCheck.rows[0];
+      const bookingId = booking.booking_id;
+
+      // Ensure we have deep payment details (Razorpay Webhook sends full payment entity!)
+      const paymentInfo = paymentEntity;
+      
+      // We pass empty payload {} because frontend specific tracking isn't sent in webhook
+      await processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrderId, booking, {}, paymentInfo);
+      console.log(`[Webhook] ✅ Successfully verified and confirmed booking ${bookingId}`);
+    }
+
+    res.status(200).send('OK');
+  } catch (error) {
+    console.error('❌ Error processing webhook:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
 app.post('/api/razorpay/verify-payment', async (req, res) => {
   const { bookingId, razorpayPaymentId, razorpayOrderId, razorpaySignature, ...payload } = req.body;
   try {
@@ -6269,8 +6339,8 @@ app.post('/api/cron/verify-pending-payments', async (req, res) => {
       SELECT * FROM bookings 
       WHERE booking_status = 'payment_pending' 
       AND razorpay_order_id IS NOT NULL
-      AND invitee_created_at <= NOW() - INTERVAL '15 minutes'
-      AND invitee_created_at >= NOW() - INTERVAL '60 minutes'
+      AND invitee_created_at <= NOW() - INTERVAL '30 minutes'
+      AND invitee_created_at >= NOW() - INTERVAL '90 minutes'
     `);
 
     let confirmedCount = 0;
@@ -8209,7 +8279,7 @@ function startPaymentLinkExpiryCron() {
         `UPDATE bookings
          SET booking_status = 'Canceled', booking_updated_at = NOW()
          WHERE booking_status = 'waiting_for_payment'
-           AND invitee_created_at < NOW() - INTERVAL '15 minutes'
+           AND invitee_created_at < NOW() - INTERVAL '30 minutes'
          RETURNING booking_id`
       );
       if (result.rows.length > 0) {
@@ -8221,7 +8291,7 @@ function startPaymentLinkExpiryCron() {
         `UPDATE bookings
          SET booking_status = 'payment_failed', payment_status = 'Failed', booking_updated_at = NOW()
          WHERE booking_status = 'payment_pending'
-           AND invitee_created_at < NOW() - INTERVAL '15 minutes'
+           AND invitee_created_at < NOW() - INTERVAL '30 minutes'
          RETURNING booking_id`
       );
       if (pending.rows.length > 0) {
