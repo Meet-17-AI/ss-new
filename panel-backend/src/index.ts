@@ -66,6 +66,16 @@ const TIMESTAMP_COLUMN_MAP: Record<string, string> = {
 
 const app = express();
 
+// Auto-migrate schema
+(async () => {
+  try {
+    await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_initiated_at TIMESTAMP WITH TIME ZONE`);
+    console.log('[DB] refund_initiated_at column ensured.');
+  } catch (err: any) {
+    console.log('[DB Migration Error]', err.message);
+  }
+})();
+
 // Secure CORS configuration
 const corsOptions = {
   origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:5174', 'http://localhost:3004'],
@@ -3183,10 +3193,10 @@ app.post('/api/cancel-booking', async (req, res) => {
               key_id: rzpRows[0].razorpay_key_id,
               key_secret: rzpRows[0].razorpay_key_secret
             });
-            await (rzpInst.payments as any).refund(bookingDetails.payment_id, { speed: 'normal' });
+            const refundRes = await (rzpInst.payments as any).refund(bookingDetails.payment_id, { speed: 'normal' });
             await pool.query(
-              `UPDATE bookings SET refund_status = 'initiated', booking_updated_at = NOW() WHERE booking_id = $1`,
-              [booking_id]
+              `UPDATE bookings SET refund_status = 'initiated', refund_id = $1, refund_amount = $2, refund_initiated_at = NOW(), booking_updated_at = NOW() WHERE booking_id = $3`,
+              [refundRes.id, (refundRes.amount / 100), booking_id]
             );
             isRefundInitiated = true;
             console.log(`[Cancel Booking] Razorpay refund initiated for payment ${bookingDetails.payment_id}`);
@@ -5115,7 +5125,9 @@ app.get('/api/refunds', async (req, res) => {
         COALESCE(b.invitee_phone, '') as invitee_phone,
         COALESCE(b.invitee_email, '') as invitee_email,
         COALESCE(b.refund_amount, 0) as refund_amount,
-        COALESCE(b.invitee_payment_gateway, '') as payment_gateway
+        COALESCE(b.invitee_payment_gateway, '') as payment_gateway,
+        b.refund_id,
+        b.refund_initiated_at
       FROM refund_cancellation_table r
       LEFT JOIN bookings b ON r.session_id = b.booking_id
       WHERE b.booking_status IN ('cancelled', 'canceled')
@@ -5216,7 +5228,9 @@ app.get('/api/payments', async (req, res) => {
         payment_mode: row.payment_mode || null,
         utr: row.utr || null,
         failure_reason: row.failure_reason || null,
-        customer_details: row.customer_details || null
+        customer_details: row.customer_details || null,
+        refund_id: row.refund_id || null,
+        refund_initiated_at: row.refund_initiated_at || null
       };
     };
 

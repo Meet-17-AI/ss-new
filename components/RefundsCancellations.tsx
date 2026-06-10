@@ -11,6 +11,8 @@ interface Refund {
   invitee_email: string;
   refund_amount: number;
   payment_gateway: string;
+  refund_id?: string;
+  refund_initiated_at?: string;
 }
 
 interface Payment {
@@ -30,6 +32,8 @@ interface Payment {
   payment_mode?: string;
   utr?: string;
   failure_reason?: string;
+  refund_id?: string;
+  refund_initiated_at?: string;
 }
 
 export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initialTab }) => {
@@ -39,6 +43,12 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab, searchQuery]);
 
   const tabs = [
     { id: 'all_payments', label: 'All Payments' },
@@ -114,6 +124,10 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
         (payment.client_name || '').toLowerCase().includes(searchQuery.toLowerCase())
       )
     : [];
+
+  const totalPages = Math.max(1, Math.ceil((isPaymentTab ? filteredPayments.length : filteredRefunds.length) / itemsPerPage));
+  const paginatedPayments = filteredPayments.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const paginatedRefunds = filteredRefunds.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const exportToCSV = () => {
     if (isPaymentTab) {
@@ -221,7 +235,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                     </td>
                   </tr>
                 ) : (
-                  filteredPayments.map((payment, index) => (
+                  paginatedPayments.map((payment, index) => (
                     <tr 
                       key={index} 
                       className="border-b hover:bg-gray-50 cursor-pointer"
@@ -254,8 +268,8 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                     </td>
                   </tr>
                 ) : (
-                  filteredRefunds.map((refund, index) => (
-                    <tr key={index} className="border-b hover:bg-gray-50">
+                  paginatedRefunds.map((refund, index) => (
+                    <tr key={index} className="border-b hover:bg-gray-50 cursor-pointer" onClick={() => setSelectedPayment(refund as any)}>
                       <td className="px-6 py-4">
                         <div>{refund.client_name}</div>
                         <div className="text-xs text-gray-500">{refund.invitee_phone || refund.invitee_email}</div>
@@ -285,10 +299,25 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
         </div>
         )}
         <div className="px-6 py-4 border-t flex justify-between items-center">
-          <span className="text-sm text-gray-600">Showing {isPaymentTab ? filteredPayments.length : filteredRefunds.length} of {isPaymentTab ? safePayments.length : safeRefunds.length} results</span>
+          <span className="text-sm text-gray-600">
+            Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, isPaymentTab ? filteredPayments.length : filteredRefunds.length)} of {isPaymentTab ? filteredPayments.length : filteredRefunds.length} results
+          </span>
           <div className="flex gap-2">
-            <button className="p-2 border rounded hover:bg-gray-50">←</button>
-            <button className="p-2 border rounded hover:bg-gray-50">→</button>
+            <button 
+              className="p-2 border rounded hover:bg-gray-50 disabled:opacity-50"
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+            >
+              ←
+            </button>
+            <span className="py-2 px-3 text-sm border rounded bg-gray-50">{currentPage} / {totalPages}</span>
+            <button 
+              className="p-2 border rounded hover:bg-gray-50 disabled:opacity-50"
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+            >
+              →
+            </button>
           </div>
         </div>
       </div>
@@ -368,6 +397,28 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                 <div className="col-span-2 bg-red-50 border border-red-200 p-4 rounded-lg mt-2">
                   <h3 className="font-semibold text-red-800 text-xs uppercase tracking-wider mb-1">Failure Reason</h3>
                   <p className="text-red-700 text-sm font-medium">{selectedPayment.failure_reason}</p>
+                </div>
+              )}
+
+              {(selectedPayment.refund_id || selectedPayment.refund_initiated_at || (selectedPayment as any).refund_status) && (
+                <div className="col-span-2 bg-purple-50 border border-purple-200 p-4 rounded-lg mt-2">
+                  <h3 className="font-semibold text-purple-800 text-xs uppercase tracking-wider mb-3">Refund Details</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-xs text-purple-600 uppercase">Refund ID</p>
+                      <p className="text-sm font-medium text-gray-800 font-mono">{selectedPayment.refund_id || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-purple-600 uppercase">Refund Status</p>
+                      <p className="text-sm font-medium text-gray-800 capitalize">{(selectedPayment as any).refund_status || 'Initiated'}</p>
+                    </div>
+                    {selectedPayment.refund_initiated_at && (
+                      <div>
+                        <p className="text-xs text-purple-600 uppercase">Initiated At</p>
+                        <p className="text-sm font-medium text-gray-800">{new Date(selectedPayment.refund_initiated_at).toLocaleString()}</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
