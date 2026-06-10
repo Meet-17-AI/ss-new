@@ -6267,15 +6267,26 @@ app.post('/api/razorpay/webhook', async (req, res) => {
 app.post('/api/razorpay/verify-payment', async (req, res) => {
   const { bookingId, razorpayPaymentId, razorpayOrderId, razorpaySignature, ...payload } = req.body;
   try {
-    // 1. Check booking exists and is still pending
+    // 1. Check booking exists
     const bookingCheck = await pool.query(
-      `SELECT * FROM bookings WHERE booking_id = $1 AND booking_status = 'payment_pending'`,
+      `SELECT * FROM bookings WHERE booking_id = $1`,
       [bookingId]
     );
     if (bookingCheck.rows.length === 0) {
-      return res.status(400).json({ error: 'Booking not found or already processed' });
+      return res.status(400).json({ error: 'Booking not found' });
     }
     const booking = bookingCheck.rows[0];
+
+    // If the Webhook already processed this payment milliseconds ago, let the frontend succeed!
+    if (booking.booking_status === 'confirmed' || booking.payment_status === 'Paid') {
+      console.log(`[verify-payment] Booking ${bookingId} already confirmed by webhook. Returning success to frontend.`);
+      return res.json({ success: true, booking_id: bookingId });
+    }
+
+    // Otherwise, ensure it's pending
+    if (booking.booking_status !== 'payment_pending') {
+      return res.status(400).json({ error: 'Booking is no longer pending' });
+    }
 
     // 2. Verify Razorpay HMAC-SHA256 signature
     const { rows: keyRows } = await pool.query(
