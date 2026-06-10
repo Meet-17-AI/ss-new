@@ -236,11 +236,11 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                       <td className="px-6 py-4">₹{Number(payment.payment_amount || 0).toLocaleString()}</td>
                       <td className="px-6 py-4">
                         <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                          payment.payment_status === 'Completed' ? 'bg-green-100 text-green-700' :
+                          (payment.payment_status === 'Completed' || payment.payment_status === 'Paid' || (isPaymentTab && activeTab === 'completed')) ? 'bg-green-100 text-green-700' :
                           payment.payment_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
                           'bg-red-100 text-red-700'
                         }`}>
-                          {payment.payment_status}
+                          {payment.payment_status || (activeTab === 'completed' ? 'Paid' : 'Failed')}
                         </span>
                       </td>
                     </tr>
