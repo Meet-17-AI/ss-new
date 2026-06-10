@@ -5206,32 +5206,48 @@ app.get('/api/payments', async (req, res) => {
         payment_amount: row.payment_amount || row.invitee_payment_amount || 0,
         razorpay_order_id: row.razorpay_order_id || null,
         payment_id: row.payment_id || null,
-        created_at: row.created_at || row.invitee_created_at
-      };
+        created_at: row.created_at || row.invitee_created_at || row.booking_created_at,
+        booking_updated_at: row.booking_updated_at || null,
+        booking_joining_link: row.booking_joining_link || null,
+        payment_mode: row.payment_mode || null,
+        utr: row.utr || null,
+        failure_reason: row.failure_reason || null,
+        customer_details: row.customer_details || null
     };
 
     let rows: any[] = [];
 
     if (!status || status === 'all_payments' || status === 'completed') {
-      // Completed payments: from dashboard_api_booking (existing Calendly + direct confirmed bookings)
+      // Completed payments: from dashboard_api_booking (legacy) AND bookings (recent Razorpay)
       const dRes = await pool.query(
-        `SELECT *, invitee_name, booking_resource_name, payment_amount, payment_status
+        `SELECT *, invitee_name, booking_resource_name, payment_amount, payment_status, NULL as payment_mode, NULL as utr, NULL as failure_reason, NULL as customer_details
          FROM dashboard_api_booking
          WHERE payment_amount IS NOT NULL AND payment_amount > 0
            AND payment_status = 'Completed'
          ORDER BY created_at DESC`
       );
       rows.push(...dRes.rows.map(r => formatRow(r, 'start_at', 'end_at')));
+
+      const pRes = await pool.query(
+        `SELECT b.*, p.payment_mode, p.utr, p.failure_reason, p.customer_details, b.invitee_payment_amount AS payment_amount
+         FROM bookings b
+         LEFT JOIN payments p ON b.booking_id = p.booking_id
+         WHERE (b.booking_status = 'confirmed' OR b.payment_status = 'Paid' OR b.payment_status = 'Completed')
+           AND b.invitee_payment_amount IS NOT NULL AND b.invitee_payment_amount > 0
+         ORDER BY b.booking_created_at DESC`
+      );
+      rows.push(...pRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
     }
 
     if (!status || status === 'all_payments' || status === 'pending') {
-      // Pending payments: bookings table (payment_pending or Pending payment_status, amount > 0)
+      // Pending payments: bookings table
       const pRes = await pool.query(
-        `SELECT *, invitee_payment_amount AS payment_amount
-         FROM bookings
-         WHERE (booking_status = 'payment_pending' OR payment_status = 'Pending')
-           AND invitee_payment_amount IS NOT NULL AND invitee_payment_amount > 0
-         ORDER BY invitee_created_at DESC`
+        `SELECT b.*, p.payment_mode, p.utr, p.failure_reason, p.customer_details, b.invitee_payment_amount AS payment_amount
+         FROM bookings b
+         LEFT JOIN payments p ON b.booking_id = p.booking_id
+         WHERE (b.booking_status = 'payment_pending' OR b.payment_status = 'Pending')
+           AND b.invitee_payment_amount IS NOT NULL AND b.invitee_payment_amount > 0
+         ORDER BY b.booking_created_at DESC`
       );
       rows.push(...pRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
     }
@@ -5239,10 +5255,11 @@ app.get('/api/payments', async (req, res) => {
     if (!status || status === 'all_payments' || status === 'expired') {
       // Failed payments
       const fRes = await pool.query(
-        `SELECT *, invitee_payment_amount AS payment_amount
-         FROM bookings
-         WHERE booking_status = 'payment_failed' OR payment_status = 'Failed'
-         ORDER BY invitee_created_at DESC`
+        `SELECT b.*, p.payment_mode, p.utr, p.failure_reason, p.customer_details, b.invitee_payment_amount AS payment_amount
+         FROM bookings b
+         LEFT JOIN payments p ON b.booking_id = p.booking_id
+         WHERE b.booking_status = 'payment_failed' OR b.payment_status = 'Failed'
+         ORDER BY b.booking_created_at DESC`
       );
       rows.push(...fRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
     }
@@ -5960,6 +5977,12 @@ app.post('/api/mark-payment-failed', async (req, res) => {
        WHERE booking_id = $2 AND booking_status = 'payment_pending'`,
       [razorpayPaymentId || null, bookingId]
     );
+    await pool.query(
+      `UPDATE payments
+       SET failure_reason = 'Failed during frontend checkout', updated_at = NOW()
+       WHERE booking_id = $1`,
+      [bookingId]
+    );
     res.json({ success: true });
   } catch (err: any) {
     console.error('Error marking payment failed:', err);
@@ -5971,7 +5994,7 @@ app.post('/api/mark-payment-failed', async (req, res) => {
 // Called by the frontend after Razorpay's success handler fires.
 
 // Helper function to process successful payments
-async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrderId, booking, payload) {
+async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrderId, booking, payload, paymentInfo = null) {
   // 3. Resolve therapist (for Google Calendar)
   const therapistName = payload.therapistName || booking.booking_host_name || 'Unknown Therapist';
   let therapistId = payload.therapistId || booking.therapist_id || null;
@@ -6075,6 +6098,37 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
      inviteeTime, hostTime, bookingId]
   );
 
+  // Update payments table with deep Razorpay info if available
+  if (paymentInfo) {
+    const pMode = paymentInfo.method || null;
+    const utr = paymentInfo.acquirer_data?.utr || paymentInfo.acquirer_data?.rrn || null;
+    const custEmail = paymentInfo.email || null;
+    const custPhone = paymentInfo.contact || null;
+    await pool.query(
+      `UPDATE payments
+       SET razorpay_payment_id = $1,
+           payment_mode = $2,
+           utr = $3,
+           customer_details = $4,
+           updated_at = NOW()
+       WHERE razorpay_order_id = $5 OR booking_id = $6`,
+      [
+        razorpayPaymentId,
+        pMode,
+        utr,
+        JSON.stringify({ email: custEmail, phone: custPhone, full_response: paymentInfo }),
+        razorpayOrderId,
+        bookingId
+      ]
+    );
+  } else {
+    // Basic update if no deep info
+    await pool.query(
+      `UPDATE payments SET razorpay_payment_id = $1, updated_at = NOW() WHERE razorpay_order_id = $2 OR booking_id = $3`,
+      [razorpayPaymentId, razorpayOrderId, bookingId]
+    );
+  }
+
   const clientName  = payload.clientName  || booking.invitee_name;
   const clientEmail = payload.clientEmail || booking.invitee_email;
   const clientPhone = payload.clientWhatsApp || booking.invitee_phone;
@@ -6154,7 +6208,7 @@ app.post('/api/razorpay/verify-payment', async (req, res) => {
 
     // 2. Verify Razorpay HMAC-SHA256 signature
     const { rows: keyRows } = await pool.query(
-      'SELECT razorpay_key_secret FROM payment_settings ORDER BY id ASC LIMIT 1'
+      'SELECT razorpay_key_id, razorpay_key_secret FROM payment_settings ORDER BY id ASC LIMIT 1'
     );
     if (!keyRows.length || !keyRows[0].razorpay_key_secret) {
       return res.status(500).json({ error: 'Payment configuration missing' });
@@ -6169,7 +6223,20 @@ app.post('/api/razorpay/verify-payment', async (req, res) => {
       return res.status(400).json({ error: 'Payment verification failed – invalid signature' });
     }
 
-    await processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrderId, booking, payload);
+    let paymentInfo = null;
+    try {
+      if (keyRows[0].razorpay_key_id) {
+        const razorpay = new Razorpay({
+          key_id: keyRows[0].razorpay_key_id,
+          key_secret: keyRows[0].razorpay_key_secret,
+        });
+        paymentInfo = await razorpay.payments.fetch(razorpayPaymentId);
+      }
+    } catch (fetchErr) {
+      console.error('[verify-payment] Failed to fetch payment deep details:', fetchErr);
+    }
+
+    await processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrderId, booking, payload, paymentInfo);
 
     res.json({ success: true, booking_id: bookingId });
   } catch (error) {
@@ -6224,7 +6291,8 @@ app.post('/api/cron/verify-pending-payments', async (req, res) => {
             successfulPayment.id, 
             orderId, 
             booking, 
-            {} // Empty payload, falls back to booking row data
+            {}, // Empty payload, falls back to booking row data
+            successfulPayment
           );
           confirmedCount++;
         } else {
@@ -6236,6 +6304,22 @@ app.post('/api/cron/verify-pending-payments', async (req, res) => {
              WHERE booking_id = $1 AND booking_status = 'payment_pending'`,
             [booking.booking_id]
           );
+
+          const failedPayment = payments.items.find(p => p.status === 'failed');
+          let fReason = null;
+          let fCustDetails = null;
+          if (failedPayment) {
+            fReason = failedPayment.error_description || failedPayment.error_reason || 'Payment failed';
+            fCustDetails = JSON.stringify({ email: failedPayment.email, phone: failedPayment.contact, full_response: failedPayment });
+          }
+
+          await pool.query(
+            `UPDATE payments
+             SET failure_reason = $1, customer_details = COALESCE($2, customer_details), updated_at = NOW()
+             WHERE razorpay_order_id = $3 OR booking_id = $4`,
+            [fReason || 'Payment dropped or expired', fCustDetails, orderId, booking.booking_id]
+          );
+
           failedCount++;
         }
       } catch (err) {
@@ -6595,6 +6679,22 @@ app.post('/api/create-pending-booking', async (req, res) => {
         payload.sessionMode === 'online' ? 'Online Video Call' : 'In Person (Pune)',
         maskId,
         '', ''
+    );
+
+    // Insert pending payment record
+    await pool.query(
+      `INSERT INTO payments (
+        booking_id, invitee_name, invitee_email, amount, currency,
+        payment_gateway_name, razorpay_order_id, payment_date
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+      [
+        booking_id,
+        payload.clientName || 'Unknown Client',
+        payload.clientEmail,
+        payload.amount || 0,
+        'INR',
+        'Razorpay',
+        payload.razorpayOrderId
       ]
     );
 
@@ -7963,7 +8063,7 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
       `INSERT INTO bookings (
         booking_id, therapist_id, invitee_name, invitee_email, invitee_phone,
         booking_start_at, booking_end_at, booking_status, payment_status, payment_amount,
-        booking_resource_name, created_at, updated_at
+        booking_resource_name, booking_created_at, booking_updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())`,
       [
         bookingId, resolvedTherapistId, clientName, clientEmail, clientPhone,
