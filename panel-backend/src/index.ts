@@ -3214,13 +3214,29 @@ app.post('/api/cancel-booking', async (req, res) => {
       try {
         const { sendBookingCancelledRefundClient, sendBookingCancelledNoRefundClient } = await import('./automations/index.js');
 
+        let formattedSessionTime = String(sessionStartTimeStr || '');
+        if (sessionStartTimeStr) {
+          try {
+            const date = new Date(sessionStartTimeStr);
+            const endDate = new Date(date.getTime() + 50 * 60 * 1000); // 50 mins later
+            const formatTime = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+            const weekday = date.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
+            const month = date.toLocaleDateString('en-US', { month: 'short', timeZone: 'Asia/Kolkata' });
+            const day = date.toLocaleDateString('en-US', { day: 'numeric', timeZone: 'Asia/Kolkata' });
+            const year = date.toLocaleDateString('en-US', { year: 'numeric', timeZone: 'Asia/Kolkata' });
+            formattedSessionTime = `${weekday}, ${month} ${day} ${year} at ${formatTime(date)} - ${formatTime(endDate)} IST`;
+          } catch(e) {
+            console.error('Time parsing error', e);
+          }
+        }
+
         if (isPaid && isRefundInitiated) {
           await sendBookingCancelledRefundClient(
             booking_id,
             bookingDetails.invitee_phone,
             bookingDetails.invitee_name,
             bookingDetails.booking_resource_name || 'Session',
-            sessionStartTimeStr
+            formattedSessionTime
           );
         } else if (isPaid && !isRefundInitiated) {
           await sendBookingCancelledNoRefundClient(
@@ -3228,7 +3244,7 @@ app.post('/api/cancel-booking', async (req, res) => {
             bookingDetails.invitee_phone,
             bookingDetails.invitee_name,
             bookingDetails.booking_resource_name || 'Session',
-            sessionStartTimeStr
+            formattedSessionTime
           );
         } else {
           console.log(`[Cancel Booking] Free session ${booking_id}, skipping cancellation WhatsApp message`);
