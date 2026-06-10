@@ -3181,7 +3181,7 @@ app.post('/api/cancel-booking', async (req, res) => {
             });
             await (rzpInst.payments as any).refund(bookingDetails.payment_id, { speed: 'normal' });
             await pool.query(
-              `UPDATE bookings SET refund_status = 'initiated', updated_at = NOW() WHERE booking_id = $1`,
+              `UPDATE bookings SET refund_status = 'initiated', booking_updated_at = NOW() WHERE booking_id = $1`,
               [booking_id]
             );
             isRefundInitiated = true;
@@ -5956,7 +5956,7 @@ app.post('/api/mark-payment-failed', async (req, res) => {
     if (!bookingId) return res.status(400).json({ error: 'bookingId required' });
     await pool.query(
       `UPDATE bookings
-       SET payment_status = 'Failed', payment_id = COALESCE($1, payment_id), updated_at = NOW()
+       SET payment_status = 'Failed', payment_id = COALESCE($1, payment_id), booking_updated_at = NOW()
        WHERE booking_id = $2 AND booking_status = 'payment_pending'`,
       [razorpayPaymentId || null, bookingId]
     );
@@ -6069,7 +6069,7 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
          payment_id = $1, invitee_payment_gateway = 'Razorpay', razorpay_order_id = $2,
          booking_joining_link = $3, google_event_id = $4,
          booking_invitee_time = $5, booking_host_time = $6,
-         updated_at = NOW()
+         booking_updated_at = NOW()
      WHERE booking_id = $7`,
     [razorpayPaymentId, razorpayOrderId, joinLink, google_event_id || booking.google_event_id,
      inviteeTime, hostTime, bookingId]
@@ -6201,8 +6201,8 @@ app.post('/api/cron/verify-pending-payments', async (req, res) => {
       SELECT * FROM bookings 
       WHERE booking_status = 'payment_pending' 
       AND razorpay_order_id IS NOT NULL
-      AND created_at <= NOW() - INTERVAL '15 minutes'
-      AND created_at >= NOW() - INTERVAL '60 minutes'
+      AND booking_created_at <= NOW() - INTERVAL '15 minutes'
+      AND booking_created_at >= NOW() - INTERVAL '60 minutes'
     `);
 
     let confirmedCount = 0;
@@ -6232,7 +6232,7 @@ app.post('/api/cron/verify-pending-payments', async (req, res) => {
           console.log(`[CRON] Order ${orderId} has no successful payments. Marking as Failed.`);
           await pool.query(
             `UPDATE bookings
-             SET booking_status = 'Failed', payment_status = 'Failed', updated_at = NOW()
+             SET booking_status = 'Failed', payment_status = 'Failed', booking_updated_at = NOW()
              WHERE booking_id = $1 AND booking_status = 'payment_pending'`,
             [booking.booking_id]
           );
@@ -8048,7 +8048,7 @@ app.post('/api/confirm-payment', async (req, res) => {
     const updateRes = await pool.query(
       `UPDATE bookings 
        SET booking_status = 'Scheduled', payment_status = 'Paid', 
-           payment_id = $1, updated_at = NOW()
+           payment_id = $1, booking_updated_at = NOW()
        WHERE booking_id = $2 AND booking_status = 'waiting_for_payment'
        RETURNING *`,
       [razorpayPaymentId || razorpayOrderId || 'manual_bypass', bookingId]
@@ -8105,9 +8105,9 @@ function startPaymentLinkExpiryCron() {
       // Expire old-style "waiting_for_payment" links
       const result = await pool.query(
         `UPDATE bookings
-         SET booking_status = 'Canceled', updated_at = NOW()
+         SET booking_status = 'Canceled', booking_updated_at = NOW()
          WHERE booking_status = 'waiting_for_payment'
-           AND created_at < NOW() - INTERVAL '15 minutes'
+           AND booking_created_at < NOW() - INTERVAL '15 minutes'
          RETURNING booking_id`
       );
       if (result.rows.length > 0) {
@@ -8117,9 +8117,9 @@ function startPaymentLinkExpiryCron() {
       // Expire "payment_pending" bookings (created via create-pending-booking before Razorpay)
       const pending = await pool.query(
         `UPDATE bookings
-         SET booking_status = 'payment_failed', payment_status = 'Failed', updated_at = NOW()
+         SET booking_status = 'payment_failed', payment_status = 'Failed', booking_updated_at = NOW()
          WHERE booking_status = 'payment_pending'
-           AND created_at < NOW() - INTERVAL '15 minutes'
+           AND booking_created_at < NOW() - INTERVAL '15 minutes'
          RETURNING booking_id`
       );
       if (pending.rows.length > 0) {
