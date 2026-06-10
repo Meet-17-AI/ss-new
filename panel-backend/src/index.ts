@@ -5206,13 +5206,14 @@ app.get('/api/payments', async (req, res) => {
         payment_amount: row.payment_amount || row.invitee_payment_amount || 0,
         razorpay_order_id: row.razorpay_order_id || null,
         payment_id: row.payment_id || null,
-        created_at: row.created_at || row.invitee_created_at || row.booking_created_at,
+        created_at: row.created_at || row.invitee_created_at,
         booking_updated_at: row.booking_updated_at || null,
         booking_joining_link: row.booking_joining_link || null,
         payment_mode: row.payment_mode || null,
         utr: row.utr || null,
         failure_reason: row.failure_reason || null,
         customer_details: row.customer_details || null
+      };
     };
 
     let rows: any[] = [];
@@ -5234,7 +5235,7 @@ app.get('/api/payments', async (req, res) => {
          LEFT JOIN payments p ON b.booking_id = p.booking_id
          WHERE (b.booking_status = 'confirmed' OR b.payment_status = 'Paid' OR b.payment_status = 'Completed')
            AND b.invitee_payment_amount IS NOT NULL AND b.invitee_payment_amount > 0
-         ORDER BY b.booking_created_at DESC`
+         ORDER BY b.invitee_created_at DESC`
       );
       rows.push(...pRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
     }
@@ -5247,7 +5248,7 @@ app.get('/api/payments', async (req, res) => {
          LEFT JOIN payments p ON b.booking_id = p.booking_id
          WHERE (b.booking_status = 'payment_pending' OR b.payment_status = 'Pending')
            AND b.invitee_payment_amount IS NOT NULL AND b.invitee_payment_amount > 0
-         ORDER BY b.booking_created_at DESC`
+         ORDER BY b.invitee_created_at DESC`
       );
       rows.push(...pRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
     }
@@ -5259,7 +5260,7 @@ app.get('/api/payments', async (req, res) => {
          FROM bookings b
          LEFT JOIN payments p ON b.booking_id = p.booking_id
          WHERE b.booking_status = 'payment_failed' OR b.payment_status = 'Failed'
-         ORDER BY b.booking_created_at DESC`
+         ORDER BY b.invitee_created_at DESC`
       );
       rows.push(...fRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
     }
@@ -6268,8 +6269,8 @@ app.post('/api/cron/verify-pending-payments', async (req, res) => {
       SELECT * FROM bookings 
       WHERE booking_status = 'payment_pending' 
       AND razorpay_order_id IS NOT NULL
-      AND booking_created_at <= NOW() - INTERVAL '15 minutes'
-      AND booking_created_at >= NOW() - INTERVAL '60 minutes'
+      AND invitee_created_at <= NOW() - INTERVAL '15 minutes'
+      AND invitee_created_at >= NOW() - INTERVAL '60 minutes'
     `);
 
     let confirmedCount = 0;
@@ -8063,7 +8064,7 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
       `INSERT INTO bookings (
         booking_id, therapist_id, invitee_name, invitee_email, invitee_phone,
         booking_start_at, booking_end_at, booking_status, payment_status, payment_amount,
-        booking_resource_name, booking_created_at, booking_updated_at
+        booking_resource_name, invitee_created_at, booking_updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())`,
       [
         bookingId, resolvedTherapistId, clientName, clientEmail, clientPhone,
@@ -8207,7 +8208,7 @@ function startPaymentLinkExpiryCron() {
         `UPDATE bookings
          SET booking_status = 'Canceled', booking_updated_at = NOW()
          WHERE booking_status = 'waiting_for_payment'
-           AND booking_created_at < NOW() - INTERVAL '15 minutes'
+           AND invitee_created_at < NOW() - INTERVAL '15 minutes'
          RETURNING booking_id`
       );
       if (result.rows.length > 0) {
@@ -8219,7 +8220,7 @@ function startPaymentLinkExpiryCron() {
         `UPDATE bookings
          SET booking_status = 'payment_failed', payment_status = 'Failed', booking_updated_at = NOW()
          WHERE booking_status = 'payment_pending'
-           AND booking_created_at < NOW() - INTERVAL '15 minutes'
+           AND invitee_created_at < NOW() - INTERVAL '15 minutes'
          RETURNING booking_id`
       );
       if (pending.rows.length > 0) {
