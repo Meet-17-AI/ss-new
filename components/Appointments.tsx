@@ -78,7 +78,7 @@ export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onC
   };
   const monthOptions = generateMonthOptions();
 
-  const therapistOptions = ['All Therapists', ...Array.from(new Set(appointments.map(a => a.booking_host_name).filter(Boolean).filter(n => n.trim().toLowerCase() !== 'safestories'))).sort()];
+  const therapistOptions = ['All Therapists', ...Array.from(new Set(appointments.map(a => a.booking_host_name).filter(Boolean))).sort()];
   const isFilterActive = selectedMonth !== 'All Time' || selectedTherapist !== 'All Therapists';
 
   // Reschedule state
@@ -413,8 +413,6 @@ ${apt.booking_mode} joining info${apt.booking_joining_link ? `\nVideo call link:
   };
 
   const filteredAppointments = appointments.filter(apt => {
-    // Exclude free consultations (SafeStories) — managed in CRM
-    if ((apt.booking_host_name || '').trim().toLowerCase() === 'safestories') return false;
 
     const query = searchQuery.toLowerCase();
     const matchesSearch = (
@@ -518,7 +516,6 @@ ${apt.booking_mode} joining info${apt.booking_joining_link ? `\nVideo call link:
       <div className="flex gap-6 mb-6 flex-wrap">
         {tabs.map((tab) => {
           const tabCount = appointments.filter(apt => {
-            if ((apt.booking_host_name || '').trim().toLowerCase() === 'safestories') return false;
             if (selectedTherapist !== 'All Therapists' && apt.booking_host_name !== selectedTherapist) return false;
             if (selectedMonth !== 'All Time') {
               const [mName, mYear] = selectedMonth.split(' ');

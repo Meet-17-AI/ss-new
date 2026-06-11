@@ -406,21 +406,6 @@ export const CreateBookingModal: React.FC<CreateBookingModalProps> = ({ isOpen, 
                 className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
               <div className="mt-3">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={isFreeConsultation}
-                    onChange={(e) => {
-                      setIsFreeConsultation(e.target.checked);
-                      if (e.target.checked) {
-                        setSelectedTherapy('');
-                        setSelectedTherapist('');
-                      }
-                    }}
-                    className="w-4 h-4"
-                  />
-                  <span className="text-sm">Free Consultation</span>
-                </label>
               </div>
             </div>
 

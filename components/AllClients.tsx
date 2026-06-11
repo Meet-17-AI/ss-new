@@ -279,8 +279,6 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
     );
     if (!matchesSearch) return false;
 
-    // Exclude free consultation (SafeStories) clients — managed in CRM
-    if ((client.booking_host_name || '').toLowerCase().trim() === 'safestories') return false;
 
     if (statusFilter !== 'all') {
       if (client.session_count === 0) return false;

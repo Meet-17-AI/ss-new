@@ -283,7 +283,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       const response = await fetch(`/api/therapists-by-therapy?therapy_name=${encodeURIComponent(therapyName)}`);
       if (response.ok) {
         const data = await response.json();
-        const validTherapists = data.filter((t: any) => t.therapist_name !== 'Platform Calendar' && t.therapist_name !== 'SafeStories');
+        const validTherapists = data.filter((t: any) => t.therapist_name !== 'Platform Calendar');
         setFilteredTherapists(validTherapists);
       }
     } catch (error) {
@@ -760,36 +760,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
 
         {/* Right Column */}
         <div className="space-y-6">
-          {/* Free Consultation */}
-          <div>
-            <label className="block text-sm font-medium mb-3">Is it a Free Consultation?</label>
-            <div className="flex gap-6">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  checked={isFreeConsultation === true}
-                  onChange={() => {
-                    setIsFreeConsultation(true);
-                    setSelectedTherapy('');
-                    setSelectedTherapist('');
-                  }}
-                  className="w-4 h-4"
-                />
-                <span className="text-sm">Yes</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  checked={isFreeConsultation === false}
-                  onChange={() => setIsFreeConsultation(false)}
-                  className="w-4 h-4"
-                />
-                <span className="text-sm">No</span>
-              </label>
-            </div>
-          </div>
-
-          {/* Available Slots */}
+          {/* Free Consultation hidden/removed */}          {/* Available Slots */}
           <div>
             <div className="flex items-center justify-between mb-3">
               <label className="block text-sm font-medium">Available Slots</label>
