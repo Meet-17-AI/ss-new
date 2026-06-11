@@ -22,7 +22,7 @@ async function run() {
       console.log('User already exists, updating password and role...');
       userId = userCheck.rows[0].id;
       await pool.query(
-        `UPDATE users SET password = $1, role = 'therapist' WHERE id = $2`,
+        `UPDATE users SET password = $1, role = 'therapist', therapist_id = 'SafeStories' WHERE id = $2`,
         [hashedPassword, userId]
       );
     } else {
