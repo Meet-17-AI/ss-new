@@ -99,8 +99,8 @@ export const FluidAdminLayout: React.FC<FluidAdminLayoutProps> = ({ onLogout, us
 
         <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-50 p-6 md:p-8">
           <Routes>
-            <Route path="/" element={<AutomationLogsDashboard />} />
-            <Route path="/list" element={<AutomationLogsList />} />
+            <Route index element={<AutomationLogsDashboard />} />
+            <Route path="list" element={<AutomationLogsList />} />
             <Route path="*" element={<Navigate to="/automation-logs" replace />} />
           </Routes>
         </main>
