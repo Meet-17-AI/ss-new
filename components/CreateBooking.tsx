@@ -26,6 +26,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   const [grandTotal, setGrandTotal] = useState(0);
   const [sessionCharges, setSessionCharges] = useState(0);
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [availableModes, setAvailableModes] = useState<string[]>([]);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [countryCode, setCountryCode] = useState('+91');
@@ -409,6 +410,8 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   };
 
   const handleSendPaymentLink = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     
     // Check if we should generate a payment link
     if (!isFreeConsultation && sessionCharges > 0 && isDirectBooking) {
@@ -439,6 +442,8 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
         }
       } catch (err) {
         toast.error('Error generating link');
+      } finally {
+        setIsSubmitting(false);
       }
       return;
     }
@@ -475,6 +480,8 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
     } catch (error) {
       console.error('Error creating booking:', error);
       alert('Error creating booking');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -743,10 +750,10 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
             )}
             <button
               onClick={handleSendPaymentLink}
-              disabled={!isPaymentLinkEnabled()}
+              disabled={!isPaymentLinkEnabled() || isSubmitting}
               className="w-full bg-teal-700 text-white px-6 py-3 rounded-lg hover:bg-teal-800 font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
-              {!isFreeConsultation && sessionCharges > 0 && isDirectBooking ? 'Generate Payment Link' : 'Book Session'}
+              {isSubmitting ? 'Processing...' : (!isFreeConsultation && sessionCharges > 0 && isDirectBooking ? 'Generate Payment Link' : 'Book Session')}
             </button>
           </div>
         </div>
