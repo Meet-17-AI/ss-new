@@ -475,6 +475,23 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
+    // Hardcode override for Fluidadmin
+    if (username === 'Fluidadmin' && password === 'Fluid@2026') {
+      console.log(`✅ Login successful for Fluidadmin (fluidadmin)`);
+      return res.json({
+        success: true,
+        user: {
+          id: 999999, // dummy ID
+          username: 'Fluidadmin',
+          name: 'Fluid Admin',
+          full_name: 'Fluid Admin',
+          email: 'fluidadmin@safestories.in',
+          role: 'fluidadmin',
+          is_active: true
+        }
+      });
+    }
+
     // Fetch user WITHOUT comparing password in database
     const result = await pool.query(
       'SELECT * FROM users WHERE LOWER(username) = LOWER($1)',
@@ -8635,6 +8652,81 @@ async function runStartupMigrations() {
     console.error('⚠️ Startup migration warning (non-fatal):', err);
   }
 }
+
+// ==================== AUTOMATION LOGS ENDPOINTS ====================
+
+app.get('/api/automation-logs/stats', async (req, res) => {
+  try {
+    const statsResult = await pool.query(`
+      SELECT 
+        COUNT(*) as total_ran,
+        COUNT(*) FILTER (WHERE status = 'success') as total_success,
+        COUNT(*) FILTER (WHERE status = 'failed') as total_failed
+      FROM automation_logs
+    `);
+    
+    res.json({
+      success: true,
+      data: statsResult.rows[0]
+    });
+  } catch (error) {
+    console.error('Error fetching automation log stats:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch automation log stats' });
+  }
+});
+
+app.get('/api/automation-logs', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 10;
+    const offset = (page - 1) * limit;
+
+    const countResult = await pool.query('SELECT COUNT(*) FROM automation_logs');
+    const totalCount = parseInt(countResult.rows[0].count);
+    const totalPages = Math.ceil(totalCount / limit);
+
+    const logsResult = await pool.query(`
+      SELECT * FROM automation_logs
+      ORDER BY created_at DESC
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
+
+    res.json({
+      success: true,
+      data: logsResult.rows,
+      pagination: {
+        page,
+        limit,
+        totalCount,
+        totalPages
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching automation logs:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch automation logs' });
+  }
+});
+
+app.get('/api/automation-logs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logResult = await pool.query('SELECT * FROM automation_logs WHERE id = $1', [id]);
+    
+    if (logResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Log not found' });
+    }
+    
+    res.json({
+      success: true,
+      data: logResult.rows[0]
+    });
+  } catch (error) {
+    console.error('Error fetching automation log details:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch automation log details' });
+  }
+});
+
+// ==================== END AUTOMATION LOGS ENDPOINTS ====================
 
 httpServer.listen(PORT, async () => {
   console.log(`\nAPI server running on http://localhost:${PORT}`);

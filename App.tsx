@@ -13,6 +13,7 @@ import { PublicBookingContainer } from './components/PublicBookingContainer';
 import { BookingConfirmation } from './components/BookingConfirmation';
 import { SessionNotesPage } from './components/SessionNotesPage';
 import { PublicDirectory } from './components/PublicDirectory';
+import { FluidAdminLayout } from './components/FluidAdminLayout';
 import CRMApp from './src/crm/App';
 import { Monitor } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
@@ -57,6 +58,7 @@ const LoginPage = () => {
 };
 
 const getPathForRole = (user: any): string => {
+  if (user?.role === 'fluidadmin') return '/automation-logs';
   if (user?.role === 'sales') return '/crm';
   if (user?.role === 'therapist') return '/therapist';
   return '/admin';
@@ -124,6 +126,14 @@ const App: React.FC = () => {
         element={
           <ProtectedRoute allowedRoles={['sales']}>
             <CRMApp user={user} onLogout={logout} />
+          </ProtectedRoute>
+        } 
+      />
+      <Route 
+        path="/automation-logs/*" 
+        element={
+          <ProtectedRoute allowedRoles={['fluidadmin']}>
+            <FluidAdminLayout user={user} onLogout={logout} />
           </ProtectedRoute>
         } 
       />
