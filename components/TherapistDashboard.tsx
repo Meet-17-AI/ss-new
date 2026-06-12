@@ -881,7 +881,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
 
   const copyAppointmentDetails = async (apt: any) => {
-    const details = `${apt.session_name || apt.therapy_type}\n${apt.session_timings}\nClient: ${formatClientName(apt.client_name)}\nContact: ${apt.contact_info || 'N/A'}\nMode: ${apt.mode}`;
+    const details = `${apt.session_name || apt.therapy_type}\n${apt.session_timings}\nClient: ${formatClientName(apt.client_name)}\nContact: ${apt.contact_info || 'N/A'}\nMode: ${formatMode(apt.mode)}`;
     navigator.clipboard.writeText(details).then(async () => {
       await fetch('/api/audit-logs', {
         method: 'POST',
@@ -2103,15 +2103,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                             </td>
                             <td className="px-6 py-4 text-sm">
                               {(() => {
-                                let displayMode = appointment.mode || 'Google Meet';
-                                if (appointment.mode?.includes('_')) {
-                                  displayMode = appointment.mode.split('_').map((word: string) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
-                                }
-                                // Clean up "In-person (location details)" to just "In-person"
-                                if (displayMode?.startsWith('In-person')) {
-                                  displayMode = 'In-person';
-                                }
-                                return displayMode;
+                                return formatMode(appointment.mode);
                               })()}
                             </td>
                             <td className="px-6 py-4 text-sm">
@@ -3457,8 +3449,8 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                                 <td className="px-6 py-4">{booking.therapy_type}</td>
                                 <td className="px-6 py-4">
                                   <div className="flex items-center gap-2">
-                                    <span>{booking.mode}</span>
-                                    {booking.mode === 'Online' && booking.booking_joining_link && (
+                                    <span>{formatMode(booking.mode)}</span>
+                                    {(booking.mode === 'Online' || booking.mode === 'Online Video Call' || booking.mode?.toLowerCase().includes('google') || booking.mode?.toLowerCase().includes('meet')) && booking.booking_joining_link && (
                                       <button
                                         onClick={(e) => {
                                           e.stopPropagation();
@@ -3576,17 +3568,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                                   <td className="px-6 py-4">{appointment.session_name}</td>
                                   <td className="px-6 py-4 text-sm">{appointment.session_timings}</td>
                                   <td className="px-6 py-4">
-                                    {(() => {
-                                      let displayMode = appointment.mode || 'Google Meet';
-                                      if (appointment.mode?.includes('_')) {
-                                        displayMode = appointment.mode.split('_').map((word: string) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
-                                      }
-                                      // Clean up "In-person (location details)" to just "In-person"
-                                      if (displayMode?.startsWith('In-person')) {
-                                        displayMode = 'In-person';
-                                      }
-                                      return displayMode;
-                                    })()}
+                                    {formatMode(appointment.mode)}
                                   </td>
                                   <td className="px-6 py-4">
                                     <span className="px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap bg-yellow-100 text-yellow-700">
