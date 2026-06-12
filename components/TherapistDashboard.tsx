@@ -285,21 +285,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
   const formatMode = (mode: string | undefined): string => {
     if (!mode) return 'N/A';
-
-    const modeLower = mode.toLowerCase();
-
-    // Check for In-person variations
-    if (modeLower.includes('person') || modeLower.includes('office') || modeLower.includes('clinic')) {
-      return 'In-Person';
-    }
-
-    // Check for Google Meet variations
-    if (modeLower.includes('google') || modeLower.includes('meet')) {
-      return 'Google Meet';
-    }
-
-    // Default return the original value
-    return mode;
+    const m = mode.toLowerCase().trim();
+    // Map all variants to two standard labels
+    if (m.includes('person') || m.includes('office') || m.includes('clinic')) return 'In-Person';
+    if (m.includes('google') || m.includes('meet') || m.includes('online') || m.includes('video')) return 'Google Meet';
+    if (m === 'offline') return 'In-Person'; // offline = no internet = in-person
+    return 'Google Meet'; // safe default for unknown values
   };
 
   const getClientStatus = (client: any): 'active' | 'inactive' | 'drop-out' => {

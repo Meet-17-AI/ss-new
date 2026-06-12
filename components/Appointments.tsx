@@ -233,10 +233,12 @@ ${apt.booking_mode} joining info${apt.booking_joining_link ? `\nVideo call link:
 
   const formatMode = (mode: string | undefined): string => {
     if (!mode) return 'N/A';
-    const modeLower = mode.toLowerCase();
-    if (modeLower.includes('person') || modeLower.includes('office') || modeLower.includes('clinic')) return 'In-person';
-    if (modeLower.includes('google') || modeLower.includes('meet')) return 'Google Meet';
-    return mode;
+    const m = mode.toLowerCase().trim();
+    // Map all variants to two standard labels
+    if (m.includes('person') || m.includes('office') || m.includes('clinic')) return 'In-Person';
+    if (m.includes('google') || m.includes('meet') || m.includes('online') || m.includes('video')) return 'Google Meet';
+    if (m === 'offline') return 'In-Person'; // offline = no internet = in-person
+    return 'Google Meet'; // safe default for unknown values
   };
 
   const handleReminderClick = (apt: Appointment) => {
