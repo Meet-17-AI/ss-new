@@ -46,6 +46,16 @@ interface CalendarEvent {
 
 const localizer = momentLocalizer(moment);
 
+// Normalize booking modes to standard labels
+const formatMode = (mode: string | undefined): string => {
+  if (!mode) return 'N/A';
+  const m = mode.toLowerCase().trim();
+  if (m.includes('person') || m.includes('office') || m.includes('clinic')) return 'In-Person';
+  if (m.includes('google') || m.includes('meet') || m.includes('online') || m.includes('video')) return 'Google Meet';
+  if (m === 'offline') return 'In-Person';
+  return 'Google Meet';
+};
+
 interface TherapistCalendarProps {
   therapists: any[];
   selectedTherapistFilters: string[];
@@ -624,10 +634,10 @@ export const TherapistCalendar: React.FC<TherapistCalendarProps> = ({
                   </svg>
                   <div className="flex items-center gap-2">
                     <div>
-                      <p className="font-medium text-gray-900">{selectedEvent.resource.mode}</p>
+                      <p className="font-medium text-gray-900">{formatMode(selectedEvent.resource.mode)}</p>
                       <p className="text-sm text-gray-500">Session Mode</p>
                     </div>
-                    {selectedEvent.resource.mode === 'Online' && selectedEvent.resource.originalAppointment.booking_joining_link && (
+                    {(selectedEvent.resource.mode === 'Online' || selectedEvent.resource.mode === 'Online Video Call' || selectedEvent.resource.mode?.toLowerCase().includes('google') || selectedEvent.resource.mode?.toLowerCase().includes('meet')) && selectedEvent.resource.originalAppointment.booking_joining_link && (
                       <button
                         onClick={() => window.open(selectedEvent.resource.originalAppointment.booking_joining_link, '_blank')}
                         className="ml-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors flex items-center gap-2 text-sm font-medium"
@@ -767,8 +777,8 @@ export const TherapistCalendar: React.FC<TherapistCalendarProps> = ({
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9v-9m0-9v9" />
                               </svg>
-                              <span>{event.resource.mode}</span>
-                              {event.resource.mode === 'Online' && event.resource.originalAppointment.booking_joining_link && (
+                              <span>{formatMode(event.resource.mode)}</span>
+                              {(event.resource.mode === 'Online' || event.resource.mode === 'Online Video Call' || event.resource.mode?.toLowerCase().includes('google') || event.resource.mode?.toLowerCase().includes('meet')) && event.resource.originalAppointment.booking_joining_link && (
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
