@@ -415,8 +415,8 @@ export const TherapistCalendar: React.FC<TherapistCalendarProps> = ({
                   max={new Date(2025, 0, 1, 22, 0)} // 10 PM
                   scrollToTime={new Date(2025, 0, 1, 9, 0)} // Scroll to 9 AM
                   dayLayoutAlgorithm="no-overlap"
-                  tooltipAccessor={(event) => 
-                    `${event.resource.client}\n${event.resource.sessionType}\nTherapist: ${event.resource.therapist}\nMode: ${event.resource.mode}\nStatus: ${event.resource.status}`
+                  tooltipAccessor={(event) =>
+                    `${event.resource.client}\n${event.resource.sessionType}\nTherapist: ${event.resource.therapist}\nMode: ${formatMode(event.resource.mode)}\nStatus: ${event.resource.status}`
                   }
                   messages={{
                     next: "Next",

@@ -208,7 +208,7 @@ export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onC
     const details = `${apt.booking_resource_name}
 ${apt.booking_start_at}
 Time zone: Asia/Kolkata
-${apt.booking_mode} joining info${apt.booking_joining_link ? `\nVideo call link: ${apt.booking_joining_link}` : ''}`;
+${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVideo call link: ${apt.booking_joining_link}` : ''}`;
 
     navigator.clipboard.writeText(details).then(() => {
       setToast({ message: 'Appointment details copied to clipboard!', type: 'success' });
