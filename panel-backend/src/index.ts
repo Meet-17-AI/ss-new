@@ -3455,26 +3455,50 @@ app.post('/api/reschedule-booking', async (req, res) => {
         const { sendBookingRescheduledClient, sendBookingRescheduledTherapist } = await import('./automations/index.js');
         const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://safestories-dashboard.vercel.app';
         const shortLink = bookingDetails.public_booking_checkin_url || `${baseUrl}/booking-confirmation/${booking_id}`;
-        
-        await sendBookingRescheduledClient(
-          booking_id,
-          bookingDetails.invitee_phone,
-          bookingDetails.invitee_name,
-          bookingDetails.booking_resource_name || 'Session',
-          bookingInviteeTime,
-          shortLink
-        );
+
+        try {
+          await sendBookingRescheduledClient(
+            booking_id,
+            bookingDetails.invitee_phone,
+            bookingDetails.invitee_name,
+            bookingDetails.booking_resource_name || 'Session',
+            bookingInviteeTime,
+            shortLink
+          );
+          await pool.query(
+            `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+            [booking_id, 'reschedule_client_whatsapp', bookingDetails.invitee_phone, 'success', JSON.stringify({ sent: true })]
+          );
+        } catch (clientErr: any) {
+          console.error('[Reschedule Booking] Failed to send client WhatsApp:', clientErr?.message || clientErr);
+          await pool.query(
+            `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+            [booking_id, 'reschedule_client_whatsapp', bookingDetails.invitee_phone, 'failed', clientErr?.message || String(clientErr)]
+          ).catch(() => {});
+        }
 
         if (bookingDetails.booking_host_phone) {
-          await sendBookingRescheduledTherapist(
-            booking_id,
-            bookingDetails.booking_host_phone,
-            bookingInviteeTime,
-            bookingDetails.invitee_name
-          );
+          try {
+            await sendBookingRescheduledTherapist(
+              booking_id,
+              bookingDetails.booking_host_phone,
+              bookingInviteeTime,
+              bookingDetails.invitee_name
+            );
+            await pool.query(
+              `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+              [booking_id, 'reschedule_therapist_whatsapp', bookingDetails.booking_host_phone, 'success', JSON.stringify({ sent: true })]
+            );
+          } catch (therapistErr: any) {
+            console.error('[Reschedule Booking] Failed to send therapist WhatsApp:', therapistErr?.message || therapistErr);
+            await pool.query(
+              `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+              [booking_id, 'reschedule_therapist_whatsapp', bookingDetails.booking_host_phone, 'failed', therapistErr?.message || String(therapistErr)]
+            ).catch(() => {});
+          }
         }
       } catch (waErr) {
-        console.error('[Reschedule Booking] Failed to send AiSensy notifications:', waErr);
+        console.error('[Reschedule Booking] Unexpected error in WhatsApp section:', waErr?.message || waErr);
       }
     }
 
@@ -3557,18 +3581,35 @@ app.get('/api/public/booking/:booking_id', async (req, res) => {
 app.post('/api/request-feedback', async (req, res) => {
   try {
     const { bookingId, clientPhone, clientName, therapistName } = req.body;
-    
+
     if (!bookingId || !clientPhone) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
     const { sendSessionFeedbackRequest } = await import('./automations/whatsapp.js');
-    await sendSessionFeedbackRequest(bookingId, clientPhone, clientName, therapistName);
-    
-    res.json({ success: true, message: 'Feedback request sent successfully' });
+    try {
+      await sendSessionFeedbackRequest(bookingId, clientPhone, clientName, therapistName);
+      await pool.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [bookingId, 'session_feedback_request_whatsapp', clientPhone, 'success', JSON.stringify({ sent: true })]
+      );
+      res.json({ success: true, message: 'Feedback request sent successfully' });
+    } catch (waErr: any) {
+      console.error('[Feedback Request] Failed to send WhatsApp:', waErr?.message || waErr);
+      await pool.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [bookingId, 'session_feedback_request_whatsapp', clientPhone, 'failed', waErr?.message || String(waErr)]
+      ).catch(() => {});
+      // Return success anyway - feedback request is recorded in DB even if WhatsApp failed
+      res.json({
+        success: true,
+        message: 'Feedback request recorded. WhatsApp notification may have failed - will retry.',
+        warning: 'notification_send_failed'
+      });
+    }
   } catch (error: any) {
-    console.error('Error sending feedback request:', error);
-    res.status(500).json({ error: 'Failed to send feedback request' });
+    console.error('Error in request-feedback:', error);
+    res.status(500).json({ error: 'Failed to process feedback request' });
   }
 });
 
@@ -6481,8 +6522,13 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
        VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)`,
       [bookingId, 'client_confirmation_whatsapp', clientPhone, 'success', JSON.stringify({ sent: true })]
     );
-  } catch (waErr) {
-    console.error('[verify-payment] WhatsApp send failed:', waErr);
+  } catch (waErr: any) {
+    console.error('[verify-payment] WhatsApp send failed:', waErr?.message || waErr);
+    await pool.query(
+      `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at)
+       VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)`,
+      [bookingId, 'client_confirmation_whatsapp', clientPhone, 'failed', waErr?.message || String(waErr)]
+    ).catch(() => {});
   }
 
   // 9. Internal new-booking webhook for CRM pipeline movement
@@ -7048,11 +7094,11 @@ app.post('/api/create-booking', async (req, res) => {
         [booking_id, 'client_confirmation_whatsapp', payload.clientWhatsApp, 'success', JSON.stringify({ sent: true })]
       );
     } catch (waErr: any) {
-      console.error('[Create Booking] Failed to send AiSensy client confirmation:', waErr);
+      console.error('[Create Booking] Failed to send AiSensy client confirmation:', waErr?.message || waErr);
       await pool.query(
         `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
         [booking_id, 'client_confirmation_whatsapp', payload.clientWhatsApp, 'failed', waErr?.message || String(waErr)]
-      );
+      ).catch(() => {});
     }
 
     try {
@@ -7454,33 +7500,70 @@ app.post('/api/send-sos-alert', async (req, res) => {
         documentationLink: data.documentation_link || 'N/A'
     };
     
-    // Send Whatsapp
+    // Send Whatsapp (best-effort, log failures but don't block)
+    let whatsappSent = false;
     const adminPhone = "+917522911068";
-    await sendSOSAdminWhatsapp(
-        data.booking_id || '',
-        adminPhone,
-        details.clientName,
-        details.clientPhone,
-        details.therapistName,
-        details.sessionTimings,
-        details.mode,
-        details.totalCompletedBookings,
-        details.emergencyContactName,
-        details.emergencyContactNumber,
-        details.severityLevel,
-        details.currentRiskIndicator,
-        details.riskSummary,
-        details.documentationLink
-    );
-    
-    // Send Email
+    try {
+      await sendSOSAdminWhatsapp(
+          data.booking_id || '',
+          adminPhone,
+          details.clientName,
+          details.clientPhone,
+          details.therapistName,
+          details.sessionTimings,
+          details.mode,
+          details.totalCompletedBookings,
+          details.emergencyContactName,
+          details.emergencyContactNumber,
+          details.severityLevel,
+          details.currentRiskIndicator,
+          details.riskSummary,
+          details.documentationLink
+      );
+      whatsappSent = true;
+    } catch (waErr: any) {
+      console.error('[SOS Alert] Failed to send WhatsApp notification:', waErr?.message || waErr);
+      await pool.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [data.booking_id || 'unknown', 'sos_whatsapp_alert', adminPhone, 'failed', waErr?.message || String(waErr)]
+      ).catch(() => {});
+    }
+
+    // Send Email (best-effort, log failures but don't block)
+    let emailSent = false;
     const adminEmail = "admin@safestories.in";
-    await sendSOSAdminEmail(adminEmail, details);
-    
-    res.status(200).json({ success: true, message: 'SOS Alert triggered successfully' });
+    try {
+      await sendSOSAdminEmail(adminEmail, details);
+      emailSent = true;
+    } catch (emailErr: any) {
+      console.error('[SOS Alert] Failed to send email notification:', emailErr?.message || emailErr);
+      await pool.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [data.booking_id || 'unknown', 'sos_email_alert', adminEmail, 'failed', emailErr?.message || String(emailErr)]
+      ).catch(() => {});
+    }
+
+    // Return success with notification status
+    const response: any = { success: true, message: 'SOS Alert processed' };
+    if (whatsappSent && emailSent) {
+      response.message = 'SOS Alert triggered successfully - all notifications sent';
+      response.notificationStatus = 'all_sent';
+    } else if (whatsappSent || emailSent) {
+      response.message = 'SOS Alert recorded. Some notifications failed.';
+      response.notificationStatus = 'partial_sent';
+      response.details = {
+        whatsapp: whatsappSent ? 'sent' : 'failed',
+        email: emailSent ? 'sent' : 'failed'
+      };
+    } else {
+      response.message = 'SOS Alert recorded. No notifications could be sent.';
+      response.notificationStatus = 'none_sent';
+      response.warning = 'Admin should be notified manually of this SOS alert';
+    }
+    res.status(200).json(response);
   } catch (error) {
     console.error('Error in send-sos-alert:', error);
-    res.status(500).json({ error: 'Failed to send SOS Alert', details: error.message });
+    res.status(500).json({ error: 'Failed to process SOS Alert', details: error.message });
   }
 });
 

@@ -7,6 +7,14 @@ const AISENSY_URL = "https://backend.aisensy.com/campaign/t1/api/v2";
 export async function sendAiSensyMessage(booking_id: string, campaignName: string, destination: string, userName: string, templateParams: string[]) {
     try {
         const cleanDestination = destination.replace(/[^0-9+]/g, '');
+
+        // Validation: Ensure phone number is not empty
+        if (!cleanDestination || cleanDestination.length < 10) {
+            const errMsg = `Invalid phone number: ${destination} (cleaned: ${cleanDestination})`;
+            await logAutomationFailure(booking_id, `whatsapp_${campaignName}`, destination, errMsg);
+            throw new Error(errMsg);
+        }
+
         const payload = {
             apiKey: AISENSY_API_KEY,
             campaignName,
@@ -24,20 +32,29 @@ export async function sendAiSensyMessage(booking_id: string, campaignName: strin
 
         const text = await response.text();
         console.log(`[AiSensy Automation] Campaign '${campaignName}' sent to ${cleanDestination}. Response:`, text);
-        
+
         let jsonRes;
         try { jsonRes = JSON.parse(text); } catch(e) { jsonRes = text; }
-        
+
         if (response.ok) {
             await logAutomationSuccess(booking_id, `whatsapp_${campaignName}`, cleanDestination, jsonRes);
+            return text;
         } else {
-            await logAutomationFailure(booking_id, `whatsapp_${campaignName}`, cleanDestination, `HTTP ${response.status}: ${text}`);
+            const errMsg = `HTTP ${response.status}: ${text}`;
+            await logAutomationFailure(booking_id, `whatsapp_${campaignName}`, cleanDestination, errMsg);
+            throw new Error(errMsg);
         }
-        
-        return text;
     } catch (error: any) {
-        console.error(`[AiSensy Automation Error] Failed to send campaign '${campaignName}':`, error);
-        await logAutomationFailure(booking_id, `whatsapp_${campaignName}`, destination, error.message || String(error));
+        const errMsg = error.message || String(error);
+        console.error(`[AiSensy Automation Error] Failed to send campaign '${campaignName}' to booking ${booking_id}:`, errMsg);
+
+        // Log failure if not already logged
+        if (!error.message?.includes('Invalid phone')) {
+            await logAutomationFailure(booking_id, `whatsapp_${campaignName}`, destination, errMsg);
+        }
+
+        // Re-throw to let caller handle
+        throw error;
     }
 }
 
@@ -78,7 +95,7 @@ export async function sendBookingRescheduledClient(booking_id: string, clientPho
 export async function sendBookingRescheduledTherapist(booking_id: string, therapistPhone: string, newTimeFormatted: string, clientName: string) {
     return sendAiSensyMessage(
         booking_id,
-        "session_rescheduled_therapist_",
+        "session_rescheduled_therapist",
         therapistPhone,
         "",
         [newTimeFormatted, clientName]
@@ -114,7 +131,7 @@ export async function sendSessionFeedbackRequest(booking_id: string, clientPhone
         "client_sessionfeedback",
         clientPhone,
         clientName,
-        [clientName]
+        [clientName, therapistName]
     );
 }
 
