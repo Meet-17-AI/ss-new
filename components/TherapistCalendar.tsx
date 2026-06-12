@@ -85,6 +85,10 @@ export const TherapistCalendar: React.FC<TherapistCalendarProps> = ({
   // Event modal state
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [showEventModal, setShowEventModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editFormData, setEditFormData] = useState<any>({});
+  const [editLoading, setEditLoading] = useState(false);
+  const [editError, setEditError] = useState('');
 
   // Day sessions modal state
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -352,6 +356,75 @@ export const TherapistCalendar: React.FC<TherapistCalendarProps> = ({
   const closeEventModal = () => {
     setShowEventModal(false);
     setSelectedEvent(null);
+    setShowEditModal(false);
+    setEditError('');
+  };
+
+  const openEditModal = (event: CalendarEvent) => {
+    setShowEventModal(false);
+    setEditFormData({
+      booking_id: event.resource.originalAppointment?.booking_id,
+      new_start_at: event.start.toISOString(),
+      duration: event.resource.originalAppointment?.booking_duration || 50,
+      mode: event.resource.mode,
+      status: event.resource.status,
+      notes: event.resource.originalAppointment?.notes || '',
+    });
+    setEditError('');
+    setShowEditModal(true);
+  };
+
+  const handleEditSave = async () => {
+    try {
+      setEditLoading(true);
+      setEditError('');
+
+      if (!editFormData.booking_id || !editFormData.new_start_at) {
+        setEditError('Booking ID and time are required');
+        return;
+      }
+
+      // Call reschedule endpoint for time changes
+      const rescheduleResponse = await fetch('/api/reschedule-booking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          booking_id: editFormData.booking_id,
+          new_start_at: editFormData.new_start_at,
+          duration: editFormData.duration,
+          reason: 'Admin calendar edit',
+          notify: true,
+        }),
+      });
+
+      if (!rescheduleResponse.ok) {
+        const errorData = await rescheduleResponse.json();
+        throw new Error(errorData.error || 'Failed to save booking changes');
+      }
+
+      // Update notes if changed (if notes endpoint exists)
+      if (editFormData.notes && selectedEvent?.resource.originalAppointment?.notes !== editFormData.notes) {
+        try {
+          await fetch(`/api/bookings/${editFormData.booking_id}/notes`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notes: editFormData.notes }),
+          });
+        } catch (notesErr) {
+          console.warn('Could not update notes:', notesErr);
+        }
+      }
+
+      // Refresh calendar
+      await fetchAllAppointments();
+      setShowEditModal(false);
+      setSelectedEvent(null);
+    } catch (error: any) {
+      console.error('Error saving booking changes:', error);
+      setEditError(error.message || 'Failed to save changes');
+    } finally {
+      setEditLoading(false);
+    }
   };
 
   const closeDaySessionsModal = () => {
@@ -672,11 +745,169 @@ export const TherapistCalendar: React.FC<TherapistCalendarProps> = ({
               </div>
             </div>
 
-
+            {/* Modal Footer - Edit Button */}
+            <div className="flex gap-3 p-4 border-t bg-gray-50">
+              <button
+                onClick={() => openEditModal(selectedEvent)}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+                Edit Booking
+              </button>
+              <button
+                onClick={closeEventModal}
+                className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg transition-colors font-medium"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}
       
+      {/* Edit Booking Modal */}
+      {showEditModal && selectedEvent && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={closeEventModal}>
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b bg-blue-50">
+              <h2 className="text-lg font-semibold text-gray-900">Edit Booking</h2>
+              <button
+                onClick={closeEventModal}
+                className="p-1 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+              {editError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                  <p className="text-sm text-red-600">{editError}</p>
+                </div>
+              )}
+
+              {/* Date & Time */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Date & Time
+                </label>
+                <input
+                  type="datetime-local"
+                  value={editFormData.new_start_at ? new Date(editFormData.new_start_at).toISOString().slice(0, 16) : ''}
+                  onChange={(e) => setEditFormData({ ...editFormData, new_start_at: new Date(e.target.value).toISOString() })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">Update the session date and time</p>
+              </div>
+
+              {/* Duration */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Duration (minutes)
+                </label>
+                <input
+                  type="number"
+                  min="15"
+                  max="480"
+                  step="15"
+                  value={editFormData.duration || 50}
+                  onChange={(e) => setEditFormData({ ...editFormData, duration: parseInt(e.target.value) })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-gray-500 mt-1">Session duration in minutes</p>
+              </div>
+
+              {/* Session Mode */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Session Mode
+                </label>
+                <select
+                  value={editFormData.mode || 'Online'}
+                  onChange={(e) => setEditFormData({ ...editFormData, mode: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="Online">Google Meet</option>
+                  <option value="Offline">In-Person</option>
+                </select>
+              </div>
+
+              {/* Status */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Status
+                </label>
+                <select
+                  value={editFormData.status || 'scheduled'}
+                  onChange={(e) => setEditFormData({ ...editFormData, status: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="scheduled">Scheduled</option>
+                  <option value="completed">Completed</option>
+                  <option value="cancelled">Cancelled</option>
+                  <option value="no_show">No Show</option>
+                </select>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Notes
+                </label>
+                <textarea
+                  value={editFormData.notes || ''}
+                  onChange={(e) => setEditFormData({ ...editFormData, notes: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  rows={3}
+                  placeholder="Add session notes..."
+                />
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex gap-3 p-4 border-t bg-gray-50">
+              <button
+                onClick={handleEditSave}
+                disabled={editLoading}
+                className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
+              >
+                {editLoading ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Save Changes
+                  </>
+                )}
+              </button>
+              <button
+                onClick={closeEventModal}
+                disabled={editLoading}
+                className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 disabled:bg-gray-100 text-gray-800 rounded-lg transition-colors font-medium"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Day Sessions Modal */}
       {showDaySessionsModal && selectedDate && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={closeDaySessionsModal}>
