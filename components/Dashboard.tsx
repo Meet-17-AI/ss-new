@@ -35,9 +35,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
   const location = useLocation();
   const searchParams = new URLSearchParams(location.search);
   const sourceParam = searchParams.get('source');
+  const clientIdParam = searchParams.get('clientId');
   let activeView = location.pathname.split('/')[2] || 'dashboard';
   if (sourceParam && ['clients', 'appointments'].includes(sourceParam)) {
     activeView = sourceParam;
+  }
+  // A client profile is rendered through the /admin/therapists route (with a clientId
+  // query param). While viewing a client, always highlight the "All Clients" sidebar item
+  // regardless of where the navigation originated.
+  if (clientIdParam) {
+    activeView = 'clients';
   }
   
   // Keep tab states as local state since they were URL params but are now handled by component state or we can just use state

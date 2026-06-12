@@ -535,3 +535,88 @@ export async function sendClientBookingConfirmationEmail(
     throw error;
   }
 }
+
+/**
+ * Send booking cancellation email to Client (#14)
+ */
+export async function sendClientBookingCancellationEmail(
+  clientEmail: string,
+  details: {
+    clientName: string;
+    sessionName: string;
+    sessionTiming: string;
+    reason?: string;
+    refundInitiated?: boolean;
+  }
+): Promise<void> {
+  try {
+    const refundLine = details.refundInitiated
+      ? `<p class="intro-text">A refund has been initiated and will reflect in your account within 5–7 business days.</p>`
+      : '';
+    const reasonLine = details.reason
+      ? `<div class="detail-item"><span class="label">Reason:</span><span class="value">${details.reason}</span></div>`
+      : '';
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f9f9f9; }
+  .container { max-width: 480px; margin: 30px auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #d1d1d1; }
+  .header { text-align: center; padding: 35px 25px 15px; }
+  .brand { font-size: 32px; font-weight: bold; margin: 0; letter-spacing: -0.5px; }
+  .safe { color: #f2c730; } .stories { color: #1e6d63; }
+  .cancelled { font-size: 16px; color: #b91c1c; margin-top: 8px; font-weight: 600; text-transform: uppercase; display: block; }
+  .intro-text { font-size: 15px; color: #555; margin-top: 15px; line-height: 1.5; padding: 0 25px; }
+  .content { padding: 0 30px 30px; }
+  .details-box { background-color: #fdf2f2; border-radius: 10px; padding: 20px; margin: 20px 0; border: 1px solid #f5d5d5; }
+  .detail-item { margin-bottom: 10px; font-size: 14px; display: flex; }
+  .label { font-weight: bold; color: #b91c1c; width: 90px; flex-shrink: 0; }
+  .value { color: #444; }
+  .footer { text-align: center; padding: 25px; background-color: #ffffff; border-top: 1px solid #f0f0f0; }
+  .slogan { font-style: italic; color: #1e6d63; margin: 0; font-size: 15px; font-weight: 500; }
+  .signature { margin-top: 5px; font-size: 14px; color: #888; }
+</style></head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="brand"><span class="safe">Safe</span><span class="stories">Stories</span></div>
+      <strong class="cancelled">Session Cancelled</strong>
+      <p class="intro-text">Hello <strong>${details.clientName}</strong>, your session below has been cancelled.</p>
+    </div>
+    <div class="content">
+      <div class="details-box">
+        <div class="detail-item"><span class="label">Session:</span><span class="value">${details.sessionName}</span></div>
+        <div class="detail-item"><span class="label">Time:</span><span class="value">${details.sessionTiming}</span></div>
+        ${reasonLine}
+      </div>
+      ${refundLine}
+      <p class="intro-text" style="padding:0;">If this was a mistake or you'd like to rebook, please reach out to us and we'll be happy to help.</p>
+    </div>
+    <div class="footer">
+      <p class="slogan">Always there for your mental health.</p>
+      <p class="signature"><strong><br />Team SafeStories</strong><br />410, 4th Floor, Marvel Vista Business Centre,<br /> Near Gera Junction, Lullanagar, <br />Pune, Maharashtra 411048</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    const mailOptions = {
+      from: 'Resend <onboarding@resend.dev>',
+      to: clientEmail,
+      subject: `Session Cancelled: ${details.sessionName}`,
+      html: htmlContent,
+    };
+
+    const { data, error } = await resend.emails.send(mailOptions);
+    if (error) {
+      console.error('❌ Resend API Error:', error);
+      throw error;
+    }
+    console.log('✅ Client booking cancellation email sent successfully:', data?.id);
+  } catch (error) {
+    console.error('❌ Error sending client booking cancellation email:', error);
+    throw error;
+  }
+}

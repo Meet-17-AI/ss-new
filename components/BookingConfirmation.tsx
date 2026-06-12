@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { 
-  Check, X, Calendar, Clock, User, Video, 
+import {
+  Check, X, Calendar, Clock, User, Video, MapPin,
   ChevronLeft, AlertCircle, Loader2, CalendarPlus
 } from 'lucide-react';
 import moment from 'moment';
@@ -21,7 +21,20 @@ interface BookingDetails {
   booking_status: 'confirmed' | 'cancelled';
   booking_cancel_reason: string | null;
   booking_joining_link: string | null;
+  booking_mode: string | null;
 }
+
+// Normalize the stored booking_mode into a customer-friendly label + online/in-person flag
+const resolveSessionMode = (mode: string | null | undefined) => {
+  const m = (mode || '').toLowerCase();
+  const isInPerson = m.includes('person') || m.includes('office') || m.includes('clinic') || m.includes('physical');
+  return {
+    isOnline: !isInPerson,
+    label: isInPerson ? 'In-person' : 'Google Meet',
+  };
+};
+
+const OFFICE_LOCATION = 'SafeStories Office — Lullanagar, Pune, Maharashtra 411040';
 
 export const BookingConfirmation: React.FC<BookingConfirmationProps> = ({ bookingId }) => {
   const [booking, setBooking] = useState<BookingDetails | null>(null);
@@ -136,6 +149,7 @@ export const BookingConfirmation: React.FC<BookingConfirmationProps> = ({ bookin
   ) || therapistInfo.services[0];
 
   const isCancelled = booking.booking_status?.toLowerCase() === 'cancelled';
+  const sessionMode = resolveSessionMode(booking.booking_mode);
   // Use booking_start_at, fall back to booking_invitee_time
   const rawDate = booking.booking_start_at || booking.booking_invitee_time;
   const startTime = rawDate ? moment.utc(rawDate).utcOffset('+05:30') : null;
@@ -201,8 +215,10 @@ export const BookingConfirmation: React.FC<BookingConfirmationProps> = ({ bookin
               <span style={{ fontSize: 13, fontWeight: 600 }}>{service.duration}</span>
             </div>
             <div className="bp-control-group" style={{ padding: '4px 12px' }}>
-              <Video size={14} style={{ color: '#21615D' }} />
-              <span style={{ fontSize: 13, fontWeight: 600 }}>Google Meet</span>
+              {sessionMode.isOnline
+                ? <Video size={14} style={{ color: '#21615D' }} />
+                : <MapPin size={14} style={{ color: '#21615D' }} />}
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{sessionMode.label}</span>
             </div>
           </div>
         </div>
@@ -267,16 +283,19 @@ export const BookingConfirmation: React.FC<BookingConfirmationProps> = ({ bookin
                       </div>
                     )
                   ) : (
-                    booking.booking_joining_link && (
-                      <div className="bp-conf-item">
-                        <Video className="bp-conf-item-icon" size={20} />
-                        <div className="bp-conf-item-text">
-                          <a href={booking.booking_joining_link} target="_blank" rel="noopener noreferrer" className="bp-conf-meet-link">
-                            {booking.booking_joining_link}
-                          </a>
-                        </div>
+                    <div className="bp-conf-item">
+                      {sessionMode.isOnline
+                        ? <Video className="bp-conf-item-icon" size={20} />
+                        : <MapPin className="bp-conf-item-icon" size={20} />}
+                      <div className="bp-conf-item-text">
+                        <span style={{ display: 'block', fontWeight: 600, marginBottom: 2 }}>{sessionMode.label}</span>
+                        {sessionMode.isOnline
+                          ? (booking.booking_joining_link
+                              ? <a href={booking.booking_joining_link} target="_blank" rel="noopener noreferrer" className="bp-conf-meet-link">{booking.booking_joining_link}</a>
+                              : <span style={{ fontSize: 13, color: '#6b7280' }}>The meeting link will be shared before your session.</span>)
+                          : <span style={{ fontSize: 13, color: '#374151' }}>{OFFICE_LOCATION}</span>}
                       </div>
-                    )
+                    </div>
                   )}
                 </div>
 

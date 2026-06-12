@@ -14,7 +14,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from './lib/timezone';
 import { startDashboardApiBookingSync } from './dashboardApiBookingSync';
 import { uploadFile } from './lib/minio';
-import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail } from './lib/email';
+import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendClientBookingCancellationEmail } from './lib/email';
 import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage } from './automations/index';
 import { generateAdminOTP, verifyAdminOTP } from './otp';
 
@@ -3226,26 +3226,27 @@ app.post('/api/cancel-booking', async (req, res) => {
       }
     }
 
-    // 6. Send WhatsApp via AiSensy
+    // 6. Send WhatsApp via AiSensy + cancellation email
     if (notify !== false) {
+      // Compute a human-friendly session time once for both WhatsApp and email.
+      let formattedSessionTime = String(sessionStartTimeStr || '');
+      if (sessionStartTimeStr) {
+        try {
+          const date = new Date(sessionStartTimeStr);
+          const endDate = new Date(date.getTime() + 50 * 60 * 1000); // 50 mins later
+          const formatTime = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+          const weekday = date.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
+          const month = date.toLocaleDateString('en-US', { month: 'short', timeZone: 'Asia/Kolkata' });
+          const day = date.toLocaleDateString('en-US', { day: 'numeric', timeZone: 'Asia/Kolkata' });
+          const year = date.toLocaleDateString('en-US', { year: 'numeric', timeZone: 'Asia/Kolkata' });
+          formattedSessionTime = `${weekday}, ${month} ${day} ${year} at ${formatTime(date)} - ${formatTime(endDate)} IST`;
+        } catch(e) {
+          console.error('Time parsing error', e);
+        }
+      }
+
       try {
         const { sendBookingCancelledRefundClient, sendBookingCancelledNoRefundClient } = await import('./automations/index.js');
-
-        let formattedSessionTime = String(sessionStartTimeStr || '');
-        if (sessionStartTimeStr) {
-          try {
-            const date = new Date(sessionStartTimeStr);
-            const endDate = new Date(date.getTime() + 50 * 60 * 1000); // 50 mins later
-            const formatTime = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
-            const weekday = date.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
-            const month = date.toLocaleDateString('en-US', { month: 'short', timeZone: 'Asia/Kolkata' });
-            const day = date.toLocaleDateString('en-US', { day: 'numeric', timeZone: 'Asia/Kolkata' });
-            const year = date.toLocaleDateString('en-US', { year: 'numeric', timeZone: 'Asia/Kolkata' });
-            formattedSessionTime = `${weekday}, ${month} ${day} ${year} at ${formatTime(date)} - ${formatTime(endDate)} IST`;
-          } catch(e) {
-            console.error('Time parsing error', e);
-          }
-        }
 
         if (isPaid && isRefundInitiated) {
           await sendBookingCancelledRefundClient(
@@ -3255,7 +3256,9 @@ app.post('/api/cancel-booking', async (req, res) => {
             bookingDetails.booking_resource_name || 'Session',
             formattedSessionTime
           );
-        } else if (isPaid && !isRefundInitiated) {
+        } else {
+          // Paid-without-refund OR unpaid/admin-created/free bookings still get a
+          // cancellation message (previously these were silently skipped → #14).
           await sendBookingCancelledNoRefundClient(
             booking_id,
             bookingDetails.invitee_phone,
@@ -3263,11 +3266,40 @@ app.post('/api/cancel-booking', async (req, res) => {
             bookingDetails.booking_resource_name || 'Session',
             formattedSessionTime
           );
-        } else {
-          console.log(`[Cancel Booking] Free session ${booking_id}, skipping cancellation WhatsApp message`);
         }
-      } catch (waErr) {
+        await pool.query(
+          `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+          [booking_id, 'client_cancellation_whatsapp', bookingDetails.invitee_phone, 'success', JSON.stringify({ sent: true })]
+        );
+      } catch (waErr: any) {
         console.error('[Cancel Booking] Failed to send AiSensy cancellation:', waErr);
+        await pool.query(
+          `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+          [booking_id, 'client_cancellation_whatsapp', bookingDetails.invitee_phone, 'failed', waErr?.message || String(waErr)]
+        ).catch(() => {});
+      }
+
+      // Send cancellation EMAIL to the client's real email (previously never sent → #14)
+      try {
+        if (bookingDetails.invitee_email) {
+          await sendClientBookingCancellationEmail(bookingDetails.invitee_email, {
+            clientName: bookingDetails.invitee_name || 'there',
+            sessionName: bookingDetails.booking_resource_name || 'Session',
+            sessionTiming: formattedSessionTime,
+            reason: reason,
+            refundInitiated: isRefundInitiated,
+          });
+          await pool.query(
+            `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+            [booking_id, 'client_cancellation_email', bookingDetails.invitee_email, 'success', JSON.stringify({ sent: true })]
+          );
+        }
+      } catch (emailErr: any) {
+        console.error('[Cancel Booking] Failed to send cancellation email:', emailErr);
+        await pool.query(
+          `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+          [booking_id, 'client_cancellation_email', bookingDetails.invitee_email, 'failed', emailErr?.message || String(emailErr)]
+        ).catch(() => {});
       }
     }
 
@@ -3460,8 +3492,9 @@ app.get('/api/public/booking/:booking_id', async (req, res) => {
         booking_host_name,
         booking_status,
         booking_cancel_reason,
-        booking_joining_link
-      FROM bookings 
+        booking_joining_link,
+        booking_mode
+      FROM bookings
       WHERE booking_id = $1
     `, [booking_id]);
 
@@ -5263,7 +5296,9 @@ app.get('/api/payments', async (req, res) => {
         failure_reason: row.failure_reason || null,
         customer_details: row.customer_details || null,
         refund_id: row.refund_id || null,
-        refund_initiated_at: row.refund_initiated_at || null
+        refund_initiated_at: row.refund_initiated_at || null,
+        refund_status: row.refund_status || null,
+        refund_amount: row.refund_amount || null
       };
     };
 
@@ -5314,6 +5349,32 @@ app.get('/api/payments', async (req, res) => {
          ORDER BY b.invitee_created_at DESC`
       );
       rows.push(...fRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
+    }
+
+    if (!status || status === 'all_payments' || status === 'refunded') {
+      // Refunded payments: refund processed/completed
+      const rRes = await pool.query(
+        `SELECT b.*, p.payment_mode, p.utr, p.failure_reason, p.customer_details, b.invitee_payment_amount AS payment_amount
+         FROM bookings b
+         LEFT JOIN payments p ON b.booking_id = p.booking_id
+         WHERE b.refund_status IS NOT NULL
+           AND LOWER(b.refund_status) IN ('processed', 'refunded', 'completed')
+         ORDER BY b.refund_initiated_at DESC NULLS LAST`
+      );
+      rows.push(...rRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
+    }
+
+    if (!status || status === 'all_payments' || status === 'refund_failed') {
+      // Refund failed payments
+      const rfRes = await pool.query(
+        `SELECT b.*, p.payment_mode, p.utr, p.failure_reason, p.customer_details, b.invitee_payment_amount AS payment_amount
+         FROM bookings b
+         LEFT JOIN payments p ON b.booking_id = p.booking_id
+         WHERE b.refund_status IS NOT NULL
+           AND LOWER(b.refund_status) IN ('failed', 'refund_failed')
+         ORDER BY b.refund_failed_time DESC NULLS LAST`
+      );
+      rows.push(...rfRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
     }
 
     // Sort combined results by created_at desc
@@ -6046,6 +6107,41 @@ app.post('/api/mark-payment-failed', async (req, res) => {
 // Called by the frontend after Razorpay's success handler fires.
 
 // Helper function to process successful payments
+// Reconcile a client's contact info across their bookings (#8).
+// If the same email books with a new phone (or same phone with a new email),
+// propagate the newest value to all of that client's records so the dashboard
+// shows the latest contact info, not a stale one.
+async function reconcileClientContact(email?: string | null, phone?: string | null) {
+  try {
+    const e = (email || '').trim();
+    const p = (phone || '').trim();
+    if (e) {
+      // Same email → push the latest phone onto all of this client's bookings.
+      if (p) {
+        await pool.query(
+          `UPDATE bookings SET invitee_phone = $1
+           WHERE LOWER(invitee_email) = LOWER($2)
+             AND COALESCE(invitee_phone, '') <> $1`,
+          [p, e]
+        );
+      }
+    }
+    if (p) {
+      // Same phone → push the latest email onto all of this client's bookings.
+      if (e) {
+        await pool.query(
+          `UPDATE bookings SET invitee_email = $1
+           WHERE invitee_phone = $2
+             AND COALESCE(LOWER(invitee_email), '') <> LOWER($1)`,
+          [e, p]
+        );
+      }
+    }
+  } catch (err) {
+    console.error('[reconcileClientContact] failed (non-fatal):', err);
+  }
+}
+
 async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrderId, booking, payload, paymentInfo = null) {
   // 3. Resolve therapist (for Google Calendar)
   const therapistName = payload.therapistName || booking.booking_host_name || 'Unknown Therapist';
@@ -6138,16 +6234,27 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
   // 6. Update booking: confirmed + payment info
   const joinLink = (hasCalendar && (payload.sessionMode === 'online' || booking.booking_mode?.toLowerCase().includes('online')))
     ? meetLink : (booking.booking_joining_link || null);
+
+  // Authoritative captured amount from Razorpay (paise → rupees), falling back to stored amount.
+  const capturedAmount = paymentInfo && paymentInfo.amount != null
+    ? Number(paymentInfo.amount) / 100
+    : (booking.invitee_payment_amount || payload.amount || 0);
+  // Razorpay payment creation timestamp (unix seconds → JS Date), falling back to now.
+  const paidAt = paymentInfo && paymentInfo.created_at
+    ? new Date(Number(paymentInfo.created_at) * 1000)
+    : new Date();
+
   await pool.query(
     `UPDATE bookings
      SET booking_status = 'confirmed', payment_status = 'Paid',
          payment_id = $1, invitee_payment_gateway = 'Razorpay', razorpay_order_id = $2,
          booking_joining_link = $3, google_event_id = $4,
          booking_invitee_time = $5, booking_host_time = $6,
+         invitee_payment_amount = $7,
          booking_updated_at = NOW()
-     WHERE booking_id = $7`,
+     WHERE booking_id = $8`,
     [razorpayPaymentId, razorpayOrderId, joinLink, google_event_id || booking.google_event_id,
-     inviteeTime, hostTime, bookingId]
+     inviteeTime, hostTime, capturedAmount, bookingId]
   );
 
   // Update payments table with deep Razorpay info if available
@@ -6159,25 +6266,35 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
     await pool.query(
       `UPDATE payments
        SET razorpay_payment_id = $1,
-           payment_mode = $2,
-           utr = $3,
-           customer_details = $4,
+           razorpay_order_id = COALESCE($2, razorpay_order_id),
+           amount = $3,
+           payment_date = $4,
+           payment_mode = $5,
+           utr = $6,
+           customer_details = $7,
            updated_at = NOW()
-       WHERE razorpay_order_id = $5 OR booking_id = $6`,
+       WHERE razorpay_order_id = $2 OR booking_id = $8`,
       [
         razorpayPaymentId,
+        razorpayOrderId,
+        capturedAmount,
+        paidAt,
         pMode,
         utr,
         JSON.stringify({ email: custEmail, phone: custPhone, full_response: paymentInfo }),
-        razorpayOrderId,
         bookingId
       ]
     );
   } else {
     // Basic update if no deep info
     await pool.query(
-      `UPDATE payments SET razorpay_payment_id = $1, updated_at = NOW() WHERE razorpay_order_id = $2 OR booking_id = $3`,
-      [razorpayPaymentId, razorpayOrderId, bookingId]
+      `UPDATE payments SET razorpay_payment_id = $1,
+           razorpay_order_id = COALESCE($2, razorpay_order_id),
+           amount = COALESCE(NULLIF($3, 0), amount),
+           payment_date = COALESCE(payment_date, $4),
+           updated_at = NOW()
+       WHERE razorpay_order_id = $2 OR booking_id = $5`,
+      [razorpayPaymentId, razorpayOrderId, capturedAmount, paidAt, bookingId]
     );
   }
 
@@ -6529,6 +6646,63 @@ app.post('/api/create-booking', async (req, res) => {
     }
     const endAt = new Date(startAt.getTime() + 50 * 60000);
 
+    // ── Double-booking / conflict prevention (#3) ──
+    // 1. Idempotency: if an identical active booking for this client+slot already exists
+    //    (e.g. the Book button was clicked twice), return it instead of creating a duplicate.
+    if (therapistId) {
+      const dupRes = await pool.query(
+        `SELECT booking_id FROM bookings
+         WHERE therapist_id = $1
+           AND booking_start_at = $2
+           AND COALESCE(invitee_email, '') = COALESCE($3, '')
+           AND booking_status NOT IN ('cancelled', 'canceled', 'payment_failed')
+         LIMIT 1`,
+        [therapistId, startAt.toISOString(), payload.clientEmail || '']
+      );
+      if (dupRes.rows.length > 0) {
+        console.log(`[Create Booking] Duplicate suppressed; returning existing booking ${dupRes.rows[0].booking_id}`);
+        return res.status(200).json({ success: true, booking_id: dupRes.rows[0].booking_id, id: dupRes.rows[0].booking_id, duplicate: true });
+      }
+
+      // 2. System calendar conflict: the therapist already has an overlapping active booking.
+      const conflictRes = await pool.query(
+        `SELECT booking_id FROM bookings
+         WHERE therapist_id = $1
+           AND booking_status NOT IN ('cancelled', 'canceled', 'payment_failed')
+           AND booking_start_at < $3
+           AND booking_end_at > $2
+         LIMIT 1`,
+        [therapistId, startAt.toISOString(), endAt.toISOString()]
+      );
+      if (conflictRes.rows.length > 0) {
+        console.warn(`[Create Booking] Slot conflict for therapist ${therapistId} at ${startAt.toISOString()}`);
+        return res.status(409).json({ error: 'This time slot is no longer available. Please choose another slot.', conflict: 'system' });
+      }
+    }
+
+    // 3. Google Calendar conflict: the therapist's connected calendar is busy at this time.
+    if (therapist && therapist.google_refresh_token) {
+      try {
+        const oauth2ClientFb = await getAuthenticatedClient(therapist);
+        const calendarFb = google.calendar({ version: 'v3', auth: oauth2ClientFb });
+        const fb = await calendarFb.freebusy.query({
+          requestBody: {
+            timeMin: startAt.toISOString(),
+            timeMax: endAt.toISOString(),
+            items: [{ id: 'primary' }],
+          },
+        });
+        const busy = fb.data.calendars?.primary?.busy || [];
+        if (busy.length > 0) {
+          console.warn(`[Create Booking] Google Calendar busy for therapist ${therapist.name} at ${startAt.toISOString()}`);
+          return res.status(409).json({ error: 'This time slot is no longer available. Please choose another slot.', conflict: 'google' });
+        }
+      } catch (fbErr) {
+        // Don't block booking if the free/busy check itself fails — just log it.
+        console.error('[Create Booking] Free/busy check failed (continuing):', fbErr);
+      }
+    }
+
     const formatTime = (dateObj: Date) => {
       return dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
     };
@@ -6662,6 +6836,9 @@ app.post('/api/create-booking', async (req, res) => {
       ]
     );
 
+    // Keep this client's contact info up to date across their bookings (#8)
+    await reconcileClientContact(payload.clientEmail, payload.clientWhatsApp);
+
     // Send native email confirmation
     try {
       await sendClientBookingConfirmationEmail(payload.clientEmail, {
@@ -6779,6 +6956,22 @@ app.post('/api/create-pending-booking', async (req, res) => {
       if (tRes.rows.length > 0) therapistId = tRes.rows[0].therapist_id;
     }
 
+    // Double-booking / conflict prevention (#3) — don't hold a slot already taken.
+    if (therapistId) {
+      const conflictRes = await pool.query(
+        `SELECT booking_id FROM bookings
+         WHERE therapist_id = $1
+           AND booking_status NOT IN ('cancelled', 'canceled', 'payment_failed')
+           AND booking_start_at < $3
+           AND booking_end_at > $2
+         LIMIT 1`,
+        [therapistId, startAt.toISOString(), endAt.toISOString()]
+      );
+      if (conflictRes.rows.length > 0) {
+        return res.status(409).json({ error: 'This time slot is no longer available. Please choose another slot.', conflict: 'system' });
+      }
+    }
+
     const origin = req.get('origin') || 'http://localhost:3004';
     const publicBookingCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
 
@@ -6827,6 +7020,9 @@ app.post('/api/create-pending-booking', async (req, res) => {
         payload.razorpayOrderId
       ]
     );
+
+    // Keep this client's contact info up to date across their bookings (#8)
+    await reconcileClientContact(payload.clientEmail, payload.clientWhatsApp);
 
     res.json({ success: true, booking_id });
   } catch (error: any) {
@@ -7277,16 +7473,33 @@ app.get('/api/sos-documentation', async (req, res) => {
 
 // 1. Receive session documentation from N8N
 app.post('/api/session-documentation', async (req, res) => {
-  try {
-    const { session_type, session_status, client_id, client_name, booking_id, case_history, progress_notes, therapy_goals, consultation_data } = req.body;
+  const { session_type, session_status, client_id, client_name, booking_id, case_history, progress_notes, therapy_goals, consultation_data } = req.body;
 
+  // Track which sections stored successfully so one bad/optional field doesn't fail the whole submit.
+  const sectionErrors: { section: string; error: string }[] = [];
+  let primaryStored = false; // the actual session note (consultation / case history / progress notes)
+
+  // Coerce a value to an integer or null (avoids "invalid input syntax for integer")
+  const toIntOrNull = (v: any) => {
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  // Coerce to an ISO date (YYYY-MM-DD) or null (avoids "invalid input syntax for date")
+  const toDateOrNull = (v: any) => {
+    if (!v) return null;
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
+  };
+
+  try {
     // Map session_status from form to doc_form status value
     const docFormStatus = session_status
-      ? session_status.toLowerCase().replace(' ', '_') // 'No Show' → 'no_show', 'Completed' → 'completed', 'Cancelled' → 'cancelled'
+      ? String(session_status).toLowerCase().replace(' ', '_') // 'No Show' → 'no_show', 'Completed' → 'completed', 'Cancelled' → 'cancelled'
       : 'completed';
 
     // If Consultation - store pre-therapy call form data
     if (session_type === 'Consultation' && consultation_data) {
+     try {
       const vals = [
         booking_id,
         consultation_data.age,
@@ -7331,10 +7544,16 @@ app.post('/api/session-documentation', async (req, res) => {
           consultation_outcome = EXCLUDED.consultation_outcome
       `, vals);
       console.log('✅ Consultation form data stored');
+      primaryStored = true;
+     } catch (e: any) {
+       console.error('❌ [session-documentation] consultation insert failed:', e?.message || e);
+       sectionErrors.push({ section: 'consultation', error: e?.message || String(e) });
+     }
     }
 
     // If First Session - store case history
     if (session_type === 'First Session' && case_history) {
+     try {
       await pool.query(`
         INSERT INTO client_case_history (
           client_id, client_name, booking_id,
@@ -7363,10 +7582,16 @@ app.post('/api/session-documentation', async (req, res) => {
         case_history.medical_history, case_history.medications,
         case_history.previous_mental_health, case_history.insight_level
       ]);
+      primaryStored = true;
+     } catch (e: any) {
+       console.error('❌ [session-documentation] case_history insert failed:', e?.message || e);
+       sectionErrors.push({ section: 'case_history', error: e?.message || String(e) });
+     }
     }
 
     // If Follow-up Session - store progress notes
     if ((session_type === 'Follow-up Session' || session_type === 'First Session') && progress_notes) {
+     try {
       await pool.query(`
         INSERT INTO client_progress_notes (
           client_id, client_name, booking_id, session_number, session_date,
@@ -7414,22 +7639,28 @@ app.post('/api/session-documentation', async (req, res) => {
           updated_at = NOW()
       `, [
         client_id, client_name, booking_id,
-        progress_notes.session_number, progress_notes.session_date || null,
+        toIntOrNull(progress_notes.session_number), progress_notes.session_date || null,
         progress_notes.session_duration, progress_notes.session_mode,
         progress_notes.client_report, progress_notes.direct_quotes,
-        progress_notes.client_presentation, progress_notes.presentation_tags,
+        progress_notes.client_presentation, progress_notes.presentation_tags ?? null,
         progress_notes.techniques_used, progress_notes.homework_assigned,
-        progress_notes.client_reaction, progress_notes.reaction_tags, progress_notes.engagement_notes,
+        progress_notes.client_reaction, progress_notes.reaction_tags ?? null, progress_notes.engagement_notes,
         progress_notes.themes_patterns, progress_notes.progress_regression, progress_notes.clinical_concerns,
         progress_notes.self_harm_mention, progress_notes.self_harm_details, progress_notes.risk_level,
         progress_notes.risk_factors, progress_notes.protective_factors, progress_notes.safety_plan,
         progress_notes.future_interventions, progress_notes.session_frequency,
-        progress_notes.therapist_name, progress_notes.therapist_signature, progress_notes.signature_date || null
+        progress_notes.therapist_name, progress_notes.therapist_signature, toDateOrNull(progress_notes.signature_date)
       ]);
+      primaryStored = true;
+     } catch (e: any) {
+       console.error('❌ [session-documentation] progress_notes insert failed:', e?.message || e);
+       sectionErrors.push({ section: 'progress_notes', error: e?.message || String(e) });
+     }
     }
 
-    // Always store/update therapy goals
-    if (therapy_goals) {
+    // Always store/update therapy goals (secondary — never blocks the note)
+    if (therapy_goals && therapy_goals.goal_description) {
+     try {
       await pool.query(`
         INSERT INTO client_therapy_goals (
           client_id, client_name, goal_description, current_stage, initiation_date, is_active
@@ -7445,19 +7676,44 @@ app.post('/api/session-documentation', async (req, res) => {
         new Date()
       ]);
       console.log('✅ Therapy goals stored/updated');
+     } catch (e: any) {
+       console.error('❌ [session-documentation] therapy_goals upsert failed:', e?.message || e);
+       sectionErrors.push({ section: 'therapy_goals', error: e?.message || String(e) });
+     }
     }
 
-    // Update documentation form status
-    await pool.query(`
-      UPDATE client_doc_form 
-      SET status = $1
-      WHERE booking_id = $2
-    `, [docFormStatus, booking_id]);
+    // Update documentation form status (secondary)
+    try {
+      await pool.query(`
+        UPDATE client_doc_form
+        SET status = $1
+        WHERE booking_id = $2
+      `, [docFormStatus, booking_id]);
+    } catch (e: any) {
+      console.error('❌ [session-documentation] doc_form status update failed:', e?.message || e);
+      sectionErrors.push({ section: 'doc_form_status', error: e?.message || String(e) });
+    }
 
-    res.json({ success: true, message: 'Session documentation stored successfully' });
-  } catch (error) {
+    // Decide overall result:
+    // - If a primary note section was attempted and failed, surface a 500 with the real error.
+    // - Otherwise succeed (secondary failures are logged but don't block the therapist).
+    const primaryFailed = sectionErrors.some(s => ['consultation', 'case_history', 'progress_notes'].includes(s.section));
+    if (primaryFailed) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to store session documentation',
+        details: sectionErrors,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Session documentation stored successfully',
+      warnings: sectionErrors.length ? sectionErrors : undefined,
+    });
+  } catch (error: any) {
     console.error('❌ Error storing session documentation:', error);
-    res.status(500).json({ success: false, error: 'Failed to store session documentation' });
+    res.status(500).json({ success: false, error: error?.message || 'Failed to store session documentation' });
   }
 });
 

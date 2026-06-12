@@ -911,8 +911,27 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     });
   };
 
-  const handleViewClientFromAppointment = async (appointment: any) => {
-    // Find client by phone
+  // Normalize a phone number for fuzzy comparison (strip spaces/symbols/leading zeros)
+  const normalizePhone = (p?: string) => (p || '').replace(/[\s\-()+]/g, '').replace(/^0+/, '');
+
+  // Robustly match a client from the loaded clients list by phone, email, or name.
+  const findClientMatch = (clientsList: any[], opts: { phone?: string; email?: string; name?: string }) => {
+    const phone = normalizePhone(opts.phone);
+    const email = (opts.email || '').toLowerCase().trim();
+    const name = (opts.name || '').toLowerCase().trim();
+    return clientsList.find((c: any) => {
+      const cPhones = (c.client_phone || '').split(',').map((x: string) => normalizePhone(x)).filter(Boolean);
+      const cEmail = (c.client_email || '').toLowerCase().trim();
+      const cName = (c.client_name || '').toLowerCase().trim();
+      if (phone && cPhones.some((cp: string) => cp === phone || cp.endsWith(phone) || phone.endsWith(cp))) return true;
+      if (email && cEmail && cEmail === email) return true;
+      if (name && cName && cName === name) return true;
+      return false;
+    });
+  };
+
+  // Ensure the clients list is loaded, returning it.
+  const ensureClientsLoaded = async () => {
     let clientsList = clients;
     if (clients.length === 0) {
       try {
@@ -926,37 +945,42 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
         console.error('Error fetching clients:', error);
       }
     }
+    return clientsList;
+  };
 
-    const client = clientsList.find(c => c.client_phone === appointment.contact_info);
-    if (client) {
-      setActiveView('clients');
-      setSelectedClient(client);
-      await fetchClientDetails(client);
-    }
+  const openClientProfile = async (client: any) => {
+    setActiveView('clients');
+    setSelectedClient(client);
+    await fetchClientDetails(client);
+  };
+
+  const handleViewClientFromAppointment = async (appointment: any) => {
+    const clientsList = await ensureClientsLoaded();
+    const client = findClientMatch(clientsList, {
+      phone: appointment.contact_info || appointment.invitee_phone,
+      email: appointment.invitee_email,
+      name: appointment.client_name,
+    }) || {
+      // Fallback so the profile still opens even when the list has no exact row
+      client_name: appointment.client_name,
+      client_phone: appointment.contact_info || appointment.invitee_phone || '',
+      client_email: appointment.invitee_email || '',
+    };
+    await openClientProfile(client);
   };
 
   const handleViewClientFromBooking = async (booking: any) => {
-    // Find client by name (from upcoming bookings)
-    let clientsList = clients;
-    if (clients.length === 0) {
-      try {
-        const response = await fetch(`/api/therapist-clients?therapist_id=${user.id}`);
-        if (response.ok) {
-          const data = await response.json();
-          clientsList = data.clients || [];
-          setClients(clientsList);
-        }
-      } catch (error) {
-        console.error('Error fetching clients:', error);
-      }
-    }
-
-    const client = clientsList.find(c => c.client_name === booking.client_name);
-    if (client) {
-      setActiveView('clients');
-      setSelectedClient(client);
-      await fetchClientDetails(client);
-    }
+    const clientsList = await ensureClientsLoaded();
+    const client = findClientMatch(clientsList, {
+      phone: booking.client_phone || booking.contact_info || booking.invitee_phone,
+      email: booking.client_email || booking.invitee_email,
+      name: booking.client_name,
+    }) || {
+      client_name: booking.client_name,
+      client_phone: booking.client_phone || booking.contact_info || booking.invitee_phone || '',
+      client_email: booking.client_email || booking.invitee_email || '',
+    };
+    await openClientProfile(client);
   };
 
   const isMeetingStarted = (apt: any) => {
@@ -1325,34 +1349,24 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     }
 
     // Fetch clients if not already loaded
-    let clientsList = clients;
-    if (clients.length === 0) {
-      try {
-        const response = await fetch(`/api/therapist-clients?therapist_id=${user.id}`);
-        if (response.ok) {
-          const data = await response.json();
-          clientsList = data.clients || [];
-          setClients(clientsList);
-        }
-      } catch (error) {
-        console.error('Error fetching clients:', error);
-      }
-    }
+    const clientsList = await ensureClientsLoaded();
 
-    // Find client by phone number - use invitee_phone from appointments
-    const clientPhone = appointment.contact_info || appointment.invitee_phone;
-    const client = clientsList.find(c => c.client_phone === clientPhone);
+    // Find client robustly by phone/email/name, with a fallback built from the appointment
+    const client = findClientMatch(clientsList, {
+      phone: appointment.contact_info || appointment.invitee_phone,
+      email: appointment.invitee_email,
+      name: appointment.client_name,
+    }) || {
+      client_name: appointment.client_name,
+      client_phone: appointment.contact_info || appointment.invitee_phone || '',
+      client_email: appointment.invitee_email || '',
+    };
 
-    if (client) {
-      // Switch to clients view
-      setActiveView('clients');
-      // Set selected client
-      setSelectedClient(client);
-      // Fetch client details
-      await fetchClientDetails(client);
-      // Open Progress Notes tab
-      setClientViewTab('sessions');
-    }
+    // Switch to clients view, select client, load details, open Sessions tab
+    setActiveView('clients');
+    setSelectedClient(client);
+    await fetchClientDetails(client);
+    setClientViewTab('sessions');
 
     setSessionNotesLoading(false);
   };
@@ -1370,9 +1384,9 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   const filteredClientsList = clients.filter(client => {
     // Search filter
     const matchesSearch = searchTerm === '' ||
-      client.client_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      client.client_email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      client.client_phone.includes(searchTerm);
+      (client.client_name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (client.client_email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (client.client_phone || '').includes(searchTerm);
 
     // Status filter
     const clientStatus = getClientStatus(client);
@@ -2021,9 +2035,9 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                       // Filter appointments first
                       const filteredAppointments = appointments.filter(appointment => {
                         const matchesSearch = appointmentSearchTerm === '' ||
-                          appointment.session_name.toLowerCase().includes(appointmentSearchTerm.toLowerCase()) ||
-                          appointment.client_name.toLowerCase().includes(appointmentSearchTerm.toLowerCase()) ||
-                          (user.full_name || user.username).toLowerCase().includes(appointmentSearchTerm.toLowerCase());
+                          (appointment.session_name || '').toLowerCase().includes(appointmentSearchTerm.toLowerCase()) ||
+                          (appointment.client_name || '').toLowerCase().includes(appointmentSearchTerm.toLowerCase()) ||
+                          (user.full_name || user.username || '').toLowerCase().includes(appointmentSearchTerm.toLowerCase());
 
                         if (!matchesSearch) return false;
 

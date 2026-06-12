@@ -66,6 +66,7 @@ const getPathForRole = (user: any): string => {
 
 const App: React.FC = () => {
   const { logout, user } = useAuth();
+  const location = useLocation();
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
   useEffect(() => {
@@ -76,7 +77,12 @@ const App: React.FC = () => {
 
   if (import.meta.env.VITE_VERCEL === '1') return <MaintenancePage />;
 
-  if (isMobile) {
+  // Public, customer-facing routes must work on mobile. Only the authenticated internal
+  // dashboards (admin/therapist/crm/automation-logs) require desktop.
+  const publicPrefixes = ['/book', '/booking-confirmation', '/pay', '/session-notes', '/sos-view'];
+  const isPublicRoute = publicPrefixes.some(p => location.pathname.startsWith(p));
+
+  if (isMobile && !isPublicRoute) {
     return (
       <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-teal-50 to-teal-100 p-6">
         <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-md text-center">

@@ -34,6 +34,8 @@ interface Payment {
   failure_reason?: string;
   refund_id?: string;
   refund_initiated_at?: string;
+  refund_status?: string;
+  refund_amount?: number;
 }
 
 export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initialTab }) => {
@@ -54,7 +56,8 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     { id: 'all_payments', label: 'All Payments' },
     { id: 'completed', label: 'Completed/Paid' },
     { id: 'pending', label: 'Pending' },
-    { id: 'expired', label: 'Expired Link' },
+    { id: 'expired', label: 'Failed/Expired' },
+    { id: 'refunded', label: 'Refunded' },
     { id: 'all', label: 'All Cancellations' },
     { id: 'Pending', label: 'Refund Initiated' },
     { id: 'Failed', label: 'Refund Failed' },
@@ -101,7 +104,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
 
   useEffect(() => {
     // Fetch payments for payment tabs
-    if (['all_payments', 'completed', 'pending', 'expired'].includes(activeTab)) {
+    if (['all_payments', 'completed', 'pending', 'expired', 'refunded'].includes(activeTab)) {
       fetchPayments();
     }
     // Fetch refunds for cancellation tabs
@@ -110,7 +113,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     }
   }, [activeTab, fetchPayments, fetchRefunds]);
 
-  const isPaymentTab = ['all_payments', 'completed', 'pending', 'expired'].includes(activeTab);
+  const isPaymentTab = ['all_payments', 'completed', 'pending', 'expired', 'refunded'].includes(activeTab);
   const safeRefunds = Array.isArray(refunds) ? refunds : [];
   const safePayments = Array.isArray(payments) ? payments : [];
   const filteredRefunds = !isPaymentTab
@@ -249,13 +252,22 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                       <td className="px-6 py-4">{payment.session_timings}</td>
                       <td className="px-6 py-4">₹{Number(payment.payment_amount || 0).toLocaleString()}</td>
                       <td className="px-6 py-4">
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                          (payment.payment_status === 'Completed' || payment.payment_status === 'Paid' || (isPaymentTab && activeTab === 'completed')) ? 'bg-green-100 text-green-700' :
-                          payment.payment_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
-                          'bg-red-100 text-red-700'
-                        }`}>
-                          {payment.payment_status || (activeTab === 'completed' ? 'Paid' : 'Failed')}
-                        </span>
+                        {(() => {
+                          const rs = (payment.refund_status || '').toLowerCase();
+                          const isRefunded = activeTab === 'refunded' || ['processed', 'refunded', 'completed'].includes(rs);
+                          if (isRefunded) {
+                            return <span className="px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">Refunded</span>;
+                          }
+                          return (
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                              (payment.payment_status === 'Completed' || payment.payment_status === 'Paid' || (isPaymentTab && activeTab === 'completed')) ? 'bg-green-100 text-green-700' :
+                              payment.payment_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
+                              'bg-red-100 text-red-700'
+                            }`}>
+                              {payment.payment_status || (activeTab === 'completed' ? 'Paid' : 'Failed')}
+                            </span>
+                          );
+                        })()}
                       </td>
                     </tr>
                   ))

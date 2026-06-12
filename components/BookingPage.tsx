@@ -269,6 +269,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   }, [selectedDate, session.owner, session.title]);
 
   const handleBookingSubmit = async () => {
+    if (isSubmitting) return; // guard against double-clicks creating duplicate bookings
     if (!formData.agreedTerms) {
       alert('Please agree to the Terms & Conditions');
       return;

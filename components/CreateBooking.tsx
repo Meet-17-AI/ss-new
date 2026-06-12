@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Lottie from 'lottie-react';
+import toast from 'react-hot-toast';
 import sessionBookedAnimation from '../session-booked.json';
 import paymentSentAnimation from '../payment-sent.json';
 
@@ -372,10 +373,14 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
             if (modeString.includes('physical')) modes.push('in-person');
           }
           
-          setAvailableModes(modes);
-          
-          if (modes.length === 1 && modes[0] === 'online') {
-            setSessionMode('online');
+          // If the service didn't declare any modes, allow the admin to pick either one
+          // rather than locking both radios.
+          const effectiveModes = modes.length > 0 ? modes : ['online', 'in-person'];
+          setAvailableModes(effectiveModes);
+
+          // Auto-select when only one mode is available; otherwise force an explicit choice.
+          if (effectiveModes.length === 1) {
+            setSessionMode(effectiveModes[0] as 'online' | 'in-person');
           } else {
             setSessionMode('');
           }
@@ -411,6 +416,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
 
   const handleSendPaymentLink = async () => {
     if (isSubmitting) return;
+    // Require an explicit session-mode choice when more than one mode is available
+    if (!isFreeConsultation && availableModes.length > 1 && !sessionMode) {
+      toast.error('Please select a session mode (Google Meet or In-person)');
+      return;
+    }
     setIsSubmitting(true);
     
     // Check if we should generate a payment link
@@ -474,8 +484,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       if (response.ok) {
         setGeneratedPaymentLink(''); // clear just in case
         setShowSuccessModal(true);
+      } else if (response.status === 409) {
+        const data = await response.json().catch(() => ({}));
+        toast.error(data.error || 'This time slot is no longer available. Please choose another slot.');
       } else {
-        alert('Failed to create booking');
+        toast.error('Failed to create booking');
       }
     } catch (error) {
       console.error('Error creating booking:', error);
@@ -726,7 +739,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 disabled={!availableModes.includes('online')}
                 className="w-4 h-4 disabled:opacity-50 disabled:cursor-not-allowed"
               />
-              <span className={`text-sm ${!availableModes.includes('online') ? 'text-gray-400' : ''}`}>Online</span>
+              <span className={`text-sm ${!availableModes.includes('online') ? 'text-gray-400' : ''}`}>Google Meet</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer">
               <input
