@@ -196,10 +196,14 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   const [feedbackTarget, setFeedbackTarget] = useState<any>(null);
   const [isSendingFeedback, setIsSendingFeedback] = useState(false);
 
+  const [dbServices, setDbServices] = useState<any[]>([]);
+
   useEffect(() => {
     if (activeView === 'resources' && !selectedEditEvent) {
       const therapistName = user.full_name;
-      const therapistServices = therapistData[therapistName]?.services || therapistData["Ishika Mahajan"]?.services;
+      const therapistServices = dbServices.length > 0 ? dbServices : (therapistData[therapistName]?.services || []);
+      
+      // If we don't have dbServices yet and there is no fallback data, wait for it
       if (!therapistServices || therapistServices.length === 0) return;
 
       const primaryService = therapistServices[0];
@@ -238,7 +242,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           });
         });
     }
-  }, [activeView, selectedEditEvent, user.full_name]);
+  }, [activeView, selectedEditEvent, user.full_name, dbServices]);
 
   // Check if profile is under review (submitted but not approved yet)
   const isProfileUnderReview = user.profileStatus === 'pending_review' ||
@@ -785,7 +789,17 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
         ? `/api/therapist-stats?therapist_id=${user.id}&start=${dateRange.start}&end=${dateRange.end}`
         : `/api/therapist-stats?therapist_id=${user.id}`;
 
-      const response = await fetch(statsUrl);
+      const [response, servicesResponse] = await Promise.all([
+        fetch(statsUrl),
+        fetch('/api/services')
+      ]);
+
+      if (servicesResponse.ok) {
+        const allServices = await servicesResponse.json();
+        const myServices = allServices.filter((s: any) => s.therapist_id === user.therapist_id || String(s.therapist_id) === String(user.therapist_id));
+        setDbServices(myServices);
+      }
+
       if (response.ok) {
         const data = await response.json();
 
@@ -2303,7 +2317,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
             onClick={() => {
               resetAllStates();
               setActiveView('resources');
-              const therapistServices = therapistData[user.full_name]?.services || therapistData["Ishika Mahajan"]?.services;
+              const therapistServices = dbServices.length > 0 ? dbServices : (therapistData[user.full_name]?.services || []);
               if (!therapistServices || therapistServices.length === 0) return;
               const primaryService = therapistServices[0];
               // Use session scheduleId if available, otherwise fetch from therapist_resources
@@ -3101,7 +3115,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                 <EditEvent
                   event={selectedEditEvent}
                   therapistId={user.therapist_id}
-                  services={therapistData[user.full_name]?.services || []}
+                  services={dbServices.length > 0 ? dbServices : (therapistData[user.full_name]?.services || [])}
                   onBack={() => {
                     setSelectedEditEvent(null);
                     setActiveView('dashboard');
