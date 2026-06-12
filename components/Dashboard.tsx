@@ -119,6 +119,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
       .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(' ');
   };
+
+  const formatMode = (mode: string | undefined): string => {
+    if (!mode) return 'N/A';
+    const m = mode.toLowerCase().trim();
+    // Map all variants to two standard labels
+    if (m.includes('person') || m.includes('office') || m.includes('clinic')) return 'In-Person';
+    if (m.includes('google') || m.includes('meet') || m.includes('online') || m.includes('video')) return 'Google Meet';
+    if (m === 'offline') return 'In-Person'; // offline = no internet = in-person
+    return 'Google Meet'; // safe default for unknown values
+  };
+
   const [allBookings, setAllBookings] = useState<any[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalBookings, setTotalBookings] = useState(0);
@@ -179,7 +190,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
   };
 
   const copyBookingDetails = (booking: any) => {
-    const details = `${booking.therapy_type}\n${booking.booking_start_at}\nTime zone: Asia/Kolkata\n${booking.mode} joining info${booking.booking_joining_link ? `\nVideo call link: ${booking.booking_joining_link}` : ''}`;
+    const details = `${booking.therapy_type}\n${booking.booking_start_at}\nTime zone: Asia/Kolkata\n${formatMode(booking.mode)} joining info${booking.booking_joining_link ? `\nVideo call link: ${booking.booking_joining_link}` : ''}`;
     navigator.clipboard.writeText(details).then(() => {
       setToast({ message: 'Booking details copied to clipboard!', type: 'success' });
     }).catch(() => {
@@ -763,8 +774,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                             <td className="px-6 py-4">{booking.therapy_type}</td>
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-2">
-                                <span>{booking.mode}</span>
-                                {booking.mode === 'Online' && booking.booking_joining_link && (
+                                <span>{formatMode(booking.mode)}</span>
+                                {(booking.mode === 'Online' || booking.mode === 'Online Video Call' || booking.mode?.toLowerCase().includes('google') || booking.mode?.toLowerCase().includes('meet')) && booking.booking_joining_link && (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
