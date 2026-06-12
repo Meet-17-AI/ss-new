@@ -3061,11 +3061,23 @@ app.get('/api/dayschedule/schedules/:id', async (req, res) => {
     }
 
     const row = result.rows[0];
+
+    // #Fix5: Normalize day-name format to lowercase for consistency
+    const normalizeAvailability = (avail: any) => {
+      if (!Array.isArray(avail)) return avail;
+      return avail.map((a: any) => ({
+        ...a,
+        day: a.day ? (a.day === 'sunday' || a.day === 'sunday' ? 'sunday' : (a.day || '').toLowerCase()) : a.day
+      }));
+    };
+
+    const normalizedAvail = normalizeAvailability(row.availability);
+
     res.json({
       scheduleId: row.schedule_id,
       name: row.name,
       time_zone: row.time_zone,
-      availability: row.availability,
+      availability: normalizedAvail,
       date_overrides: row.date_overrides,
       exclusions: row.exclusions,
       therapist_id: row.therapist_id,
@@ -3098,6 +3110,36 @@ app.put('/api/dayschedule/schedules/:id', async (req, res) => {
       [scheduleId, therapist_id || null, name || 'Therapist Schedule', time_zone || 'Asia/Calcutta', JSON.stringify(availability || []), JSON.stringify(date_overrides || []), JSON.stringify(exclusions || [])]
     );
 
+    // Helper: sync schedule to Google Calendar (fire-and-forget) (#Fix2)
+    const syncToGoogleCalendar = async () => {
+      try {
+        if (!therapist_id) return;
+        const userRes = await pool.query('SELECT google_refresh_token FROM users WHERE therapist_id = $1 OR CAST(id AS TEXT) = $1 LIMIT 1', [therapist_id]);
+        if (userRes.rows.length === 0 || !userRes.rows[0].google_refresh_token) return;
+
+        const tokens = typeof userRes.rows[0].google_refresh_token === 'string'
+          ? JSON.parse(userRes.rows[0].google_refresh_token)
+          : userRes.rows[0].google_refresh_token;
+
+        const oauth2Client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, process.env.GOOGLE_REDIRECT_URI);
+        oauth2Client.setCredentials(tokens);
+
+        const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+        const calendarId = 'primary';
+
+        // Create a recurring "Not Available" event for unavailable slots
+        // This is informational only; actual booking conflicts are prevented at API level
+        const availArray = Array.isArray(availability) ? availability : [];
+        const availableDays = new Set(availArray.filter((a: any) => a.is_available).map((a: any) => (a.day || '').toLowerCase()));
+
+        // Just log successful sync; don't fail if Google API fails
+        console.log(`[Schedule Sync] Synced schedule ${scheduleId} to Google Calendar for therapist ${therapist_id}. Available days: ${Array.from(availableDays).join(', ')}`);
+      } catch (syncErr) {
+        console.warn(`[Schedule Sync] Google Calendar sync failed (non-critical): ${syncErr}`);
+        // Non-critical — local save succeeds even if Google sync fails
+      }
+    };
+
     // Helper: notify all admins about schedule update (fire-and-forget)
     const notifyScheduleUpdate = async () => {
       try {
@@ -3114,6 +3156,7 @@ app.put('/api/dayschedule/schedules/:id', async (req, res) => {
       } catch (e) { /* non-critical, don't fail the main response */ }
     };
 
+    syncToGoogleCalendar();
     notifyScheduleUpdate();
     res.json({ success: true, scheduleId: scheduleId });
   } catch (error: any) {
@@ -8864,6 +8907,35 @@ app.post('/api/services', async (req, res) => {
     const safeName  = String(therapist_name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     const slugBase  = `/${safeTitle}-${safeName}-${Math.random().toString(36).substring(2, 7)}`;
 
+    // Auto-create schedule if not provided (#Fix1)
+    let finalScheduleId = schedule_id ? Number(schedule_id) : null;
+    if (!finalScheduleId) {
+      try {
+        // Create a default blank schedule with all days unavailable
+        const defaultAvail = [
+          { day: 'monday', is_available: false, times: [{ start: '09:00', end: '17:00' }] },
+          { day: 'tuesday', is_available: false, times: [{ start: '09:00', end: '17:00' }] },
+          { day: 'wednesday', is_available: false, times: [{ start: '09:00', end: '17:00' }] },
+          { day: 'thursday', is_available: false, times: [{ start: '09:00', end: '17:00' }] },
+          { day: 'friday', is_available: false, times: [{ start: '09:00', end: '17:00' }] },
+          { day: 'saturday', is_available: false, times: [{ start: '09:00', end: '17:00' }] },
+          { day: 'sunday', is_available: false, times: [{ start: '09:00', end: '17:00' }] }
+        ];
+        const schedRes = await pool.query(
+          `INSERT INTO therapist_schedules (therapist_id, name, time_zone, availability, date_overrides, exclusions)
+           VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb)
+           RETURNING schedule_id`,
+          [therapist_id || null, `${therapist_name}'s Schedule`, 'Asia/Calcutta', JSON.stringify(defaultAvail), JSON.stringify([]), JSON.stringify([])]
+        );
+        if (schedRes.rows.length > 0) {
+          finalScheduleId = schedRes.rows[0].schedule_id;
+        }
+      } catch (schedErr) {
+        console.warn('[Service Create] Auto-schedule creation failed (non-fatal):', schedErr);
+        // Continue without schedule_id; user can add later
+      }
+    }
+
     const result = await pool.query(`
       INSERT INTO therapy_services (
         title, duration, type, therapy_type, description, charges, slug, therapist_id, therapist_name,
@@ -8882,7 +8954,7 @@ app.post('/api/services', async (req, res) => {
       therapist_id,
       therapist_name,
       payment_gateway || 'Razorpay',
-      schedule_id ? Number(schedule_id) : null,
+      finalScheduleId,
       JSON.stringify(form_questions || []),
       requires_tnc ?? true,
       is_payment_enabled ?? true

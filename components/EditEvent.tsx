@@ -91,10 +91,17 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
   }, [activePicker, showLinkDropdown]);
 
   useEffect(() => {
-    if (activeTab === 'Schedule' && event.scheduleId && !scheduleData) {
-      fetchSchedule();
+    if (activeTab === 'Schedule') {
+      if (!scheduleData) {
+        if (event.scheduleId) {
+          fetchSchedule();
+        } else {
+          // #Fix3: If scheduleId is missing, show error and prevent edit
+          setError('Schedule not configured. Please go back and ensure the service was created properly.');
+        }
+      }
     }
-  }, [activeTab, event.scheduleId]);
+  }, [activeTab, event.scheduleId, scheduleData]);
 
   const fetchSchedule = async () => {
     try {
@@ -710,6 +717,13 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
             </button>
           </div>
         </div>
+
+        {!event.scheduleId && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C', borderRadius: 8, padding: '10px 14px', margin: '12px 0', fontSize: 14 }}>
+            <AlertCircle size={16} />
+            <span>Schedule not found. Please go back and ensure this service is properly saved.</span>
+          </div>
+        )}
 
         {googleConnected === false && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C', borderRadius: 8, padding: '10px 14px', margin: '12px 0', fontSize: 14 }}>
