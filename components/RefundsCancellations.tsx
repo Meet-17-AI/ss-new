@@ -53,7 +53,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [activeTab, searchQuery]);
+  }, [activeTab, searchQuery, dateFrom, dateTo]);
 
   const tabs = [
     { id: 'all_payments', label: 'All Payments' },
@@ -132,18 +132,30 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
       payment.razorpay_order_id,
       payment.booking_id,
       payment.session_name,
-    ].some(v => (v || '').toLowerCase().includes(q));
+    ].some(v => {
+      try {
+        return (v || '').toString().toLowerCase().includes(q);
+      } catch {
+        return false;
+      }
+    });
   };
 
   // Optional date-range filter on payment/booking creation date (#10)
+  // Defensive: if no date filters active, allow all. If date is missing, allow it (don't crash).
   const matchesDateRange = (payment: Payment) => {
-    if (!dateFrom && !dateTo) return true;
-    if (!payment.created_at) return false;
-    const t = new Date(payment.created_at).getTime();
-    if (isNaN(t)) return false;
-    if (dateFrom && t < new Date(dateFrom + 'T00:00:00').getTime()) return false;
-    if (dateTo && t > new Date(dateTo + 'T23:59:59').getTime()) return false;
-    return true;
+    if (!dateFrom && !dateTo) return true; // no filters → allow all
+    const dateStr = payment.created_at || payment.booking_updated_at;
+    if (!dateStr) return true; // no date field → allow (don't reject)
+    try {
+      const t = new Date(dateStr).getTime();
+      if (isNaN(t)) return true; // invalid date → allow (don't crash)
+      if (dateFrom && t < new Date(dateFrom + 'T00:00:00').getTime()) return false;
+      if (dateTo && t > new Date(dateTo + 'T23:59:59').getTime()) return false;
+      return true;
+    } catch {
+      return true; // any error → allow, don't crash
+    }
   };
 
   const filteredRefunds = !isPaymentTab
