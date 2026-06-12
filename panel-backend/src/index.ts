@@ -4035,6 +4035,7 @@ app.get('/api/client-details', async (req, res) => {
         b.booking_invitee_time,
         b.booking_host_name,
         b.booking_status,
+        b.booking_mode,
         b.emergency_contact_name,
         b.emergency_contact_relation,
         b.emergency_contact_number,
@@ -5085,7 +5086,10 @@ app.get('/api/session-notes-info', async (req, res) => {
 
     res.json({
       clientName: row.client_name || '',
-      clientId: row.client_id || '',
+      // Stable client identifier (#6): all_clients_table id when available,
+      // else the booking's phone (what the client view queries case history by),
+      // else email. Prevents empty client_ids that collide across clients.
+      clientId: row.client_id || row.invitee_phone || row.invitee_email || '',
       bookingId: row.booking_id,
       bookingSubject: row.booking_subject || '',
       sessionDate: fmtDate(startAt),
@@ -5298,7 +5302,8 @@ app.get('/api/payments', async (req, res) => {
         refund_id: row.refund_id || null,
         refund_initiated_at: row.refund_initiated_at || null,
         refund_status: row.refund_status || null,
-        refund_amount: row.refund_amount || null
+        refund_amount: row.refund_amount || null,
+        booking_status: row.booking_status || null
       };
     };
 
@@ -6107,6 +6112,88 @@ app.post('/api/mark-payment-failed', async (req, res) => {
 // Called by the frontend after Razorpay's success handler fires.
 
 // Helper function to process successful payments
+// Enforce one-therapist-per-client (#4).
+// A client's current therapist is the therapist of their most recent active
+// (non-cancelled, non-failed) booking, excluding SafeStories free consultations.
+// Booking with a different therapist is blocked — admins should use the
+// Transfer Client feature to change a client's therapist (transfers rewrite
+// past bookings to the new therapist, so this check stays consistent).
+// Conservative by design: when in doubt (no match / missing data), it allows.
+async function checkExistingTherapistConflict(
+  clientEmail?: string | null,
+  clientPhone?: string | null,
+  newTherapistId?: string | null,
+  newTherapistName?: string | null
+): Promise<{ existingTherapistName: string; existingTherapistId: string | null } | null> {
+  try {
+    // Free consultations (platform calendar) never bind a client to a therapist
+    // and are never blocked.
+    if (!newTherapistName || newTherapistName === 'Unknown Therapist') return null;
+    if (newTherapistName === 'SafeStories' || newTherapistId === 'SafeStories') return null;
+
+    const e = (clientEmail || '').trim();
+    const p = (clientPhone || '').trim();
+    if (!e && !p) return null;
+
+    const res = await pool.query(
+      `SELECT therapist_id, booking_host_name FROM bookings
+       WHERE (($1 <> '' AND LOWER(invitee_email) = LOWER($1))
+           OR ($2 <> '' AND invitee_phone = $2))
+         AND booking_status NOT IN ('cancelled', 'canceled', 'payment_failed')
+         AND COALESCE(therapist_id, '') <> 'SafeStories'
+         AND COALESCE(booking_host_name, '') NOT ILIKE 'safestories%'
+         AND COALESCE(booking_resource_name, '') NOT ILIKE '%free consultation%'
+       ORDER BY invitee_created_at DESC NULLS LAST
+       LIMIT 1`,
+      [e, p]
+    );
+    if (res.rows.length === 0) return null;
+
+    const existing = res.rows[0];
+    const sameId = newTherapistId && existing.therapist_id &&
+      String(newTherapistId) === String(existing.therapist_id);
+    const sameName = newTherapistName && existing.booking_host_name &&
+      existing.booking_host_name.toLowerCase().trim() === newTherapistName.toLowerCase().trim();
+    if (sameId || sameName) return null;
+
+    return {
+      existingTherapistName: existing.booking_host_name || 'their current therapist',
+      existingTherapistId: existing.therapist_id || null,
+    };
+  } catch (err) {
+    // Never block bookings because the check itself failed — log and allow.
+    console.error('[checkExistingTherapistConflict] failed (allowing booking):', err);
+    return null;
+  }
+}
+
+// ── Typo guard for contact reconciliation ──
+// Prevents a fat-fingered email domain (gnail.com, hotmial.com, …) on the
+// newest booking from overwriting a known-good provider domain everywhere.
+const COMMON_EMAIL_DOMAINS = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com', 'rediffmail.com', 'yahoo.in', 'live.com'];
+
+function emailEditDistance(a: string, b: string): number {
+  const dp: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return dp[a.length][b.length];
+}
+
+function isSuspiciousEmailTypo(newEmail: string, existingEmail: string): boolean {
+  const nd = (newEmail.toLowerCase().split('@')[1] || '');
+  const ed = (existingEmail.toLowerCase().split('@')[1] || '');
+  const nl = (newEmail.toLowerCase().split('@')[0] || '');
+  const el = (existingEmail.toLowerCase().split('@')[0] || '');
+  // Same mailbox name, the old domain is a genuine provider, and the new one
+  // is a near-miss of a genuine provider → almost certainly a typo.
+  return nl === el &&
+    COMMON_EMAIL_DOMAINS.includes(ed) &&
+    !COMMON_EMAIL_DOMAINS.includes(nd) &&
+    COMMON_EMAIL_DOMAINS.some(cd => emailEditDistance(nd, cd) <= 2);
+}
+
 // Reconcile a client's contact info across their bookings (#8).
 // If the same email books with a new phone (or same phone with a new email),
 // propagate the newest value to all of that client's records so the dashboard
@@ -6115,27 +6202,35 @@ async function reconcileClientContact(email?: string | null, phone?: string | nu
   try {
     const e = (email || '').trim();
     const p = (phone || '').trim();
-    if (e) {
+    if (e && p) {
       // Same email → push the latest phone onto all of this client's bookings.
-      if (p) {
-        await pool.query(
-          `UPDATE bookings SET invitee_phone = $1
-           WHERE LOWER(invitee_email) = LOWER($2)
-             AND COALESCE(invitee_phone, '') <> $1`,
-          [p, e]
-        );
+      await pool.query(
+        `UPDATE bookings SET invitee_phone = $1
+         WHERE LOWER(invitee_email) = LOWER($2)
+           AND COALESCE(invitee_phone, '') <> $1`,
+        [p, e]
+      );
+
+      // Same phone → push the latest email onto all of this client's bookings,
+      // unless the new email looks like a typo of the one already on record.
+      const existingRes = await pool.query(
+        `SELECT invitee_email FROM bookings
+         WHERE invitee_phone = $1 AND COALESCE(invitee_email, '') <> ''
+           AND LOWER(invitee_email) <> LOWER($2)
+         ORDER BY invitee_created_at DESC NULLS LAST LIMIT 1`,
+        [p, e]
+      );
+      const existingEmail = existingRes.rows[0]?.invitee_email || '';
+      if (existingEmail && isSuspiciousEmailTypo(e, existingEmail)) {
+        console.warn(`[reconcileClientContact] Skipping email propagation: "${e}" looks like a typo of "${existingEmail}"`);
+        return;
       }
-    }
-    if (p) {
-      // Same phone → push the latest email onto all of this client's bookings.
-      if (e) {
-        await pool.query(
-          `UPDATE bookings SET invitee_email = $1
-           WHERE invitee_phone = $2
-             AND COALESCE(LOWER(invitee_email), '') <> LOWER($1)`,
-          [e, p]
-        );
-      }
+      await pool.query(
+        `UPDATE bookings SET invitee_email = $1
+         WHERE invitee_phone = $2
+           AND COALESCE(LOWER(invitee_email), '') <> LOWER($1)`,
+        [e, p]
+      );
     }
   } catch (err) {
     console.error('[reconcileClientContact] failed (non-fatal):', err);
@@ -6640,6 +6735,18 @@ app.post('/api/create-booking', async (req, res) => {
       }
     }
 
+    // ── One-therapist-per-client rule (#4) ──
+    const therapistConflict = await checkExistingTherapistConflict(
+      payload.clientEmail, payload.clientWhatsApp, therapistId, therapistName
+    );
+    if (therapistConflict) {
+      return res.status(409).json({
+        error: `This client is already working with ${therapistConflict.existingTherapistName}. To change therapists, please use the Transfer Client option.`,
+        conflict: 'therapist',
+        existing_therapist: therapistConflict.existingTherapistName,
+      });
+    }
+
     let startAt = new Date(`${payload.date} ${payload.slot} GMT+0530`);
     if (isNaN(startAt.getTime())) {
       startAt = new Date();
@@ -6954,6 +7061,18 @@ app.post('/api/create-pending-booking', async (req, res) => {
         [`%${therapistName.split(' ')[0]}%`]
       );
       if (tRes.rows.length > 0) therapistId = tRes.rows[0].therapist_id;
+    }
+
+    // One-therapist-per-client rule (#4)
+    const therapistConflict = await checkExistingTherapistConflict(
+      payload.clientEmail, payload.clientWhatsApp, therapistId, therapistName
+    );
+    if (therapistConflict) {
+      return res.status(409).json({
+        error: `This client is already working with ${therapistConflict.existingTherapistName}. To change therapists, please use the Transfer Client option.`,
+        conflict: 'therapist',
+        existing_therapist: therapistConflict.existingTherapistName,
+      });
     }
 
     // Double-booking / conflict prevention (#3) — don't hold a slot already taken.
@@ -7497,6 +7616,24 @@ app.post('/api/session-documentation', async (req, res) => {
       ? String(session_status).toLowerCase().replace(' ', '_') // 'No Show' → 'no_show', 'Completed' → 'completed', 'Cancelled' → 'cancelled'
       : 'completed';
 
+    // Stable client id (#6): if the form sent an empty client_id, derive one
+    // from the booking (phone → email). Empty ids previously collided across
+    // clients in client_therapy_goals' (client_id, goal_description) upsert.
+    let effectiveClientId = (client_id || '').toString().trim();
+    if (!effectiveClientId && booking_id) {
+      try {
+        const bRes = await pool.query(
+          'SELECT invitee_phone, invitee_email FROM bookings WHERE booking_id = $1',
+          [booking_id]
+        );
+        if (bRes.rows.length > 0) {
+          effectiveClientId = (bRes.rows[0].invitee_phone || bRes.rows[0].invitee_email || '').trim();
+        }
+      } catch (e) {
+        console.error('[session-documentation] client_id fallback lookup failed:', e);
+      }
+    }
+
     // If Consultation - store pre-therapy call form data
     if (session_type === 'Consultation' && consultation_data) {
      try {
@@ -7570,7 +7707,7 @@ app.post('/api/session-documentation', async (req, res) => {
           education = EXCLUDED.education,
           occupation = EXCLUDED.occupation
       `, [
-        client_id, client_name, booking_id,
+        effectiveClientId, client_name, booking_id,
         case_history.age, case_history.gender_identity, case_history.education,
         case_history.occupation,
         case_history.marital_status, case_history.children, case_history.religion,
@@ -7638,7 +7775,7 @@ app.post('/api/session-documentation', async (req, res) => {
           signature_date = EXCLUDED.signature_date,
           updated_at = NOW()
       `, [
-        client_id, client_name, booking_id,
+        effectiveClientId, client_name, booking_id,
         toIntOrNull(progress_notes.session_number), progress_notes.session_date || null,
         progress_notes.session_duration, progress_notes.session_mode,
         progress_notes.client_report, progress_notes.direct_quotes,
@@ -7658,19 +7795,21 @@ app.post('/api/session-documentation', async (req, res) => {
      }
     }
 
-    // Always store/update therapy goals (secondary — never blocks the note)
-    if (therapy_goals && therapy_goals.goal_description) {
+    // Always store/update therapy goals (secondary — never blocks the note).
+    // Requires a non-empty client id: empty ids would collide across clients
+    // on the (client_id, goal_description) unique key.
+    if (therapy_goals && therapy_goals.goal_description && effectiveClientId) {
      try {
       await pool.query(`
         INSERT INTO client_therapy_goals (
           client_id, client_name, goal_description, current_stage, initiation_date, is_active
         ) VALUES ($1, $2, $3, $4, $5, true)
-        ON CONFLICT (client_id, goal_description) DO UPDATE 
+        ON CONFLICT (client_id, goal_description) DO UPDATE
         SET current_stage = EXCLUDED.current_stage,
             updated_at = NOW(),
             is_active = true
       `, [
-        client_id, client_name,
+        effectiveClientId, client_name,
         therapy_goals.goal_description,
         therapy_goals.current_stage || 'Initiation',
         new Date()
@@ -8441,6 +8580,18 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
       }
     }
 
+    // One-therapist-per-client rule (#4)
+    const therapistConflict = await checkExistingTherapistConflict(
+      clientEmail, clientPhone, resolvedTherapistId, therapistName
+    );
+    if (therapistConflict) {
+      return res.status(409).json({
+        error: `This client is already working with ${therapistConflict.existingTherapistName}. To change therapists, please use the Transfer Client option.`,
+        conflict: 'therapist',
+        existing_therapist: therapistConflict.existingTherapistName,
+      });
+    }
+
     const bookingId = randomUUID();
     const startObj = new Date(`${date}T${time}:00+05:30`);
     const endObj = new Date(startObj.getTime() + 50 * 60000); // 50 mins
@@ -8457,6 +8608,9 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
         serviceType
       ]
     );
+
+    // Keep this client's contact info up to date across their bookings (#2)
+    await reconcileClientContact(clientEmail, clientPhone);
 
     let baseUrl = process.env.FRONTEND_URL || 'https://safestories-panel.vercel.app';
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);

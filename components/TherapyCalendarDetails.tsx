@@ -69,6 +69,25 @@ export function TherapyCalendarDetails() {
 
   const [therapists, setTherapists] = useState<Therapist[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  // null = unknown/loading, true/false = checked (#9: calendar management requires
+  // a connected Google Calendar for the selected therapist)
+  const [googleConnected, setGoogleConnected] = useState<boolean | null>(null);
+
+  const checkGoogleConnection = async (therapistId: string) => {
+    if (!therapistId) { setGoogleConnected(null); return; }
+    try {
+      const res = await fetch(`/api/auth/google/status?therapistId=${encodeURIComponent(therapistId)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setGoogleConnected(!!data.connected);
+      } else {
+        // Fail open: an outage of the status check must not block admins
+        setGoogleConnected(null);
+      }
+    } catch {
+      setGoogleConnected(null);
+    }
+  };
 
   const [formData, setFormData] = useState<TherapyService>({
     title: '',
@@ -129,6 +148,7 @@ export function TherapyCalendarDetails() {
             });
             if (target.therapist_id) {
               fetchSchedules(target.therapist_id);
+              checkGoogleConnection(target.therapist_id);
             }
           }
         }
@@ -170,14 +190,22 @@ export function TherapyCalendarDetails() {
     });
     if (therapistId) {
       fetchSchedules(therapistId);
+      checkGoogleConnection(therapistId);
     } else {
       setSchedules([]);
+      setGoogleConnected(null);
     }
   };
 
   const handleSave = async () => {
     if (!formData.therapist_id || !formData.title) {
       setToast({ message: 'Therapist and Therapy Name are required', type: 'error' });
+      return;
+    }
+    // #9: block calendar creation/management when the therapist's Google
+    // Calendar is explicitly not connected (unknown status fails open).
+    if (googleConnected === false) {
+      setToast({ message: "This therapist's Google Calendar is not connected. Connect it in Settings → Calendars before creating or managing calendars.", type: 'error' });
       return;
     }
 
@@ -270,7 +298,7 @@ export function TherapyCalendarDetails() {
         <div className="ml-auto">
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || googleConnected === false}
             className="flex items-center gap-2 px-6 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors shadow-sm"
           >
             {saving ? <Loader size={18} className="animate-spin" /> : <Save size={18} />}
@@ -345,6 +373,12 @@ export function TherapyCalendarDetails() {
                       <option key={t.therapist_id} value={t.therapist_id}>{t.name}</option>
                     ))}
                   </select>
+                  {googleConnected === false && (
+                    <p className="text-sm text-red-600 mt-2">
+                      ⚠ This therapist's Google Calendar is not connected. Calendar creation and
+                      management are disabled until it is connected (Settings → Calendars).
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -439,8 +473,8 @@ export function TherapyCalendarDetails() {
                     onChange={(e) => setFormData({ ...formData, type: e.target.value })}
                     className="w-full border border-gray-200 rounded-xl p-3 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-teal-500 outline-none transition-all shadow-sm"
                   >
-                    <option value="Online">Online Video Call</option>
-                    <option value="In Person">In Person</option>
+                    <option value="Online">Google Meet</option>
+                    <option value="In Person">In-Person</option>
                   </select>
                 </div>
                 <div>

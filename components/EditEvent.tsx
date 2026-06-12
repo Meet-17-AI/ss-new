@@ -39,6 +39,20 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
 
+  // #9: availability management requires a connected Google Calendar.
+  // null = unknown (fail open so a status-check outage never locks the UI).
+  const [googleConnected, setGoogleConnected] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!therapistId) return; // no id → can't check; don't block
+    let cancelled = false;
+    fetch(`/api/auth/google/status?therapistId=${encodeURIComponent(String(therapistId))}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => { if (!cancelled && data) setGoogleConnected(!!data.connected); })
+      .catch(() => { /* fail open */ });
+    return () => { cancelled = true; };
+  }, [therapistId]);
+
   // Schedule API State
   const [scheduleData, setScheduleData] = useState<any>(null);
   const [loadingSchedule, setLoadingSchedule] = useState(false);
@@ -51,6 +65,16 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
   const formatTime = (timeStr: string) => {
     if (!timeStr) return '';
     return timeStr;
+  };
+
+  // Format a YYYY-MM-DD override date without UTC-parsing pitfalls
+  // (new Date('YYYY-MM-DD') is parsed as UTC midnight, which can render
+  // as the previous day in timezones behind UTC).
+  const formatOverrideDate = (dayStr: string) => {
+    const m = /^(\d{4})-(\d{2})-(\d{1,2})$/.exec(dayStr || '');
+    if (!m) return dayStr;
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
   useEffect(() => {
@@ -112,6 +136,10 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
 
   const handleUpdateSchedule = async () => {
     if (!event.scheduleId || !scheduleData) return;
+    if (googleConnected === false) {
+      alert('Google Calendar is not connected for this therapist. Connect it before updating availability.');
+      return;
+    }
 
     try {
       setSaveLoading(true);
@@ -124,13 +152,20 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
       const standardAvailability = scheduleData.availability.filter((a: any) => !/\d{4}-\d{2}-\d{2}/.test(a.day || a.date));
       const overridesList = scheduleData.availability.filter((a: any) => /\d{4}-\d{2}-\d{2}/.test(a.day || a.date));
 
+      // Match by 3-letter prefix so both stored full names ("sunday") and grid short
+      // names ("SUN") are recognized. Previously this used exact equality against "SUN",
+      // which never matched DB-loaded "sunday" entries and silently wiped the weekly
+      // schedule to all-unavailable whenever an override was saved without re-dragging
+      // the grid.
       const finalAvailability = daysToEnsure.map(d => {
-        const existing = standardAvailability.find((a: any) => (a.day || '').toUpperCase() === d);
+        const existing = standardAvailability.find((a: any) => (a.day || '').toUpperCase().startsWith(d));
         return existing || { day: d, is_available: false, times: [{ start: '09:00', end: '17:00' }] };
       });
 
       const cleanAvailability = finalAvailability.map((a: any) => ({
-        day: dayMap[a.day] || a.day,
+        // Normalize any day-name variant (SUN / sunday / Sunday) to the canonical
+        // lowercase full name the backend slot generator expects.
+        day: dayMap[(a.day || '').toUpperCase().slice(0, 3)] || a.day,
         is_available: a.is_available,
         times: (a.times || []).map((t: any) => ({
           start: t.start,
@@ -444,10 +479,12 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
                         <div key={ov.day} className="override-edit-item">
                           <div className="override-info">
                             <span className="ov-date-label">
-                              {new Date(ov.day).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                              {formatOverrideDate(ov.day)}
                             </span>
                             <span className="ov-time-label">
-                              {ov.is_available ? ov.times.map((t: any) => `${t.start}-${t.end}`).join(', ') : 'Unavailable'}
+                              {ov.is_available && (ov.times || []).length > 0
+                                ? (ov.times || []).map((t: any) => `${t.start}-${t.end}`).join(', ')
+                                : 'Unavailable'}
                             </span>
                           </div>
                           <button className="delete-ov-btn" onClick={() => deleteOverride(ov.day)}>✕</button>
@@ -661,12 +698,25 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
             <p>Your default hours and time slot settings</p>
           </div>
           <div className="header-actions">
-            <button className="edit-schedule-btn" onClick={() => setIsEditingSchedule(true)}>
+            <button
+              className="edit-schedule-btn"
+              onClick={() => setIsEditingSchedule(true)}
+              disabled={googleConnected === false}
+              style={googleConnected === false ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+              title={googleConnected === false ? 'Connect Google Calendar to manage availability' : undefined}
+            >
               <Clock size={16} />
               Edit Schedule
             </button>
           </div>
         </div>
+
+        {googleConnected === false && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C', borderRadius: 8, padding: '10px 14px', margin: '12px 0', fontSize: 14 }}>
+            <AlertCircle size={16} />
+            <span>Google Calendar is not connected for this therapist. Availability cannot be managed until it is connected.</span>
+          </div>
+        )}
 
         {loadingSchedule ? (
           <div className="loading-state">
@@ -703,11 +753,11 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
                   {getOverrides().map((ov: any) => (
                     <div key={ov.day} className="override-item-pill">
                       <span className="override-date">
-                        {new Date(ov.day).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        {formatOverrideDate(ov.day)}
                       </span>
                       <span className="override-time">
-                        {ov.is_available && ov.times.length > 0
-                          ? ov.times.map((t: any) => `${formatTime(t.start)} - ${formatTime(t.end)}`).join(', ')
+                        {ov.is_available && (ov.times || []).length > 0
+                          ? (ov.times || []).map((t: any) => `${formatTime(t.start)} - ${formatTime(t.end)}`).join(', ')
                           : 'Unavailable'}
                       </span>
                     </div>

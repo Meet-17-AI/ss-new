@@ -36,11 +36,14 @@ interface Payment {
   refund_initiated_at?: string;
   refund_status?: string;
   refund_amount?: number;
+  booking_status?: string;
 }
 
 export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initialTab }) => {
   const [activeTab, setActiveTab] = useState(initialTab || 'all_payments');
   const [searchQuery, setSearchQuery] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [refunds, setRefunds] = useState<Refund[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(false);
@@ -58,7 +61,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     { id: 'pending', label: 'Pending' },
     { id: 'expired', label: 'Failed/Expired' },
     { id: 'refunded', label: 'Refunded' },
-    { id: 'all', label: 'All Cancellations' },
+    { id: 'all', label: 'Cancellation' },
     { id: 'Pending', label: 'Refund Initiated' },
     { id: 'Failed', label: 'Refund Failed' },
   ];
@@ -116,16 +119,43 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
   const isPaymentTab = ['all_payments', 'completed', 'pending', 'expired', 'refunded'].includes(activeTab);
   const safeRefunds = Array.isArray(refunds) ? refunds : [];
   const safePayments = Array.isArray(payments) ? payments : [];
+
+  // Search across name, contact, payment id and order id (#10)
+  const matchesPaymentSearch = (payment: Payment) => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return true;
+    return [
+      payment.client_name,
+      payment.invitee_phone,
+      payment.invitee_email,
+      payment.payment_id,
+      payment.razorpay_order_id,
+      payment.booking_id,
+      payment.session_name,
+    ].some(v => (v || '').toLowerCase().includes(q));
+  };
+
+  // Optional date-range filter on payment/booking creation date (#10)
+  const matchesDateRange = (payment: Payment) => {
+    if (!dateFrom && !dateTo) return true;
+    if (!payment.created_at) return false;
+    const t = new Date(payment.created_at).getTime();
+    if (isNaN(t)) return false;
+    if (dateFrom && t < new Date(dateFrom + 'T00:00:00').getTime()) return false;
+    if (dateTo && t > new Date(dateTo + 'T23:59:59').getTime()) return false;
+    return true;
+  };
+
   const filteredRefunds = !isPaymentTab
     ? safeRefunds.filter(refund =>
-        (refund.client_name || '').toLowerCase().includes(searchQuery.toLowerCase())
+        (refund.client_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (refund.invitee_phone || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (refund.invitee_email || '').toLowerCase().includes(searchQuery.toLowerCase())
       )
     : [];
 
   const filteredPayments = isPaymentTab
-    ? safePayments.filter(payment =>
-        (payment.client_name || '').toLowerCase().includes(searchQuery.toLowerCase())
-      )
+    ? safePayments.filter(p => matchesPaymentSearch(p) && matchesDateRange(p))
     : [];
 
   const totalPages = Math.max(1, Math.ceil((isPaymentTab ? filteredPayments.length : filteredRefunds.length) / itemsPerPage));
@@ -172,17 +202,44 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
           <p className="text-gray-600">View all payments and Cancellations and refunds</p>
           <p className="text-sm italic mt-1" style={{ color: '#21615D' }}>Razorpay gateway currently only displays "Initiated" or "Failed" statuses. A "Completed" status will not be shown</p>
         </div>
-        <div className="flex gap-4">
+        <div className="flex gap-4 items-center flex-wrap justify-end">
           <div className="relative w-80">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
             <input
               type="text"
-              placeholder="Search client by name..."
+              placeholder="Search name, phone, email, payment/order ID..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
               className="w-full pl-10 pr-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
             />
           </div>
+          {isPaymentTab && (
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => { setDateFrom(e.target.value); setCurrentPage(1); }}
+                className="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                title="From date"
+              />
+              <span className="text-gray-400 text-sm">to</span>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => { setDateTo(e.target.value); setCurrentPage(1); }}
+                className="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                title="To date"
+              />
+              {(dateFrom || dateTo) && (
+                <button
+                  onClick={() => { setDateFrom(''); setDateTo(''); setCurrentPage(1); }}
+                  className="text-sm text-gray-500 hover:text-gray-700 underline whitespace-nowrap"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
           <button
             onClick={exportToCSV}
             className="bg-teal-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 hover:bg-teal-800 whitespace-nowrap text-sm"
@@ -254,9 +311,18 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                       <td className="px-6 py-4">
                         {(() => {
                           const rs = (payment.refund_status || '').toLowerCase();
+                          const bs = ((payment as any).booking_status || '').toLowerCase();
                           const isRefunded = activeTab === 'refunded' || ['processed', 'refunded', 'completed'].includes(rs);
                           if (isRefunded) {
                             return <span className="px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">Refunded</span>;
+                          }
+                          // Paid but the booking itself was cancelled — show that clearly
+                          if (['cancelled', 'canceled'].includes(bs)) {
+                            return (
+                              <span className="px-3 py-1 rounded-full text-xs font-medium bg-gray-200 text-gray-700">
+                                {(payment.payment_status === 'Paid' || payment.payment_status === 'Completed') ? 'Paid · Cancelled' : 'Cancelled'}
+                              </span>
+                            );
                           }
                           return (
                             <span className={`px-3 py-1 rounded-full text-xs font-medium ${

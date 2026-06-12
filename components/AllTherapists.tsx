@@ -41,10 +41,33 @@ interface Appointment {
   booking_invitee_time: string;
   booking_host_name?: string;
   booking_status?: string;
+  booking_mode?: string;
   mode?: string;
   has_session_notes?: boolean;
   booking_start_at_raw?: string;
 }
+
+// Display-only rename (#3): the platform "SafeStories" therapist is shown as
+// "SafeStories Free Consultation" in the UI. The stored therapist_id/name and
+// all backend logic remain keyed on "SafeStories", so booking/calendar/OAuth
+// flows are untouched.
+const SAFESTORIES_DISPLAY_NAME = 'SafeStories Free Consultation';
+const displayTherapistName = (name?: string | null, id?: string | null): string => {
+  if ((id && String(id) === 'SafeStories') || ((name || '').trim() === 'SafeStories')) {
+    return SAFESTORIES_DISPLAY_NAME;
+  }
+  return name || '';
+};
+
+// Normalize any stored mode value to the two display labels (same convention
+// as formatMode in AllClients/Appointments).
+const formatBookingMode = (mode: string | undefined | null): string => {
+  if (!mode) return 'N/A';
+  const m = mode.toLowerCase();
+  if (m.includes('person') || m.includes('office') || m.includes('clinic') || m.includes('physical')) return 'In-Person';
+  if (m.includes('google') || m.includes('meet') || m.includes('online') || m.includes('video')) return 'Google Meet';
+  return mode;
+};
 
 export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => void }> = ({ selectedClientProp, onBack }) => {
   const [therapists, setTherapists] = useState<any[]>([]);
@@ -1504,6 +1527,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Session Type</th>
                               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Date & Time</th>
                               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Therapist</th>
+                              <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Mode</th>
                               <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Status</th>
                             </tr>
                           </thead>
@@ -1522,7 +1546,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                               return apt.booking_status === clientAppointmentTab;
                             }).length === 0 ? (
                               <tr>
-                                <td colSpan={4} className="text-center py-4 text-gray-400 text-sm">No bookings found</td>
+                                <td colSpan={5} className="text-center py-4 text-gray-400 text-sm">No bookings found</td>
                               </tr>
                             ) : (
                               clientAppointments.filter(apt => {
@@ -1547,6 +1571,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                                     <td className="px-4 py-3 text-sm">{(() => { const n = apt.booking_resource_name || ''; return /^(in-person|online|offline)\s*\(/i.test(n.trim()) && apt.booking_subject ? apt.booking_subject.replace(/ with .+$/i, '').trim() : n.replace(/ with .+$/i, '').trim() || n; })()}</td>
                                     <td className="px-4 py-3 text-sm text-gray-600">{apt.booking_invitee_time}</td>
                                     <td className="px-4 py-3 text-sm text-gray-600">{apt.booking_host_name || selectedTherapist?.name || 'N/A'}</td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">{formatBookingMode(apt.booking_mode || apt.mode)}</td>
                                     <td className="px-4 py-3 text-sm">
                                       <span className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${apt.booking_status === 'completed' ? 'bg-green-100 text-green-700' :
                                           apt.booking_status === 'cancelled' ? 'bg-red-100 text-red-700' :
@@ -1563,7 +1588,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                                   </tr>
                                   {selectedAppointmentIndex === index && (
                                     <tr className="bg-gray-100">
-                                      <td colSpan={4} className="px-4 py-4">
+                                      <td colSpan={5} className="px-4 py-4">
                                         <div className="flex gap-3 justify-center">
                                           <button
                                             onClick={() => copyAppointmentDetails(apt)}
@@ -1941,7 +1966,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
           <div className="flex items-center justify-between flex-1">
             <div className="flex items-center gap-3">
               <User size={24} className="text-teal-700" />
-              <h1 className="text-3xl font-bold">{selectedTherapist.name}</h1>
+              <h1 className="text-3xl font-bold">{displayTherapistName(selectedTherapist.name, selectedTherapist.therapist_id)}</h1>
             </div>
             <div className="flex items-center gap-3">
               <button
@@ -2182,7 +2207,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                             phoneNumbers.some(phone => apt.invitee_phone === phone)
                           );
                           const sessionName = clientAppointment?.booking_resource_name || 'N/A';
-                          const mode = clientAppointment?.mode || 'Google Meet';
+                          const mode = formatBookingMode(clientAppointment?.booking_mode || clientAppointment?.mode);
 
                           return (
                             <React.Fragment key={actualIndex}>
@@ -2816,7 +2841,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                       <div className="w-16 h-16 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 text-xl font-bold mb-4">
                         {therapist.name.charAt(0)}
                       </div>
-                      <h3 className="text-lg font-semibold text-gray-900 mb-1">{therapist.name}</h3>
+                      <h3 className="text-lg font-semibold text-gray-900 mb-1">{displayTherapistName(therapist.name, therapist.therapist_id)}</h3>
                       <p className="text-sm text-gray-500 mb-4 truncate w-full">{therapist.contact_info}</p>
                       <div className="mt-auto pt-4 border-t border-gray-100 w-full flex flex-col gap-3">
                         {canManage ? (
@@ -2932,7 +2957,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                                 onClick={() => openTherapistDetails(therapist)}
                                 className="text-teal-700 hover:underline font-medium text-left"
                               >
-                                {therapist.name}
+                                {displayTherapistName(therapist.name, therapist.therapist_id)}
                               </button>
                             </td>
                             <td className="px-6 py-4">

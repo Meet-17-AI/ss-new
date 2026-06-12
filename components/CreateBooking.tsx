@@ -448,7 +448,8 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
           setGeneratedPaymentLink(data.paymentLink);
           setShowSuccessModal(true);
         } else {
-          toast.error('Failed to generate payment link');
+          const errData = await response.json().catch(() => ({}));
+          toast.error(errData.error || 'Failed to generate payment link');
         }
       } catch (err) {
         toast.error('Error generating link');
