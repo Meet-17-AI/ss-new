@@ -326,7 +326,6 @@ export function TherapyCalendars() {
               <p className="text-gray-500 text-lg">No therapy calendars found.</p>
             </div>
           )}
-          </div>
         </div>
       )}
 
