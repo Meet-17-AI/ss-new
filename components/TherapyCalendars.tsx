@@ -203,150 +203,129 @@ export function TherapyCalendars() {
           <Loader className="animate-spin text-teal-600" size={32} />
         </div>
       ) : (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden flex-1 flex flex-col">
-          <div className="overflow-x-auto flex-1">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50 sticky top-0 z-10">
-                <tr>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Therapy Name
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Therapist Name
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Public Booking Link
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Sync Status
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredCalendars.length > 0 ? (
-                  filteredCalendars.map((item, index) => {
-                    const cleanSlug = item.slug ? item.slug.replace(/^\/+/, '') : '';
-                    const fullLink = `${window.location.origin}/book/${cleanSlug}`;
-                    const isExpanded = expandedId === item.id;
-                    return (
-                      <React.Fragment key={`${item.id}-${index}`}>
-                        <tr
-                          className={`border-b cursor-pointer transition-colors ${isExpanded ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
-                          onClick={() => setExpandedId(isExpanded ? null : item.id)}
-                        >
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center gap-2">
-                              <div className="text-sm font-medium text-gray-900">
-                                {item.title}
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="flex items-center">
-                              <div className="h-8 w-8 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold mr-3">
-                                <User size={16} />
-                              </div>
-                              <div className="text-sm font-medium text-gray-900">{item.therapist_name}</div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4" onClick={e => e.stopPropagation()}>
-                            <div className="flex items-center gap-2 max-w-xs">
-                              <a
-                                href={fullLink}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-sm text-teal-600 hover:text-teal-800 hover:underline truncate"
-                                title={fullLink}
-                              >
-                                {fullLink.replace(/^https?:\/\/[^/]+/, '')}
-                              </a>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            {item.is_active !== false ? (
-                              <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                                Active
-                              </span>
-                            ) : (
-                              <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
-                                Inactive
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            {item.google_calendar_connected ? (
-                              <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                                Google Connected
-                              </span>
-                            ) : (
-                              <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
-                                Not Connected
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={e => handleCopy(e, fullLink, item.id)}
-                                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-teal-700 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 transition-colors"
-                                title="Copy public link"
-                              >
-                                <Copy size={13} />
-                                {copiedId === item.id ? 'Copied!' : 'Copy Link'}
-                              </button>
-                              <a
-                                href={fullLink}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors"
-                                title="Open public booking page"
-                              >
-                                <ExternalLink size={13} />
-                                Open
-                              </a>
-                            </div>
-                          </td>
-                        </tr>
-                        {isExpanded && user?.username !== 'Test' && (
-                          <tr className="bg-gray-100">
-                            <td colSpan={6} className="px-6 py-4">
-                              <div className="flex gap-2 justify-center items-center">
-                                <button
-                                  onClick={() => setConfirmDialog({ type: item.is_active !== false ? 'deactivate' : 'activate', id: item.id, title: item.title })}
-                                  className="px-6 py-2 border border-gray-400 rounded-lg text-sm text-gray-700 hover:bg-white flex items-center gap-2"
-                                >
-                                  <Power size={16} />
-                                  {item.is_active !== false ? 'Deactivate Calendar' : 'Activate Calendar'}
-                                </button>
-                                <button
-                                  onClick={() => setConfirmDialog({ type: 'delete', id: item.id, title: item.title })}
-                                  className="px-6 py-2 border border-gray-400 rounded-lg text-sm text-gray-700 hover:bg-white flex items-center gap-2"
-                                >
-                                  <Trash2 size={16} />
-                                  Delete Calendar
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
+        <div className="flex-1 flex flex-col">
+          {filteredCalendars.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto pr-2">
+              {filteredCalendars.map((item, index) => {
+                const cleanSlug = item.slug ? item.slug.replace(/^\/+/, '') : '';
+                const fullLink = `${window.location.origin}/book/${cleanSlug}`;
+
+                return (
+                  <div
+                    key={`${item.id}-${index}`}
+                    className="bg-white rounded-xl shadow-md border border-gray-200 hover:shadow-lg transition-shadow overflow-hidden flex flex-col"
+                  >
+                    {/* Card Header */}
+                    <div className="bg-gradient-to-r from-teal-600 to-teal-700 px-6 py-4 text-white flex justify-between items-start">
+                      <div className="flex-1">
+                        <h3 className="text-lg font-bold mb-1">{item.title}</h3>
+                        <div className="flex items-center gap-2 text-sm">
+                          <User size={14} />
+                          <span>{item.therapist_name}</span>
+                        </div>
+                      </div>
+                      {/* Three-Dot Menu Button */}
+                      {user?.username !== 'Test' && (
+                        <div className="relative group ml-4">
+                          <button
+                            className="p-2 hover:bg-teal-800 rounded-lg transition-colors"
+                            title="Actions"
+                          >
+                            <ChevronDown size={20} className="rotate-90" />
+                          </button>
+                          {/* Dropdown Menu */}
+                          <div className="absolute right-0 mt-1 w-48 bg-white text-gray-800 rounded-lg shadow-xl border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                            <button
+                              onClick={() => handleCopy(new MouseEvent('click') as any, fullLink, item.id)}
+                              className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm flex items-center gap-2 border-b border-gray-100"
+                            >
+                              <Copy size={14} />
+                              Copy Link
+                            </button>
+                            <a
+                              href={fullLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm flex items-center gap-2 border-b border-gray-100"
+                            >
+                              <ExternalLink size={14} />
+                              Open Link
+                            </a>
+                            <button
+                              onClick={() => setConfirmDialog({ type: item.is_active !== false ? 'deactivate' : 'activate', id: item.id, title: item.title })}
+                              className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm flex items-center gap-2 border-b border-gray-100"
+                            >
+                              <Power size={14} />
+                              {item.is_active !== false ? 'Deactivate' : 'Activate'}
+                            </button>
+                            <button
+                              onClick={() => setConfirmDialog({ type: 'delete', id: item.id, title: item.title })}
+                              className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 text-sm flex items-center gap-2"
+                            >
+                              <Trash2 size={14} />
+                              Delete Calendar
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Card Body */}
+                    <div className="px-6 py-4 flex-1 space-y-4">
+                      {/* Duration */}
+                      <div className="border-b pb-4">
+                        <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Duration</p>
+                        <p className="text-lg font-bold text-gray-900">{item.duration}</p>
+                      </div>
+
+                      {/* Status Badges */}
+                      <div className="flex gap-2 flex-wrap">
+                        {/* Active/Inactive Badge */}
+                        {item.is_active !== false ? (
+                          <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                            ✓ Active
+                          </span>
+                        ) : (
+                          <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                            Inactive
+                          </span>
                         )}
-                      </React.Fragment>
-                    );
-                  })
-                ) : (
-                  <tr>
-                    <td colSpan={6} className="px-6 py-10 text-center text-gray-500">
-                      No therapy calendars found.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+
+                        {/* Sync Status Badge */}
+                        {item.google_calendar_connected ? (
+                          <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
+                            📅 Google Connected
+                          </span>
+                        ) : (
+                          <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                            Not Connected
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Card Footer - Booking Link */}
+                    <div className="px-6 py-3 bg-gray-50 border-t border-gray-200">
+                      <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-2">Booking Link</p>
+                      <a
+                        href={fullLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-teal-600 hover:text-teal-800 hover:underline truncate block"
+                        title={fullLink}
+                      >
+                        {fullLink.replace(/^https?:\/\/[^/]+/, '')}
+                      </a>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <p className="text-gray-500 text-lg">No therapy calendars found.</p>
+            </div>
+          )}
           </div>
         </div>
       )}
