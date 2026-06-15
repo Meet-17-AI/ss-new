@@ -45,6 +45,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   // Use state instead of useUrlState
   const [activeAppointmentTab, setActiveAppointmentTab] = useState<string>('all');
   const [showCalendarPopup, setShowCalendarPopup] = useState(() => !user.google_calendar_connected);
+  const [showPostConnectLightbox, setShowPostConnectLightbox] = useState(false);
 
   const [isDateDropdownOpen, setIsDateDropdownOpen] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState('All Time');
@@ -145,6 +146,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     if (googleAuth) {
       if (googleAuth === 'success') {
         login({ ...user, google_calendar_connected: true });
+        setShowPostConnectLightbox(true);
         setToast({ message: 'Google Calendar connected successfully!', type: 'success' });
       } else if (googleAuth === 'error') {
         const reason = params.get('reason');
@@ -4062,6 +4064,46 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                 Remind Me Later
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Post-Google Calendar Connection Lightbox */}
+      {showPostConnectLightbox && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[9999]">
+          <div className="bg-white rounded-xl w-full max-w-md p-8 text-center shadow-2xl">
+            <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6 text-green-600">
+              <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Calendar Connected! 🎉</h2>
+            <p className="text-gray-600 mb-8">
+              Your Google Calendar is now connected. Next, set your availability so clients can book sessions with you.
+            </p>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => {
+                  setShowPostConnectLightbox(false);
+                  setActiveView('availability');
+                }}
+                className="w-full py-3 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Set Availability Now
+              </button>
+              <button
+                onClick={() => setShowPostConnectLightbox(false)}
+                className="w-full py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+              >
+                I'll do this later
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 mt-6">
+              💡 Tip: Set your availability to start receiving client bookings
+            </p>
           </div>
         </div>
       )}

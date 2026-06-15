@@ -43,6 +43,13 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   const [showClientDropdown, setShowClientDropdown] = useState(false);
   const [filteredClients, setFilteredClients] = useState<any[]>([]);
   const [generatedPaymentLink, setGeneratedPaymentLink] = useState('');
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [isNewClient, setIsNewClient] = useState(false);
+  const [autoFilledFields, setAutoFilledFields] = useState({
+    therapy: false,
+    therapist: false,
+    mode: false,
+  });
 
   const timezones = [
     { name: 'Asia/Kolkata', offset: 'GMT+5:30' },
@@ -238,6 +245,9 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
 
   const handleClientSelect = (client: any) => {
     setClientName(client.invitee_name);
+    setSelectedClientId(client.invitee_id || client.id);
+    setIsNewClient(false);
+
     const phone = client.invitee_phone || '';
     if (phone.startsWith('+')) {
       const code = countryCodes.find(c => phone.startsWith(c.code));
@@ -251,6 +261,23 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       setClientWhatsApp(phone);
     }
     setClientEmail(client.invitee_email || '');
+
+    // Auto-fetch therapy type, therapist, and mode from client's last booking
+    if (client.last_booking_therapy || client.booking_resource_name) {
+      if (client.last_booking_therapy) {
+        setSelectedTherapy(client.last_booking_therapy);
+        setAutoFilledFields(prev => ({ ...prev, therapy: true }));
+      }
+      if (client.last_booking_therapist) {
+        setSelectedTherapist(client.last_booking_therapist);
+        setAutoFilledFields(prev => ({ ...prev, therapist: true }));
+      }
+      if (client.last_booking_mode) {
+        setSessionMode(client.last_booking_mode.toLowerCase().includes('online') ? 'online' : 'in-person');
+        setAutoFilledFields(prev => ({ ...prev, mode: true }));
+      }
+    }
+
     setShowClientDropdown(false);
   };
 
@@ -303,6 +330,10 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   };
 
   const isFormValid = () => {
+    // Client selection is mandatory first
+    if (!clientName.trim()) {
+      return false;
+    }
     const hasDate = selectedDate.trim();
     const hasTimezone = selectedTimezone.trim();
     if (isFreeConsultation) {
