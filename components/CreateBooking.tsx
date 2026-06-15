@@ -254,11 +254,13 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       const history = await response.json();
 
       setClientBookingHistory(history);
-      setAllowedTherapies(history.therapies || []);
-      setAllowedTherapists(history.therapists || []);
 
-      // Auto-select from last booking
-      if (history.lastBooking) {
+      // Only restrict dropdowns if last booking was NOT a free consultation
+      if (history.lastBooking && !history.lastBooking.isFreeConsultation) {
+        setAllowedTherapies(history.therapies || []);
+        setAllowedTherapists(history.therapists || []);
+
+        // Auto-select from last booking
         setSelectedTherapy(history.lastBooking.therapy);
         setAutoFilledFields(prev => ({ ...prev, therapy: true }));
 
@@ -271,6 +273,10 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
           : 'in-person';
         setSessionMode(mode);
         setAutoFilledFields(prev => ({ ...prev, mode: true }));
+      } else {
+        // Free consultation or no booking history - allow all selections
+        setAllowedTherapies([]);
+        setAllowedTherapists([]);
       }
 
       setIsLoadingHistory(false);
@@ -814,7 +820,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 <div className="font-semibold text-white">✓ {clientBookingHistory.clientName} has {clientBookingHistory.totalBookings} booking(s)</div>
                 {clientBookingHistory.lastBooking && (
                   <div className="text-xs mt-1" style={{ color: '#E8F5F4' }}>
-                    Last: {clientBookingHistory.lastBooking.therapy}
+                    Last: {clientBookingHistory.lastBooking.therapy} {clientBookingHistory.lastBooking.therapist ? `with ${clientBookingHistory.lastBooking.therapist}` : ''}
                   </div>
                 )}
               </div>

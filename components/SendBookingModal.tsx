@@ -361,17 +361,25 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
       const history = await response.json();
 
       setClientBookingHistory(history);
-      setAllowedTherapies(history.therapies || []);
-      setAllowedTherapists(history.therapists || []);
 
-      // Auto-select from last booking
-      if (history.lastBooking && history.therapists.length > 0) {
-        const matchingTherapist = history.therapists[0];
-        setTherapistName(matchingTherapist);
+      // Only restrict dropdowns if last booking was NOT a free consultation
+      if (history.lastBooking && !history.lastBooking.isFreeConsultation) {
+        setAllowedTherapies(history.therapies || []);
+        setAllowedTherapists(history.therapists || []);
 
-        if (history.therapies.length > 0) {
-          setTherapyType(history.therapies[0]);
+        // Auto-select from last booking
+        if (history.therapists.length > 0) {
+          const matchingTherapist = history.therapists[0];
+          setTherapistName(matchingTherapist);
+
+          if (history.therapies.length > 0) {
+            setTherapyType(history.therapies[0]);
+          }
         }
+      } else {
+        // Free consultation or no booking history - allow all selections
+        setAllowedTherapies([]);
+        setAllowedTherapists([]);
       }
 
       setIsLoadingHistory(false);
@@ -564,7 +572,7 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
                 <div className="font-semibold text-white">✓ {clientBookingHistory.clientName} has {clientBookingHistory.totalBookings} booking(s)</div>
                 {clientBookingHistory.lastBooking && (
                   <div className="text-xs mt-1" style={{ color: '#E8F5F4' }}>
-                    Last: {clientBookingHistory.lastBooking.therapy}
+                    Last: {clientBookingHistory.lastBooking.therapy} {clientBookingHistory.lastBooking.therapist ? `with ${clientBookingHistory.lastBooking.therapist}` : ''}
                   </div>
                 )}
               </div>

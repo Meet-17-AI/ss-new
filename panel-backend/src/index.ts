@@ -3040,7 +3040,8 @@ app.get('/api/client-booking-history/:clientId', async (req, res) => {
         booking_resource_name as therapy,
         booking_host_name as therapist,
         booking_mode as mode,
-        booking_start_at
+        booking_start_at,
+        is_free_consultation
       FROM bookings
       WHERE invitee_id = $1
         AND booking_status NOT IN ('cancelled', 'canceled', 'no_show', 'no show')
@@ -3087,7 +3088,8 @@ app.get('/api/client-booking-history/:clientId', async (req, res) => {
         therapy: lastBooking.therapy,
         therapist: lastBooking.therapist,
         mode: lastBooking.mode,
-        date: lastBooking.booking_start_at
+        date: lastBooking.booking_start_at,
+        isFreeConsultation: lastBooking.is_free_consultation || false
       },
       totalBookings: result.rows.length
     });
