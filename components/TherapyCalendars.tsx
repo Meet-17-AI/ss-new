@@ -286,22 +286,34 @@ export function TherapyCalendars() {
                       <div className="flex gap-2 flex-wrap">
                         {/* Active/Inactive Badge */}
                         {item.is_active !== false ? (
-                          <span className="px-2.5 py-1 inline-flex text-xs leading-4 font-semibold rounded-full text-white" style={{ backgroundColor: '#21615D' }}>
-                            ✓ Active
+                          <span className="px-3 py-1.5 inline-flex items-center gap-1.5 text-xs leading-4 font-semibold rounded-lg text-white" style={{ backgroundColor: '#21615D' }}>
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                            </svg>
+                            Active
                           </span>
                         ) : (
-                          <span className="px-2.5 py-1 inline-flex text-xs leading-4 font-semibold rounded-full bg-red-100 text-red-800">
+                          <span className="px-3 py-1.5 inline-flex items-center gap-1.5 text-xs leading-4 font-semibold rounded-lg text-white bg-red-500">
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                            </svg>
                             Inactive
                           </span>
                         )}
 
                         {/* Sync Status Badge */}
                         {item.google_calendar_connected ? (
-                          <span className="px-2.5 py-1 inline-flex text-xs leading-4 font-semibold rounded-full bg-blue-100 text-blue-800">
-                            📅 Connected
+                          <span className="px-3 py-1.5 inline-flex items-center gap-1.5 text-xs leading-4 font-semibold rounded-lg text-white" style={{ backgroundColor: '#34C759' }}>
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                            </svg>
+                            Google Connected
                           </span>
                         ) : (
-                          <span className="px-2.5 py-1 inline-flex text-xs leading-4 font-semibold rounded-full bg-gray-100 text-gray-700">
+                          <span className="px-3 py-1.5 inline-flex items-center gap-1.5 text-xs leading-4 font-semibold rounded-lg text-gray-700 bg-gray-100">
+                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                            </svg>
                             Not Connected
                           </span>
                         )}
