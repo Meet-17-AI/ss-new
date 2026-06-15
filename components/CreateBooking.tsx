@@ -54,6 +54,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   const [allowedTherapies, setAllowedTherapies] = useState<string[]>([]);
   const [allowedTherapists, setAllowedTherapists] = useState<string[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [hasRestrictions, setHasRestrictions] = useState(false);
 
   const timezones = [
     { name: 'Asia/Kolkata', offset: 'GMT+5:30' },
@@ -256,9 +257,10 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       setClientBookingHistory(history);
 
       // Only restrict dropdowns if last booking was NOT a free consultation
-      if (history.lastBooking && !history.lastBooking.isFreeConsultation) {
+      if (history.lastBooking && !history.lastBooking.isFreeConsultation && history.therapies?.length > 0) {
         setAllowedTherapies(history.therapies || []);
         setAllowedTherapists(history.therapists || []);
+        setHasRestrictions(true);
 
         // Auto-select from last booking
         setSelectedTherapy(history.lastBooking.therapy);
@@ -277,6 +279,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
         // Free consultation or no booking history - allow all selections
         setAllowedTherapies([]);
         setAllowedTherapists([]);
+        setHasRestrictions(false);
       }
 
       setIsLoadingHistory(false);
@@ -649,20 +652,26 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 <select
                   value={selectedTherapy}
                   onChange={(e) => handleTherapyChange(e.target.value)}
-                  disabled={isFreeConsultation || isLoadingHistory || (clientBookingHistory && allowedTherapies.length === 0)}
+                  disabled={isFreeConsultation || isLoadingHistory}
                   className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white disabled:bg-gray-100 disabled:cursor-not-allowed pr-10"
                 >
                   <option value="">
                     {isLoadingHistory ? 'Loading...' : 'Select'}
                   </option>
-                  {clientBookingHistory && allowedTherapies.length > 0 ? (
+                  {hasRestrictions && allowedTherapies.length > 0 ? (
                     allowedTherapies.map((therapy, index) => (
                       <option key={index} value={therapy}>
                         {therapy}
                       </option>
                     ))
-                  ) : clientBookingHistory ? (
-                    <option disabled>No therapy history found</option>
+                  ) : !isLoadingHistory && !clientBookingHistory ? (
+                    therapies.map((therapy, index) => (
+                      <option key={index} value={therapy.therapy_name}>
+                        {therapy.therapy_name}
+                      </option>
+                    ))
+                  ) : isLoadingHistory ? (
+                    <option disabled>Loading...</option>
                   ) : (
                     therapies.map((therapy, index) => (
                       <option key={index} value={therapy.therapy_name}>
@@ -682,20 +691,26 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 <select
                   value={selectedTherapist}
                   onChange={(e) => setSelectedTherapist(e.target.value)}
-                  disabled={isFreeConsultation || isLoadingHistory || (clientBookingHistory && allowedTherapists.length === 0)}
+                  disabled={isFreeConsultation || isLoadingHistory}
                   className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white disabled:bg-gray-100 disabled:cursor-not-allowed pr-10"
                 >
                   <option value="">
                     {isLoadingHistory ? 'Loading...' : 'Select'}
                   </option>
-                  {clientBookingHistory && allowedTherapists.length > 0 ? (
+                  {hasRestrictions && allowedTherapists.length > 0 ? (
                     allowedTherapists.map((therapist, index) => (
                       <option key={index} value={therapist}>
                         {therapist}
                       </option>
                     ))
-                  ) : clientBookingHistory ? (
-                    <option disabled>No therapist history found</option>
+                  ) : !isLoadingHistory && !clientBookingHistory ? (
+                    filteredTherapists.map((therapist) => (
+                      <option key={therapist.therapist_id} value={therapist.therapist_name}>
+                        {therapist.therapist_name}
+                      </option>
+                    ))
+                  ) : isLoadingHistory ? (
+                    <option disabled>Loading...</option>
                   ) : (
                     filteredTherapists.map((therapist) => (
                       <option key={therapist.therapist_id} value={therapist.therapist_name}>
