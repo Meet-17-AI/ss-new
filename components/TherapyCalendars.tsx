@@ -205,7 +205,7 @@ export function TherapyCalendars() {
       ) : (
         <div className="flex-1 flex flex-col">
           {filteredCalendars.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto pr-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 overflow-y-auto pr-2">
               {filteredCalendars.map((item, index) => {
                 const cleanSlug = item.slug ? item.slug.replace(/^\/+/, '') : '';
                 const fullLink = `${window.location.origin}/book/${cleanSlug}`;
@@ -213,57 +213,58 @@ export function TherapyCalendars() {
                 return (
                   <div
                     key={`${item.id}-${index}`}
-                    className="bg-white rounded-xl shadow-md border border-gray-200 hover:shadow-lg transition-shadow overflow-hidden flex flex-col"
+                    className="bg-white rounded-lg shadow-sm border border-gray-150 hover:shadow-md transition-all overflow-hidden flex flex-col h-fit"
+                    style={{ borderColor: '#E5E7EB' }}
                   >
                     {/* Card Header */}
-                    <div className="bg-gradient-to-r from-teal-600 to-teal-700 px-6 py-4 text-white flex justify-between items-start">
+                    <div className="px-5 py-3 text-white flex justify-between items-start" style={{ backgroundColor: '#21615D' }}>
                       <div className="flex-1">
-                        <h3 className="text-lg font-bold mb-1">{item.title}</h3>
-                        <div className="flex items-center gap-2 text-sm">
-                          <User size={14} />
+                        <h3 className="text-base font-bold mb-0.5">{item.title}</h3>
+                        <div className="flex items-center gap-2 text-xs">
+                          <User size={12} />
                           <span>{item.therapist_name}</span>
                         </div>
                       </div>
                       {/* Three-Dot Menu Button */}
                       {user?.username !== 'Test' && (
-                        <div className="relative group ml-4">
+                        <div className="relative group ml-3 flex-shrink-0">
                           <button
-                            className="p-2 hover:bg-teal-800 rounded-lg transition-colors"
+                            className="p-1.5 hover:opacity-80 rounded transition-opacity"
                             title="Actions"
                           >
-                            <ChevronDown size={20} className="rotate-90" />
+                            <ChevronDown size={16} className="rotate-90" />
                           </button>
                           {/* Dropdown Menu */}
-                          <div className="absolute right-0 mt-1 w-48 bg-white text-gray-800 rounded-lg shadow-xl border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                          <div className="absolute right-0 mt-1 w-44 bg-white text-gray-800 rounded-lg shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
                             <button
                               onClick={() => handleCopy(new MouseEvent('click') as any, fullLink, item.id)}
-                              className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm flex items-center gap-2 border-b border-gray-100"
+                              className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
                             >
-                              <Copy size={14} />
+                              <Copy size={12} />
                               Copy Link
                             </button>
                             <a
                               href={fullLink}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm flex items-center gap-2 border-b border-gray-100"
+                              className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
                             >
-                              <ExternalLink size={14} />
+                              <ExternalLink size={12} />
                               Open Link
                             </a>
                             <button
                               onClick={() => setConfirmDialog({ type: item.is_active !== false ? 'deactivate' : 'activate', id: item.id, title: item.title })}
-                              className="w-full text-left px-4 py-2 hover:bg-gray-100 text-sm flex items-center gap-2 border-b border-gray-100"
+                              className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
                             >
-                              <Power size={14} />
+                              <Power size={12} />
                               {item.is_active !== false ? 'Deactivate' : 'Activate'}
                             </button>
                             <button
                               onClick={() => setConfirmDialog({ type: 'delete', id: item.id, title: item.title })}
-                              className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 text-sm flex items-center gap-2"
+                              className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 text-xs flex items-center gap-2"
                             >
-                              <Trash2 size={14} />
-                              Delete Calendar
+                              <Trash2 size={12} />
+                              Delete
                             </button>
                           </div>
                         </div>
@@ -271,33 +272,33 @@ export function TherapyCalendars() {
                     </div>
 
                     {/* Card Body */}
-                    <div className="px-6 py-4 flex-1 space-y-4">
+                    <div className="px-5 py-3 flex-1 space-y-3">
                       {/* Duration */}
-                      <div className="border-b pb-4">
+                      <div className="border-b border-gray-200 pb-3">
                         <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Duration</p>
-                        <p className="text-lg font-bold text-gray-900">{item.duration}</p>
+                        <p className="text-base font-bold text-gray-900">{item.duration}</p>
                       </div>
 
                       {/* Status Badges */}
                       <div className="flex gap-2 flex-wrap">
                         {/* Active/Inactive Badge */}
                         {item.is_active !== false ? (
-                          <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                          <span className="px-2.5 py-1 inline-flex text-xs leading-4 font-semibold rounded-full text-white" style={{ backgroundColor: '#21615D' }}>
                             ✓ Active
                           </span>
                         ) : (
-                          <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                          <span className="px-2.5 py-1 inline-flex text-xs leading-4 font-semibold rounded-full bg-red-100 text-red-800">
                             Inactive
                           </span>
                         )}
 
                         {/* Sync Status Badge */}
                         {item.google_calendar_connected ? (
-                          <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
-                            📅 Google Connected
+                          <span className="px-2.5 py-1 inline-flex text-xs leading-4 font-semibold rounded-full bg-blue-100 text-blue-800">
+                            📅 Connected
                           </span>
                         ) : (
-                          <span className="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                          <span className="px-2.5 py-1 inline-flex text-xs leading-4 font-semibold rounded-full bg-gray-100 text-gray-700">
                             Not Connected
                           </span>
                         )}
@@ -305,13 +306,14 @@ export function TherapyCalendars() {
                     </div>
 
                     {/* Card Footer - Booking Link */}
-                    <div className="px-6 py-3 bg-gray-50 border-t border-gray-200">
-                      <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-2">Booking Link</p>
+                    <div className="px-5 py-2.5 bg-gray-50 border-t border-gray-200">
+                      <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Link</p>
                       <a
                         href={fullLink}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-xs text-teal-600 hover:text-teal-800 hover:underline truncate block"
+                        className="text-xs hover:underline truncate block"
+                        style={{ color: '#21615D' }}
                         title={fullLink}
                       >
                         {fullLink.replace(/^https?:\/\/[^/]+/, '')}
