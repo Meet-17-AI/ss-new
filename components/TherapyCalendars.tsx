@@ -213,8 +213,9 @@ export function TherapyCalendars() {
                 return (
                   <div
                     key={`${item.id}-${index}`}
-                    className="bg-white rounded-lg shadow-sm border border-gray-150 hover:shadow-md transition-all overflow-hidden flex flex-col h-fit"
+                    className="bg-white rounded-lg shadow-sm border border-gray-150 hover:shadow-md transition-all overflow-hidden flex flex-col h-80 cursor-pointer"
                     style={{ borderColor: '#E5E7EB' }}
+                    onClick={() => navigate(`/admin/therapy-calendars/${item.id}`)}
                   >
                     {/* Card Header */}
                     <div className="px-5 py-3 text-white flex justify-between items-start" style={{ backgroundColor: '#21615D' }}>
@@ -227,17 +228,18 @@ export function TherapyCalendars() {
                       </div>
                       {/* Three-Dot Menu Button */}
                       {user?.username !== 'Test' && (
-                        <div className="relative group ml-3 flex-shrink-0">
+                        <div className="relative group ml-3 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
                           <button
                             className="p-1.5 hover:opacity-80 rounded transition-opacity"
                             title="Actions"
+                            onClick={(e) => e.stopPropagation()}
                           >
                             <ChevronDown size={16} className="rotate-90" />
                           </button>
                           {/* Dropdown Menu */}
                           <div className="absolute right-0 mt-1 w-44 bg-white text-gray-800 rounded-lg shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
                             <button
-                              onClick={() => handleCopy(new MouseEvent('click') as any, fullLink, item.id)}
+                              onClick={(e) => { e.stopPropagation(); handleCopy(new MouseEvent('click') as any, fullLink, item.id); }}
                               className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
                             >
                               <Copy size={12} />
@@ -247,20 +249,21 @@ export function TherapyCalendars() {
                               href={fullLink}
                               target="_blank"
                               rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
                               className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
                             >
                               <ExternalLink size={12} />
                               Open Link
                             </a>
                             <button
-                              onClick={() => setConfirmDialog({ type: item.is_active !== false ? 'deactivate' : 'activate', id: item.id, title: item.title })}
+                              onClick={(e) => { e.stopPropagation(); setConfirmDialog({ type: item.is_active !== false ? 'deactivate' : 'activate', id: item.id, title: item.title }); }}
                               className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
                             >
                               <Power size={12} />
                               {item.is_active !== false ? 'Deactivate' : 'Activate'}
                             </button>
                             <button
-                              onClick={() => setConfirmDialog({ type: 'delete', id: item.id, title: item.title })}
+                              onClick={(e) => { e.stopPropagation(); setConfirmDialog({ type: 'delete', id: item.id, title: item.title }); }}
                               className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 text-xs flex items-center gap-2"
                             >
                               <Trash2 size={12} />
@@ -272,7 +275,7 @@ export function TherapyCalendars() {
                     </div>
 
                     {/* Card Body */}
-                    <div className="px-5 py-3 flex-1 space-y-3">
+                    <div className="px-5 py-3 flex-1 space-y-3 overflow-y-auto">
                       {/* Duration */}
                       <div className="border-b border-gray-200 pb-3">
                         <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Duration</p>
