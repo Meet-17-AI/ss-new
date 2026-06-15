@@ -775,11 +775,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
 
             {/* Client Booking History Info */}
             {clientBookingHistory && (
-              <div className="col-span-2 bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
-                <div className="font-semibold">✓ {clientBookingHistory.clientName} has {clientBookingHistory.totalBookings} booking(s)</div>
+              <div className="col-span-2 rounded-lg p-3 text-sm" style={{ backgroundColor: '#21615D', borderColor: '#21615D' }}>
+                <div className="font-semibold text-white">✓ {clientBookingHistory.clientName} has {clientBookingHistory.totalBookings} booking(s)</div>
                 {clientBookingHistory.lastBooking && (
-                  <div className="text-xs text-blue-600 mt-1">
-                    Last: {clientBookingHistory.lastBooking.therapy} with {clientBookingHistory.lastBooking.therapist}
+                  <div className="text-xs mt-1" style={{ color: '#E8F5F4' }}>
+                    Last: {clientBookingHistory.lastBooking.therapy}
                   </div>
                 )}
               </div>
