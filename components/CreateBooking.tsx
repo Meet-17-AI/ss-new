@@ -50,6 +50,10 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
     therapist: false,
     mode: false,
   });
+  const [clientBookingHistory, setClientBookingHistory] = useState<any>(null);
+  const [allowedTherapies, setAllowedTherapies] = useState<string[]>([]);
+  const [allowedTherapists, setAllowedTherapists] = useState<string[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const timezones = [
     { name: 'Asia/Kolkata', offset: 'GMT+5:30' },
@@ -243,6 +247,40 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
     }
   };
 
+  const handleExistingClientSelect = async (client: any) => {
+    try {
+      setIsLoadingHistory(true);
+      const response = await fetch(`/api/client-booking-history/${client.invitee_id}`);
+      const history = await response.json();
+
+      setClientBookingHistory(history);
+      setAllowedTherapies(history.therapies || []);
+      setAllowedTherapists(history.therapists || []);
+
+      // Auto-select from last booking
+      if (history.lastBooking) {
+        setSelectedTherapy(history.lastBooking.therapy);
+        setAutoFilledFields(prev => ({ ...prev, therapy: true }));
+
+        setSelectedTherapist(history.lastBooking.therapist);
+        setAutoFilledFields(prev => ({ ...prev, therapist: true }));
+
+        const mode = history.lastBooking.mode?.toLowerCase().includes('online') ||
+                     history.lastBooking.mode?.toLowerCase().includes('meet')
+          ? 'online'
+          : 'in-person';
+        setSessionMode(mode);
+        setAutoFilledFields(prev => ({ ...prev, mode: true }));
+      }
+
+      setIsLoadingHistory(false);
+    } catch (error) {
+      console.error('Error fetching booking history:', error);
+      setIsLoadingHistory(false);
+      toast.error('Failed to load client history');
+    }
+  };
+
   const handleClientSelect = (client: any) => {
     setClientName(client.invitee_name);
     setSelectedClientId(client.invitee_id || client.id);
@@ -262,21 +300,14 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
     }
     setClientEmail(client.invitee_email || '');
 
-    // Auto-fetch from client's last booking data
-    if (client.booking_resource_name) {
-      setSelectedTherapy(client.booking_resource_name);
-      setAutoFilledFields(prev => ({ ...prev, therapy: true }));
-    }
-    if (client.booking_host_name) {
-      setSelectedTherapist(client.booking_host_name);
-      setAutoFilledFields(prev => ({ ...prev, therapist: true }));
-    }
-    if (client.booking_mode) {
-      const mode = client.booking_mode.toLowerCase().includes('online') ||
-                   client.booking_mode.toLowerCase().includes('meet') ? 'online' : 'in-person';
-      setSessionMode(mode);
-      setAutoFilledFields(prev => ({ ...prev, mode: true }));
-    }
+    // Reset dropdowns before loading history
+    setSelectedTherapy('');
+    setSelectedTherapist('');
+    setSessionMode('');
+    setAutoFilledFields({ therapy: false, therapist: false, mode: false });
+
+    // Fetch and restrict to client's booking history
+    handleExistingClientSelect(client);
 
     setShowClientDropdown(false);
   };
@@ -612,15 +643,27 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 <select
                   value={selectedTherapy}
                   onChange={(e) => handleTherapyChange(e.target.value)}
-                  disabled={isFreeConsultation}
+                  disabled={isFreeConsultation || isLoadingHistory || (clientBookingHistory && allowedTherapies.length === 0)}
                   className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white disabled:bg-gray-100 disabled:cursor-not-allowed pr-10"
                 >
-                  <option value="">Select</option>
-                  {therapies.map((therapy, index) => (
-                    <option key={index} value={therapy.therapy_name}>
-                      {therapy.therapy_name}
-                    </option>
-                  ))}
+                  <option value="">
+                    {isLoadingHistory ? 'Loading...' : 'Select'}
+                  </option>
+                  {clientBookingHistory && allowedTherapies.length > 0 ? (
+                    allowedTherapies.map((therapy, index) => (
+                      <option key={index} value={therapy}>
+                        {therapy}
+                      </option>
+                    ))
+                  ) : clientBookingHistory ? (
+                    <option disabled>No therapy history found</option>
+                  ) : (
+                    therapies.map((therapy, index) => (
+                      <option key={index} value={therapy.therapy_name}>
+                        {therapy.therapy_name}
+                      </option>
+                    ))
+                  )}
                 </select>
                 <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
                   ▼
@@ -633,15 +676,27 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 <select
                   value={selectedTherapist}
                   onChange={(e) => setSelectedTherapist(e.target.value)}
-                  disabled={isFreeConsultation}
+                  disabled={isFreeConsultation || isLoadingHistory || (clientBookingHistory && allowedTherapists.length === 0)}
                   className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white disabled:bg-gray-100 disabled:cursor-not-allowed pr-10"
                 >
-                  <option value="">Select</option>
-                  {filteredTherapists.map((therapist) => (
-                    <option key={therapist.therapist_id} value={therapist.therapist_name}>
-                      {therapist.therapist_name}
-                    </option>
-                  ))}
+                  <option value="">
+                    {isLoadingHistory ? 'Loading...' : 'Select'}
+                  </option>
+                  {clientBookingHistory && allowedTherapists.length > 0 ? (
+                    allowedTherapists.map((therapist, index) => (
+                      <option key={index} value={therapist}>
+                        {therapist}
+                      </option>
+                    ))
+                  ) : clientBookingHistory ? (
+                    <option disabled>No therapist history found</option>
+                  ) : (
+                    filteredTherapists.map((therapist) => (
+                      <option key={therapist.therapist_id} value={therapist.therapist_name}>
+                        {therapist.therapist_name}
+                      </option>
+                    ))
+                  )}
                 </select>
                 <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
                   ▼
@@ -717,6 +772,19 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 </div>
               )}
             </div>
+
+            {/* Client Booking History Info */}
+            {clientBookingHistory && (
+              <div className="col-span-2 bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+                <div className="font-semibold">✓ {clientBookingHistory.clientName} has {clientBookingHistory.totalBookings} booking(s)</div>
+                {clientBookingHistory.lastBooking && (
+                  <div className="text-xs text-blue-600 mt-1">
+                    Last: {clientBookingHistory.lastBooking.therapy} with {clientBookingHistory.lastBooking.therapist}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div>
               <label className="block text-sm font-medium mb-2">
                 Client Email Address<span className="text-red-500">*</span>

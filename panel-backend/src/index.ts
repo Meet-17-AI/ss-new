@@ -3029,6 +3029,74 @@ app.get('/api/clients', async (req, res) => {
   }
 });
 
+// Fetch client booking history for dropdown restrictions
+app.get('/api/client-booking-history/:clientId', async (req, res) => {
+  try {
+    const clientId = req.params.clientId;
+
+    const result = await pool.query(`
+      SELECT
+        DISTINCT
+        booking_resource_name as therapy,
+        booking_host_name as therapist,
+        booking_mode as mode,
+        booking_start_at
+      FROM bookings
+      WHERE invitee_id = $1
+        AND booking_status NOT IN ('cancelled', 'canceled', 'no_show', 'no show')
+      ORDER BY booking_start_at DESC
+    `, [clientId]);
+
+    if (result.rows.length === 0) {
+      return res.json({
+        clientId: clientId,
+        clientName: '',
+        therapies: [],
+        therapists: [],
+        modes: [],
+        lastBooking: null,
+        totalBookings: 0
+      });
+    }
+
+    // Extract unique therapies, therapists, and modes
+    const therapies = [...new Set(result.rows.map(r => r.therapy).filter(Boolean))];
+    const therapists = [...new Set(result.rows.map(r => r.therapist).filter(Boolean))];
+    const modes = [...new Set(result.rows.map(r => r.mode).filter(Boolean))];
+
+    // Get most recent booking
+    const lastBooking = result.rows[0];
+
+    // Fetch client name from the bookings table
+    const clientNameResult = await pool.query(`
+      SELECT DISTINCT invitee_name
+      FROM bookings
+      WHERE invitee_id = $1
+      LIMIT 1
+    `, [clientId]);
+
+    const clientName = clientNameResult.rows[0]?.invitee_name || '';
+
+    res.json({
+      clientId: clientId,
+      clientName: clientName,
+      therapies: therapies,
+      therapists: therapists,
+      modes: modes,
+      lastBooking: {
+        therapy: lastBooking.therapy,
+        therapist: lastBooking.therapist,
+        mode: lastBooking.mode,
+        date: lastBooking.booking_start_at
+      },
+      totalBookings: result.rows.length
+    });
+  } catch (error) {
+    console.error('Error fetching client booking history:', error);
+    res.status(500).json({ error: 'Failed to fetch client booking history' });
+  }
+});
+
 // Local Schedule Endpoints (Replaces DaySchedule proxy)
 app.get('/api/dayschedule/schedules/:id', async (req, res) => {
   try {

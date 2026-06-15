@@ -37,6 +37,10 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
   const [showClientDropdown, setShowClientDropdown] = useState(false);
   const [filteredClients, setFilteredClients] = useState<any[]>([]);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [clientBookingHistory, setClientBookingHistory] = useState<any>(null);
+  const [allowedTherapies, setAllowedTherapies] = useState<string[]>([]);
+  const [allowedTherapists, setAllowedTherapists] = useState<string[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const countryCodes = [
@@ -350,6 +354,34 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
     }
   };
 
+  const handleExistingClientSelect = async (client: any) => {
+    try {
+      setIsLoadingHistory(true);
+      const response = await fetch(`/api/client-booking-history/${client.invitee_id}`);
+      const history = await response.json();
+
+      setClientBookingHistory(history);
+      setAllowedTherapies(history.therapies || []);
+      setAllowedTherapists(history.therapists || []);
+
+      // Auto-select from last booking
+      if (history.lastBooking && history.therapists.length > 0) {
+        const matchingTherapist = history.therapists[0];
+        setTherapistName(matchingTherapist);
+
+        if (history.therapies.length > 0) {
+          setTherapyType(history.therapies[0]);
+        }
+      }
+
+      setIsLoadingHistory(false);
+    } catch (error) {
+      console.error('Error fetching booking history:', error);
+      setIsLoadingHistory(false);
+      setToast({ message: 'Failed to load client history', type: 'error' });
+    }
+  };
+
   const handleClientSelect = (client: any) => {
     setClientName(client.invitee_name);
     const phone = client.invitee_phone || '';
@@ -365,29 +397,14 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
       setClientWhatsapp(phone);
     }
     setClientEmail(client.invitee_email || '');
-    
-    // Autofill therapist - find full therapist name from booking_host_name
-    if (client.booking_host_name && therapists.length > 0) {
-      const clientTherapistName = client.booking_host_name.toLowerCase().trim();
-      const matchingTherapist = therapists.find(t => {
-        const therapistName = t.name.toLowerCase().trim();
-        const therapistFirstName = t.name.split(' ')[0].toLowerCase().trim();
-        return therapistName.includes(clientTherapistName) || 
-               clientTherapistName.includes(therapistFirstName) ||
-               clientTherapistName.includes(therapistName);
-      });
-      
-      if (matchingTherapist) {
-        setTherapistName(matchingTherapist.name);
-        if (matchingTherapist.specialization) {
-          const specs = matchingTherapist.specialization.split(',').map((s: string) => s.trim());
-          if (specs.length > 0) {
-            setTherapyType(specs[0]);
-          }
-        }
-      }
-    }
-    
+
+    // Reset dropdowns before loading history
+    setTherapyType('');
+    setTherapistName('');
+
+    // Fetch and restrict to client's booking history
+    handleExistingClientSelect(client);
+
     setShowClientDropdown(false);
     setFilteredClients([]);
   };
@@ -516,6 +533,18 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
               )}
             </div>
 
+            {/* Client Booking History Info */}
+            {clientBookingHistory && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+                <div className="font-semibold">✓ {clientBookingHistory.clientName} has {clientBookingHistory.totalBookings} booking(s)</div>
+                {clientBookingHistory.lastBooking && (
+                  <div className="text-xs text-blue-600 mt-1">
+                    Last: {clientBookingHistory.lastBooking.therapy} with {clientBookingHistory.lastBooking.therapist}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Client WhatsApp No */}
             <div>
               <label className="block text-sm font-semibold mb-2">
@@ -585,7 +614,7 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
                   Select Therapy
                 </label>
                 <div className="relative">
-                  <select 
+                  <select
                     value={therapyType}
                     onChange={(e) => {
                       setTherapyType(e.target.value);
@@ -593,14 +622,26 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
                     }}
                     className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white disabled:bg-gray-100 disabled:cursor-not-allowed"
                     required={!isFreeConsultation}
-                    disabled={isFreeConsultation}
+                    disabled={isFreeConsultation || isLoadingHistory || (clientBookingHistory && allowedTherapies.length === 0)}
                   >
-                    <option value="">Select</option>
-                    {therapies.map((therapy) => (
-                      <option key={therapy.therapy_name} value={therapy.therapy_name}>
-                        {therapy.therapy_name}
-                      </option>
-                    ))}
+                    <option value="">
+                      {isLoadingHistory ? 'Loading...' : 'Select'}
+                    </option>
+                    {clientBookingHistory && allowedTherapies.length > 0 ? (
+                      allowedTherapies.map((therapy, index) => (
+                        <option key={index} value={therapy}>
+                          {therapy}
+                        </option>
+                      ))
+                    ) : clientBookingHistory ? (
+                      <option disabled>No therapy history found</option>
+                    ) : (
+                      therapies.map((therapy) => (
+                        <option key={therapy.therapy_name} value={therapy.therapy_name}>
+                          {therapy.therapy_name}
+                        </option>
+                      ))
+                    )}
                   </select>
                   <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
                     <svg width="12" height="8" viewBox="0 0 12 8" fill="currentColor">
@@ -614,19 +655,31 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
                   Select Therapist
                 </label>
                 <div className="relative">
-                  <select 
+                  <select
                     value={therapistName}
                     onChange={(e) => setTherapistName(e.target.value)}
                     className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white disabled:bg-gray-100 disabled:cursor-not-allowed"
                     required={!isFreeConsultation}
-                    disabled={isFreeConsultation}
+                    disabled={isFreeConsultation || isLoadingHistory || (clientBookingHistory && allowedTherapists.length === 0)}
                   >
-                    <option value="">Select</option>
-                    {filteredTherapists.map((therapist) => (
-                      <option key={therapist.name} value={therapist.name}>
-                        {therapist.name}
-                      </option>
-                    ))}
+                    <option value="">
+                      {isLoadingHistory ? 'Loading...' : 'Select'}
+                    </option>
+                    {clientBookingHistory && allowedTherapists.length > 0 ? (
+                      allowedTherapists.map((therapist, index) => (
+                        <option key={index} value={therapist}>
+                          {therapist}
+                        </option>
+                      ))
+                    ) : clientBookingHistory ? (
+                      <option disabled>No therapist history found</option>
+                    ) : (
+                      filteredTherapists.map((therapist) => (
+                        <option key={therapist.name} value={therapist.name}>
+                          {therapist.name}
+                        </option>
+                      ))
+                    )}
                   </select>
                   <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
                     <svg width="12" height="8" viewBox="0 0 12 8" fill="currentColor">
