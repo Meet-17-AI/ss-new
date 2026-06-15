@@ -327,9 +327,14 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
 
   const fetchTherapists = async () => {
     try {
-      const response = await fetch('/api/therapists-dropdown');
+      const response = await fetch('/api/therapists');
       const data = await response.json();
-      setTherapists(data);
+      // Map the response to match Therapist interface
+      const mappedTherapists = data.map((therapist: any) => ({
+        name: therapist.full_name || therapist.name,
+        specialization: therapist.specialization || therapist.specializations?.join(', ') || ''
+      }));
+      setTherapists(mappedTherapists);
     } catch (error) {
       console.error('Error fetching therapists:', error);
     }

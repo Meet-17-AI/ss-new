@@ -262,20 +262,20 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
     }
     setClientEmail(client.invitee_email || '');
 
-    // Auto-fetch therapy type, therapist, and mode from client's last booking
-    if (client.last_booking_therapy || client.booking_resource_name) {
-      if (client.last_booking_therapy) {
-        setSelectedTherapy(client.last_booking_therapy);
-        setAutoFilledFields(prev => ({ ...prev, therapy: true }));
-      }
-      if (client.last_booking_therapist) {
-        setSelectedTherapist(client.last_booking_therapist);
-        setAutoFilledFields(prev => ({ ...prev, therapist: true }));
-      }
-      if (client.last_booking_mode) {
-        setSessionMode(client.last_booking_mode.toLowerCase().includes('online') ? 'online' : 'in-person');
-        setAutoFilledFields(prev => ({ ...prev, mode: true }));
-      }
+    // Auto-fetch from client's last booking data
+    if (client.booking_resource_name) {
+      setSelectedTherapy(client.booking_resource_name);
+      setAutoFilledFields(prev => ({ ...prev, therapy: true }));
+    }
+    if (client.booking_host_name) {
+      setSelectedTherapist(client.booking_host_name);
+      setAutoFilledFields(prev => ({ ...prev, therapist: true }));
+    }
+    if (client.booking_mode) {
+      const mode = client.booking_mode.toLowerCase().includes('online') ||
+                   client.booking_mode.toLowerCase().includes('meet') ? 'online' : 'in-person';
+      setSessionMode(mode);
+      setAutoFilledFields(prev => ({ ...prev, mode: true }));
     }
 
     setShowClientDropdown(false);
