@@ -737,11 +737,36 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 placeholder="Enter client name"
                 value={clientName}
                 onChange={(e) => {
-                  setClientName(e.target.value);
-                  if (e.target.value === '') {
+                  const newName = e.target.value;
+                  setClientName(newName);
+
+                  if (newName === '') {
                     setClientWhatsApp('');
                     setClientEmail('');
                     setCountryCode('+91');
+                    // Reset booking history for cleared input
+                    setClientBookingHistory(null);
+                    setAllowedTherapies([]);
+                    setAllowedTherapists([]);
+                    setSelectedTherapy('');
+                    setSelectedTherapist('');
+                    setSessionMode('');
+                    setAutoFilledFields({ therapy: false, therapist: false, mode: false });
+                  } else {
+                    // Check if typed name matches any existing client
+                    const matchingClient = clients.find(c =>
+                      c.invitee_name.toLowerCase() === newName.toLowerCase()
+                    );
+                    // If no match, reset booking history (new client flow)
+                    if (!matchingClient) {
+                      setClientBookingHistory(null);
+                      setAllowedTherapies([]);
+                      setAllowedTherapists([]);
+                      setSelectedTherapy('');
+                      setSelectedTherapist('');
+                      setSessionMode('');
+                      setAutoFilledFields({ therapy: false, therapist: false, mode: false });
+                    }
                   }
                 }}
                 onFocus={() => clientName.length > 0 && filteredClients.length > 0 && setShowClientDropdown(true)}
@@ -763,7 +788,17 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                     </div>
                   ))}
                   <div
-                    onClick={() => setShowClientDropdown(false)}
+                    onClick={() => {
+                      setShowClientDropdown(false);
+                      // Reset booking history for new client
+                      setClientBookingHistory(null);
+                      setAllowedTherapies([]);
+                      setAllowedTherapists([]);
+                      setSelectedTherapy('');
+                      setSelectedTherapist('');
+                      setSessionMode('');
+                      setAutoFilledFields({ therapy: false, therapist: false, mode: false });
+                    }}
                     className="px-4 py-3 hover:bg-gray-100 cursor-pointer border-t font-medium text-center"
                     style={{ backgroundColor: '#21615D', color: 'white' }}
                   >

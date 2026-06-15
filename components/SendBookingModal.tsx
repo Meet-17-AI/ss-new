@@ -488,13 +488,32 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
                 placeholder="Enter client name"
                 value={clientName}
                 onChange={(e) => {
-                  setClientName(e.target.value);
-                  if (e.target.value === '') {
+                  const newName = e.target.value;
+                  setClientName(newName);
+
+                  if (newName === '') {
                     setClientWhatsapp('');
                     setClientEmail('');
                     setTherapyType('');
                     setTherapistName('');
                     setCountryCode('+91');
+                    // Reset booking history for cleared input
+                    setClientBookingHistory(null);
+                    setAllowedTherapies([]);
+                    setAllowedTherapists([]);
+                  } else {
+                    // Check if typed name matches any existing client
+                    const matchingClient = clients.find(c =>
+                      c.invitee_name.toLowerCase() === newName.toLowerCase()
+                    );
+                    // If no match, reset booking history (new client flow)
+                    if (!matchingClient) {
+                      setClientBookingHistory(null);
+                      setAllowedTherapies([]);
+                      setAllowedTherapists([]);
+                      setTherapyType('');
+                      setTherapistName('');
+                    }
                   }
                 }}
                 className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
@@ -523,6 +542,12 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
                       e.preventDefault();
                       setShowClientDropdown(false);
                       setFilteredClients([]);
+                      // Reset booking history for new client
+                      setClientBookingHistory(null);
+                      setAllowedTherapies([]);
+                      setAllowedTherapists([]);
+                      setTherapyType('');
+                      setTherapistName('');
                     }}
                     className="px-4 py-3 hover:bg-gray-100 cursor-pointer border-t font-medium text-center"
                     style={{ backgroundColor: '#21615D', color: 'white' }}
