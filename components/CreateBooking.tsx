@@ -256,10 +256,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
 
       setClientBookingHistory(history);
 
-      // Only restrict dropdowns if last booking was NOT a free consultation
-      if (history.lastBooking && !history.lastBooking.isFreeConsultation && history.therapies?.length > 0) {
-        setAllowedTherapies(history.therapies || []);
-        setAllowedTherapists(history.therapists || []);
+      // Always restrict and auto-select based on the client's last booking history
+      if (history.lastBooking && history.lastBooking.therapy && history.lastBooking.therapist) {
+        // Show the last booking's therapy and therapist (not changeable)
+        setAllowedTherapies([history.lastBooking.therapy]);
+        setAllowedTherapists([history.lastBooking.therapist]);
         setHasRestrictions(true);
 
         // Auto-select from last booking
@@ -453,7 +454,10 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
           if (effectiveModes.length === 1) {
             setSessionMode(effectiveModes[0] as 'online' | 'in-person');
           } else {
-            setSessionMode('');
+            setSessionMode(prevMode => {
+               if (prevMode && effectiveModes.includes(prevMode)) return prevMode;
+               return '';
+            });
           }
           
           if (availableSlots.length > 0) {

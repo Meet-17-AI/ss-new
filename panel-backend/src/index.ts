@@ -3041,7 +3041,7 @@ app.get('/api/client-booking-history/:clientId', async (req, res) => {
         booking_host_name as therapist,
         booking_mode as mode,
         booking_start_at,
-        is_free_consultation
+        (booking_resource_name ILIKE '%free consultation%' OR booking_resource_name ILIKE '%pre-therapy%') as is_free_consultation
       FROM bookings
       WHERE invitee_id = $1
         AND booking_status NOT IN ('cancelled', 'canceled', 'no_show', 'no show')
