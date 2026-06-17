@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Search, Loader, Plus, Copy, ExternalLink, ChevronDown, Trash2, Power } from 'lucide-react';
+import { User, Search, Loader, Plus, Copy, ExternalLink, ChevronDown, Trash2, Power, MoreVertical } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 interface TherapyService {
@@ -16,6 +16,7 @@ interface TherapyService {
   schedule_id?: number;
   google_calendar_connected?: boolean;
   is_active?: boolean;
+  therapist_is_active?: boolean;
 }
 
 export function TherapyCalendars() {
@@ -203,140 +204,148 @@ export function TherapyCalendars() {
           <Loader className="animate-spin text-teal-600" size={32} />
         </div>
       ) : (
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col overflow-y-auto pr-2 pb-10">
           {filteredCalendars.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 overflow-y-auto pr-2">
-              {filteredCalendars.map((item, index) => {
-                const cleanSlug = item.slug ? item.slug.replace(/^\/+/, '') : '';
-                const fullLink = `${window.location.origin}/book/${cleanSlug}`;
-
-                return (
-                  <div
-                    key={`${item.id}-${index}`}
-                    className="bg-white rounded-lg shadow-sm border border-gray-150 hover:shadow-md transition-all overflow-hidden flex flex-col h-80 cursor-pointer"
-                    style={{ borderColor: '#E5E7EB' }}
-                    onClick={() => navigate(`/admin/therapy-calendars/${item.id}`)}
-                  >
-                    {/* Card Header */}
-                    <div className="px-5 py-3 text-white flex justify-between items-start" style={{ backgroundColor: '#21615D' }}>
-                      <div className="flex-1">
-                        <h3 className="text-base font-bold mb-0.5">{item.title}</h3>
-                        <div className="flex items-center gap-2 text-xs">
-                          <User size={12} />
-                          <span>{item.therapist_name}</span>
-                        </div>
-                      </div>
-                      {/* Three-Dot Menu Button */}
-                      {user?.username !== 'Test' && (
-                        <div className="relative group ml-3 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            className="p-1.5 hover:opacity-80 rounded transition-opacity"
-                            title="Actions"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <ChevronDown size={16} className="rotate-90" />
-                          </button>
-                          {/* Dropdown Menu */}
-                          <div className="absolute right-0 mt-1 w-44 bg-white text-gray-800 rounded-lg shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleCopy(new MouseEvent('click') as any, fullLink, item.id); }}
-                              className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
-                            >
-                              <Copy size={12} />
-                              Copy Link
-                            </button>
-                            <a
-                              href={fullLink}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
-                            >
-                              <ExternalLink size={12} />
-                              Open Link
-                            </a>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setConfirmDialog({ type: item.is_active !== false ? 'deactivate' : 'activate', id: item.id, title: item.title }); }}
-                              className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
-                            >
-                              <Power size={12} />
-                              {item.is_active !== false ? 'Deactivate' : 'Activate'}
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setConfirmDialog({ type: 'delete', id: item.id, title: item.title }); }}
-                              className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 text-xs flex items-center gap-2"
-                            >
-                              <Trash2 size={12} />
-                              Delete
-                            </button>
-                          </div>
-                        </div>
+            <div className="space-y-8">
+              {Object.entries(
+                filteredCalendars.reduce((acc, calendar) => {
+                  const therapistName = calendar.therapist_name || 'Unassigned';
+                  if (!acc[therapistName]) acc[therapistName] = [];
+                  acc[therapistName].push(calendar);
+                  return acc;
+                }, {} as Record<string, TherapyService[]>)
+              ).map(([therapistName, therapistCalendars]) => (
+                <div key={therapistName} className="bg-transparent">
+                  {/* Therapist Header */}
+                  <div className="flex items-center gap-4 mb-4 bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+                    <div className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-sm" style={{ backgroundColor: '#21615D' }}>
+                      {therapistName !== 'Unassigned' ? therapistName.charAt(0).toUpperCase() : '?'}
+                    </div>
+                    <div className="flex-1 flex items-center gap-3">
+                      <h2 className="text-lg font-bold text-gray-900">{therapistName}</h2>
+                      {therapistCalendars.length > 0 && therapistCalendars[0].therapist_is_active === false && (
+                        <span className="text-[10px] font-bold text-red-700 bg-red-100 px-2 py-1 rounded-md uppercase tracking-wider">
+                          Inactive
+                        </span>
                       )}
                     </div>
-
-                    {/* Card Body */}
-                    <div className="px-5 py-3 flex-1 space-y-3 overflow-y-auto">
-                      {/* Duration */}
-                      <div className="border-b border-gray-200 pb-3">
-                        <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Duration</p>
-                        <p className="text-base font-bold text-gray-900">{item.duration}</p>
-                      </div>
-
-                      {/* Status Badges */}
-                      <div className="flex gap-2 flex-wrap">
-                        {/* Active/Inactive Badge */}
-                        {item.is_active !== false ? (
-                          <span className="px-3 py-1.5 inline-flex items-center gap-1.5 text-xs leading-4 font-semibold rounded-lg text-white" style={{ backgroundColor: '#21615D' }}>
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                            </svg>
-                            Active
-                          </span>
-                        ) : (
-                          <span className="px-3 py-1.5 inline-flex items-center gap-1.5 text-xs leading-4 font-semibold rounded-lg text-white bg-red-500">
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                            </svg>
-                            Inactive
-                          </span>
-                        )}
-
-                        {/* Sync Status Badge */}
-                        {item.google_calendar_connected ? (
-                          <span className="px-3 py-1.5 inline-flex items-center gap-1.5 text-xs leading-4 font-semibold rounded-lg text-white" style={{ backgroundColor: '#34C759' }}>
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                            </svg>
-                            Google Connected
-                          </span>
-                        ) : (
-                          <span className="px-3 py-1.5 inline-flex items-center gap-1.5 text-xs leading-4 font-semibold rounded-lg text-gray-700 bg-gray-100">
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                            </svg>
-                            Not Connected
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Card Footer - Booking Link */}
-                    <div className="px-5 py-2.5 bg-gray-50 border-t border-gray-200">
-                      <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">Link</p>
-                      <a
-                        href={fullLink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-xs hover:underline truncate block"
-                        style={{ color: '#21615D' }}
-                        title={fullLink}
-                      >
-                        {fullLink.replace(/^https?:\/\/[^/]+/, '')}
-                      </a>
-                    </div>
                   </div>
-                );
-              })}
+
+                  {/* Therapist's Calendars */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                    {therapistCalendars.map((item, index) => {
+                      const cleanSlug = item.slug ? item.slug.replace(/^\/+/, '') : '';
+                      const fullLink = `${window.location.origin}/book/${cleanSlug}`;
+
+                      return (
+                        <div
+                          key={`${item.id}-${index}`}
+                          className="bg-white rounded-xl shadow-sm border hover:shadow-md transition-all overflow-hidden flex flex-col cursor-pointer"
+                          style={{ borderColor: '#E5E7EB' }}
+                          onClick={() => navigate(`/admin/therapy-calendars/${item.id}`)}
+                        >
+                          <div className="p-5 flex-1">
+                            <div className="flex justify-between items-start mb-3">
+                              <h3 className="text-base font-bold text-gray-900 pr-4 leading-tight">{item.title}</h3>
+                              {user?.username !== 'Test' && (
+                                <div className="relative group flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                                  <button className="text-gray-400 hover:text-gray-600 p-1">
+                                    <MoreVertical size={18} />
+                                  </button>
+                                  {/* Dropdown Menu */}
+                                  <div className="absolute right-0 mt-1 w-44 bg-white text-gray-800 rounded-lg shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); handleCopy(new MouseEvent('click') as any, fullLink, item.id); }}
+                                      className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
+                                    >
+                                      <Copy size={12} />
+                                      Copy Link
+                                    </button>
+                                    <a
+                                      href={fullLink}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
+                                    >
+                                      <ExternalLink size={12} />
+                                      Open Link
+                                    </a>
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); setConfirmDialog({ type: 'delete', id: item.id, title: item.title }); }}
+                                      className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 text-xs flex items-center gap-2"
+                                    >
+                                      <Trash2 size={12} />
+                                      Delete
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-3 mb-4 flex-wrap">
+                              <div className="flex items-center gap-1.5 text-xs text-gray-600 font-medium bg-gray-100 px-2.5 py-1 rounded-md">
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                {item.duration || '50 m'}
+                              </div>
+                              {item.google_calendar_connected && (
+                                 <div className="text-[10px] font-bold text-blue-800 bg-blue-50 px-2 py-1 rounded-md uppercase tracking-wider border border-blue-100">
+                                   Connected
+                                 </div>
+                              )}
+                            </div>
+
+                            <div 
+                              className="text-sm text-gray-500 line-clamp-2 leading-relaxed"
+                              dangerouslySetInnerHTML={{ __html: item.description || 'No description provided.' }}
+                            />
+                          </div>
+
+                          <div className="px-5 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+                            {item.therapist_is_active === false ? (
+                              <div className="text-xs text-red-500 font-medium truncate flex-1 pr-4">
+                                Links disabled (Therapist Inactive)
+                              </div>
+                            ) : (
+                              <>
+                                <div className="text-sm text-gray-500 font-medium truncate flex-1 pr-4">
+                                  /{cleanSlug}
+                                </div>
+                                <div className="flex items-center gap-4">
+                                  <button 
+                                    onClick={(e) => { e.stopPropagation(); handleCopy(e as any, fullLink, item.id); }}
+                                    className="text-gray-400 hover:text-gray-600"
+                                    title="Copy link"
+                                  >
+                                    {copiedId === item.id ? <span className="text-teal-600 text-xs font-bold">Copied!</span> : <Copy size={16} />}
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                            <div className="flex items-center gap-4 ml-4">
+                              {/* Toggle switch for active/inactive */}
+                              {user?.username !== 'Test' && (
+                                <div 
+                                  className={`w-10 h-5 flex items-center rounded-full p-1 cursor-pointer transition-colors ${item.is_active !== false ? 'bg-teal-600' : 'bg-gray-300'}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setConfirmDialog({ type: item.is_active !== false ? 'deactivate' : 'activate', id: item.id, title: item.title });
+                                  }}
+                                  title={item.is_active !== false ? 'Active' : 'Inactive'}
+                                >
+                                  <div className={`bg-white w-3.5 h-3.5 rounded-full shadow-sm transform transition-transform ${item.is_active !== false ? 'translate-x-4' : 'translate-x-0'}`}></div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
             <div className="flex-1 flex items-center justify-center">

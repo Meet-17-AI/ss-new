@@ -9015,9 +9015,11 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 app.get('/api/services', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT ts.*, (t.google_refresh_token IS NOT NULL) as google_calendar_connected, s.availability
+      SELECT ts.*, (t.google_refresh_token IS NOT NULL) as google_calendar_connected, s.availability,
+             COALESCE(u.is_active, true) as therapist_is_active
       FROM therapy_services ts
       LEFT JOIN therapists t ON ts.therapist_id = t.therapist_id
+      LEFT JOIN users u ON u.role = 'therapist' AND u.therapist_id = ts.therapist_id
       LEFT JOIN therapist_schedules s ON ts.schedule_id = s.schedule_id
       ORDER BY ts.therapist_name, ts.title
     `);
@@ -9124,28 +9126,30 @@ app.put('/api/services/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const {
-      title, type, therapy_type, description, charges, therapist_id, therapist_name,
+      title, duration, type, therapy_type, description, charges, therapist_id, therapist_name,
       payment_gateway, schedule_id, form_questions, requires_tnc, is_payment_enabled
     } = req.body;
 
     const result = await pool.query(`
       UPDATE therapy_services
       SET title             = COALESCE($1,  title),
-          type              = COALESCE($2,  type),
-          therapy_type      = COALESCE($3,  therapy_type),
-          description       = COALESCE($4,  description),
-          charges           = COALESCE($5,  charges),
-          therapist_id      = COALESCE($6,  therapist_id),
-          therapist_name    = COALESCE($7,  therapist_name),
-          payment_gateway   = COALESCE($8,  payment_gateway),
-          schedule_id       = COALESCE($9,  schedule_id),
-          form_questions    = COALESCE($10::jsonb, form_questions),
-          requires_tnc      = COALESCE($11, requires_tnc),
-          is_payment_enabled= COALESCE($12, is_payment_enabled)
-      WHERE id = $13
+          duration          = COALESCE($2,  duration),
+          type              = COALESCE($3,  type),
+          therapy_type      = COALESCE($4,  therapy_type),
+          description       = COALESCE($5,  description),
+          charges           = COALESCE($6,  charges),
+          therapist_id      = COALESCE($7,  therapist_id),
+          therapist_name    = COALESCE($8,  therapist_name),
+          payment_gateway   = COALESCE($9,  payment_gateway),
+          schedule_id       = COALESCE($10, schedule_id),
+          form_questions    = COALESCE($11::jsonb, form_questions),
+          requires_tnc      = COALESCE($12, requires_tnc),
+          is_payment_enabled= COALESCE($13, is_payment_enabled)
+      WHERE id = $14
       RETURNING *
     `, [
       title || null,
+      duration || null,
       type || null,
       therapy_type || null,
       description || null,

@@ -836,12 +836,9 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
             {/* Client Booking History Info */}
             {clientBookingHistory && (
               <div className="col-span-2 rounded-lg p-3 text-sm" style={{ backgroundColor: '#21615D', borderColor: '#21615D' }}>
-                <div className="font-semibold text-white">✓ {clientBookingHistory.clientName} has {clientBookingHistory.totalBookings} booking(s)</div>
-                {clientBookingHistory.lastBooking && (
-                  <div className="text-xs mt-1" style={{ color: '#E8F5F4' }}>
-                    Last: {clientBookingHistory.lastBooking.therapy} {clientBookingHistory.lastBooking.therapist ? `with ${clientBookingHistory.lastBooking.therapist}` : ''}
-                  </div>
-                )}
+                <div className="font-semibold text-white">
+                  ✓ {clientBookingHistory.clientName} {clientBookingHistory.lastBooking ? `previously booked ${clientBookingHistory.lastBooking.therapy}${clientBookingHistory.lastBooking.therapist && !clientBookingHistory.lastBooking.therapy?.toLowerCase().includes('with') ? ` with ${clientBookingHistory.lastBooking.therapist}` : ''}` : `has ${clientBookingHistory.totalBookings} booking(s)`}
+                </div>
               </div>
             )}
 
@@ -887,30 +884,48 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
           </div>
 
           {/* Session Mode */}
-          <div className="flex gap-6">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={sessionMode === 'online'}
-                onChange={(e) => {
-                  if (availableModes.length === 1 && availableModes[0] === 'online') return;
-                  setSessionMode(e.target.checked ? 'online' : '');
-                }}
-                disabled={!availableModes.includes('online')}
-                className="w-4 h-4 disabled:opacity-50 disabled:cursor-not-allowed"
-              />
-              <span className={`text-sm ${!availableModes.includes('online') ? 'text-gray-400' : ''}`}>Google Meet</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={sessionMode === 'in-person'}
-                onChange={(e) => setSessionMode(e.target.checked ? 'in-person' : '')}
-                disabled={!availableModes.includes('in-person')}
-                className="w-4 h-4 disabled:opacity-50 disabled:cursor-not-allowed"
-              />
-              <span className={`text-sm ${!availableModes.includes('in-person') ? 'text-gray-400' : ''}`}>In-person</span>
-            </label>
+          <div>
+            <div className="flex gap-6">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={sessionMode === 'online'}
+                  onChange={(e) => {
+                    if (availableModes.length === 1 && availableModes[0] === 'online') return;
+                    setSessionMode(e.target.checked ? 'online' : '');
+                  }}
+                  disabled={!availableModes.includes('online')}
+                  className="w-4 h-4 disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+                <span className={`text-sm ${!availableModes.includes('online') ? 'text-gray-400' : ''}`}>Google Meet</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={sessionMode === 'in-person'}
+                  onChange={(e) => setSessionMode(e.target.checked ? 'in-person' : '')}
+                  disabled={!availableModes.includes('in-person')}
+                  className="w-4 h-4 disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+                <span className={`text-sm ${!availableModes.includes('in-person') ? 'text-gray-400' : ''}`}>In-person</span>
+              </label>
+            </div>
+            
+            {/* Warning if mode is different from history */}
+            {clientBookingHistory?.lastBooking?.mode && sessionMode && (() => {
+              const historyMode = clientBookingHistory.lastBooking.mode.toLowerCase().includes('online') || clientBookingHistory.lastBooking.mode.toLowerCase().includes('meet') ? 'online' : 'in-person';
+              if (sessionMode !== historyMode) {
+                return (
+                  <div className="mt-3 p-3 rounded-lg bg-orange-50 border border-orange-200 text-sm text-orange-800 flex items-start gap-2">
+                    <span className="text-orange-500 font-bold">⚠️</span>
+                    <div>
+                      <span className="font-semibold">Notice:</span> {clientBookingHistory.clientName} previously booked <strong>{historyMode === 'online' ? 'Google Meet' : 'In-person'}</strong> sessions. Are you sure you want to change the mode to <strong>{sessionMode === 'online' ? 'Google Meet' : 'In-person'}</strong>?
+                    </div>
+                  </div>
+                );
+              }
+              return null;
+            })()}
           </div>
 
           {/* Grand Total and Payment */}
