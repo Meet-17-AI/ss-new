@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Calendar, User, FileText, AlertTriangle, CheckCircle, Tag } from 'lucide-react';
+import { X, Calendar, User, FileText, AlertTriangle, CheckCircle, Tag, Code, Globe, Settings } from 'lucide-react';
 
 interface AutomationLogDetailModalProps {
   log: any;
@@ -17,18 +17,37 @@ export const AutomationLogDetailModal: React.FC<AutomationLogDetailModalProps> =
   };
 
   const isFailed = log.status === 'failed';
+  const isWebhookApi = 'log_type' in log;
 
   // Format JSON payload safely
-  const renderPayload = (payload: any) => {
+  const renderJSON = (data: any) => {
     try {
-      if (typeof payload === 'string') {
-        // Try parsing stringified JSON
-        const parsed = JSON.parse(payload);
+      if (!data) return 'No data';
+      if (typeof data === 'string') {
+        const parsed = JSON.parse(data);
         return JSON.stringify(parsed, null, 2);
       }
-      return JSON.stringify(payload, null, 2);
+      return JSON.stringify(data, null, 2);
     } catch (e) {
-      return String(payload || 'No data provided');
+      return String(data || 'No data');
+    }
+  };
+
+  const getLogTypeBadgeLabel = (type: string) => {
+    switch (type) {
+      case 'webhook_incoming': return 'Incoming Webhook';
+      case 'webhook_outgoing': return 'Outgoing Webhook';
+      case 'api_outgoing': return 'Outgoing API';
+      default: return type || 'System';
+    }
+  };
+
+  const getLogTypeBadgeClass = (type: string) => {
+    switch (type) {
+      case 'webhook_incoming': return 'bg-blue-50 text-blue-700 border-blue-100';
+      case 'webhook_outgoing': return 'bg-cyan-50 text-cyan-700 border-cyan-100';
+      case 'api_outgoing': return 'bg-purple-50 text-purple-700 border-purple-100';
+      default: return 'bg-gray-50 text-gray-700 border-gray-100';
     }
   };
 
@@ -44,7 +63,7 @@ export const AutomationLogDetailModal: React.FC<AutomationLogDetailModalProps> =
               <CheckCircle className="text-emerald-600" size={24} />
             )}
             <h2 className={`text-xl font-bold ${isFailed ? 'text-red-900' : 'text-emerald-900'}`}>
-              Automation Details
+              {isWebhookApi ? 'Integration Log Details' : 'Automation Details'}
             </h2>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -53,8 +72,8 @@ export const AutomationLogDetailModal: React.FC<AutomationLogDetailModalProps> =
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 bg-gray-50/50">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        <div className="flex-1 overflow-y-auto p-6 bg-gray-50/50 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
               <div className="flex items-center text-gray-500 mb-1">
                 <Calendar size={14} className="mr-2" />
@@ -66,33 +85,60 @@ export const AutomationLogDetailModal: React.FC<AutomationLogDetailModalProps> =
             <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
               <div className="flex items-center text-gray-500 mb-1">
                 <Tag size={14} className="mr-2" />
-                <span className="text-xs font-semibold uppercase tracking-wider">Automation Type</span>
+                <span className="text-xs font-semibold uppercase tracking-wider">Log Type</span>
               </div>
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-50 text-purple-700 border border-purple-100 mt-1">
-                {log.automation_type || 'Unknown'}
+              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border mt-1 ${isWebhookApi ? getLogTypeBadgeClass(log.log_type) : 'bg-purple-50 text-purple-700 border-purple-100'}`}>
+                {isWebhookApi ? getLogTypeBadgeLabel(log.log_type) : (log.automation_type || 'Unknown')}
               </span>
             </div>
 
-            <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-              <div className="flex items-center text-gray-500 mb-1">
-                <User size={14} className="mr-2" />
-                <span className="text-xs font-semibold uppercase tracking-wider">Recipient / Target</span>
-              </div>
-              <p className="text-sm font-medium text-gray-900">{log.recipient || 'N/A'}</p>
-            </div>
+            {isWebhookApi ? (
+              <>
+                <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                  <div className="flex items-center text-gray-500 mb-1">
+                    <Settings size={14} className="mr-2" />
+                    <span className="text-xs font-semibold uppercase tracking-wider">Integration Name</span>
+                  </div>
+                  <p className="text-sm font-medium text-gray-900">{log.name || 'N/A'}</p>
+                </div>
 
-            <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-              <div className="flex items-center text-gray-500 mb-1">
-                <FileText size={14} className="mr-2" />
-                <span className="text-xs font-semibold uppercase tracking-wider">Booking ID</span>
-              </div>
-              <p className="text-sm font-medium text-gray-900">{log.booking_id || 'N/A'}</p>
-            </div>
+                <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                  <div className="flex items-center text-gray-500 mb-1">
+                    <Globe size={14} className="mr-2" />
+                    <span className="text-xs font-semibold uppercase tracking-wider">HTTP Method / Endpoint</span>
+                  </div>
+                  <p className="text-sm font-medium text-gray-900">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-gray-100 text-gray-700 border mr-2 uppercase">
+                      {log.method || 'POST'}
+                    </span>
+                    <span className="font-mono text-xs">{log.endpoint || '/'}</span>
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                  <div className="flex items-center text-gray-500 mb-1">
+                    <User size={14} className="mr-2" />
+                    <span className="text-xs font-semibold uppercase tracking-wider">Recipient / Target</span>
+                  </div>
+                  <p className="text-sm font-medium text-gray-900">{log.recipient || 'N/A'}</p>
+                </div>
+
+                <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                  <div className="flex items-center text-gray-500 mb-1">
+                    <FileText size={14} className="mr-2" />
+                    <span className="text-xs font-semibold uppercase tracking-wider">Booking ID</span>
+                  </div>
+                  <p className="text-sm font-medium text-gray-900">{log.booking_id || 'N/A'}</p>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Error Message */}
           {isFailed && log.error_message && (
-            <div className="mb-6 bg-red-50 border border-red-200 rounded-xl overflow-hidden">
+            <div className="bg-red-50 border border-red-200 rounded-xl overflow-hidden shadow-sm">
               <div className="px-4 py-2 border-b border-red-200 bg-red-100/50 flex items-center">
                 <AlertTriangle size={16} className="text-red-700 mr-2" />
                 <h3 className="text-sm font-bold text-red-900">Failure Reason</h3>
@@ -103,17 +149,28 @@ export const AutomationLogDetailModal: React.FC<AutomationLogDetailModalProps> =
             </div>
           )}
 
-          {/* Response/Payload Data */}
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-            <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-gray-700">Raw Response / Data</h3>
-              <span className="text-xs text-gray-500">JSON</span>
-            </div>
-            <div className="p-0">
-              <pre className="text-xs text-gray-800 font-mono p-4 overflow-x-auto bg-[#f8fafc] m-0 max-h-[300px] overflow-y-auto">
-                {renderPayload(log.response_data)}
+          {/* Request Payload Data (Webhook/API only) */}
+          {isWebhookApi && log.request_payload && (
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+              <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50 flex items-center gap-1.5">
+                <Code size={16} className="text-gray-500" />
+                <h3 className="text-sm font-bold text-gray-700">Request Payload</h3>
+              </div>
+              <pre className="text-xs text-gray-800 font-mono p-4 overflow-x-auto bg-[#f8fafc] m-0 max-h-[200px] overflow-y-auto">
+                {renderJSON(log.request_payload)}
               </pre>
             </div>
+          )}
+
+          {/* Response/Payload Data */}
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+            <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50 flex items-center gap-1.5">
+              <Code size={16} className="text-gray-500" />
+              <h3 className="text-sm font-bold text-gray-700">Response / Body Data</h3>
+            </div>
+            <pre className="text-xs text-gray-800 font-mono p-4 overflow-x-auto bg-[#f8fafc] m-0 max-h-[250px] overflow-y-auto">
+              {renderJSON(log.response_data)}
+            </pre>
           </div>
         </div>
 

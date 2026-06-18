@@ -1,11 +1,14 @@
 import { Resend } from 'resend';
 import dotenv from 'dotenv';
 import { logAutomationSuccess, logAutomationFailure } from './logger';
+import { logWebhookApi } from '../lib/webhookApiLogger.js';
 
 dotenv.config({ path: '.env.local' });
 
 const resendApiKey = process.env.RESEND_API_KEY || 'missing_api_key';
 const resend = new Resend(resendApiKey);
+
+const RESEND_ENDPOINT = 'https://api.resend.com/emails';
 
 // 1. SOS Alert Admin
 export async function sendSOSAdminEmail(booking_id: string, adminEmail: string, details: any) {
@@ -21,13 +24,42 @@ export async function sendSOSAdminEmail(booking_id: string, adminEmail: string, 
     if (error) {
       console.error('❌ Error sending SOS Admin email:', error);
       await logAutomationFailure(booking_id, 'email_sos_alert_admin', adminEmail, JSON.stringify(error));
+      await logWebhookApi({
+        log_type: 'api_outgoing',
+        name: 'Resend Email API (SOS Alert Admin)',
+        endpoint: RESEND_ENDPOINT,
+        method: 'POST',
+        status: 'failed',
+        request_payload: mailOptions,
+        error_message: JSON.stringify(error),
+        response_data: error
+      });
     } else {
       console.log('✅ SOS Admin email sent successfully', data);
       await logAutomationSuccess(booking_id, 'email_sos_alert_admin', adminEmail, data);
+      await logWebhookApi({
+        log_type: 'api_outgoing',
+        name: 'Resend Email API (SOS Alert Admin)',
+        endpoint: RESEND_ENDPOINT,
+        method: 'POST',
+        status: 'success',
+        request_payload: mailOptions,
+        response_data: data
+      });
     }
   } catch (error: any) {
     console.error('❌ Exception sending SOS Admin email:', error);
-    await logAutomationFailure(booking_id, 'email_sos_alert_admin', adminEmail, error.message || String(error));
+    const errMsg = error.message || String(error);
+    await logAutomationFailure(booking_id, 'email_sos_alert_admin', adminEmail, errMsg);
+    await logWebhookApi({
+      log_type: 'api_outgoing',
+      name: 'Resend Email API (SOS Alert Admin)',
+      endpoint: RESEND_ENDPOINT,
+      method: 'POST',
+      status: 'failed',
+      request_payload: mailOptions,
+      error_message: errMsg
+    });
   }
 }
 
@@ -45,12 +77,41 @@ export async function sendAdminOTPEmail(adminEmail: string, action: string, otp:
     if (error) {
       console.error('❌ Error sending Admin OTP email:', error);
       await logAutomationFailure('admin-otp', 'email_admin_otp', adminEmail, JSON.stringify(error));
+      await logWebhookApi({
+        log_type: 'api_outgoing',
+        name: `Resend Email API (Admin OTP - ${action})`,
+        endpoint: RESEND_ENDPOINT,
+        method: 'POST',
+        status: 'failed',
+        request_payload: mailOptions,
+        error_message: JSON.stringify(error),
+        response_data: error
+      });
     } else {
       console.log('✅ Admin OTP email sent successfully', data);
       await logAutomationSuccess('admin-otp', 'email_admin_otp', adminEmail, data);
+      await logWebhookApi({
+        log_type: 'api_outgoing',
+        name: `Resend Email API (Admin OTP - ${action})`,
+        endpoint: RESEND_ENDPOINT,
+        method: 'POST',
+        status: 'success',
+        request_payload: mailOptions,
+        response_data: data
+      });
     }
   } catch (error: any) {
     console.error('❌ Exception sending Admin OTP email:', error);
-    await logAutomationFailure('admin-otp', 'email_admin_otp', adminEmail, error.message || String(error));
+    const errMsg = error.message || String(error);
+    await logAutomationFailure('admin-otp', 'email_admin_otp', adminEmail, errMsg);
+    await logWebhookApi({
+      log_type: 'api_outgoing',
+      name: `Resend Email API (Admin OTP - ${action})`,
+      endpoint: RESEND_ENDPOINT,
+      method: 'POST',
+      status: 'failed',
+      request_payload: mailOptions,
+      error_message: errMsg
+    });
   }
 }

@@ -1,28 +1,38 @@
 import fetch from 'node-fetch';
 import { logAutomationSuccess, logAutomationFailure } from './logger';
+import { logWebhookApi } from '../lib/webhookApiLogger.js';
 
 const AISENSY_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4ZGE1MjM4Njg5NTEwMGQ1MmYwMTBiNCIsIm5hbWUiOiJTYWZldHkgYW5kIFlvdSBXZWxsYmVpbmcgQ2VudHJlIExMUCIsImFwcE5hbWUiOiJBaVNlbnN5IiwiY2xpZW50SWQiOiI2OGRhNTIzODY4OTUxMDBkNTJmMDEwYWYiLCJhY3RpdmVQbGFuIjoiRlJFRV9GT1JFVkVSIiwiaWF0IjoxNzU5MTM4MzYwfQ.PvyEtnljNQ9nTOaxciZvsGSm7kXi6F0NpHtMk3DYaAU";
 const AISENSY_URL = "https://backend.aisensy.com/campaign/t1/api/v2";
 
 export async function sendAiSensyMessage(booking_id: string, campaignName: string, destination: string, userName: string, templateParams: string[]) {
+    const payload = {
+        apiKey: AISENSY_API_KEY,
+        campaignName,
+        destination: destination.replace(/[^0-9+]/g, ''),
+        userName,
+        source: "DaySchedule",
+        templateParams: templateParams.map(p => String(p || ''))
+    };
+
     try {
-        const cleanDestination = destination.replace(/[^0-9+]/g, '');
+        const cleanDestination = payload.destination;
 
         // Validation: Ensure phone number is not empty
         if (!cleanDestination || cleanDestination.length < 10) {
             const errMsg = `Invalid phone number: ${destination} (cleaned: ${cleanDestination})`;
             await logAutomationFailure(booking_id, `whatsapp_${campaignName}`, destination, errMsg);
+            await logWebhookApi({
+                log_type: 'api_outgoing',
+                name: `AiSensy WhatsApp API (${campaignName})`,
+                endpoint: AISENSY_URL,
+                method: 'POST',
+                status: 'failed',
+                request_payload: payload,
+                error_message: errMsg
+            });
             throw new Error(errMsg);
         }
-
-        const payload = {
-            apiKey: AISENSY_API_KEY,
-            campaignName,
-            destination: cleanDestination,
-            userName,
-            source: "DaySchedule",
-            templateParams: templateParams.map(p => String(p || ''))
-        };
 
         const response = await fetch(AISENSY_URL, {
             method: 'POST',
@@ -38,10 +48,29 @@ export async function sendAiSensyMessage(booking_id: string, campaignName: strin
 
         if (response.ok) {
             await logAutomationSuccess(booking_id, `whatsapp_${campaignName}`, cleanDestination, jsonRes);
+            await logWebhookApi({
+                log_type: 'api_outgoing',
+                name: `AiSensy WhatsApp API (${campaignName})`,
+                endpoint: AISENSY_URL,
+                method: 'POST',
+                status: 'success',
+                request_payload: payload,
+                response_data: jsonRes
+            });
             return text;
         } else {
             const errMsg = `HTTP ${response.status}: ${text}`;
             await logAutomationFailure(booking_id, `whatsapp_${campaignName}`, cleanDestination, errMsg);
+            await logWebhookApi({
+                log_type: 'api_outgoing',
+                name: `AiSensy WhatsApp API (${campaignName})`,
+                endpoint: AISENSY_URL,
+                method: 'POST',
+                status: 'failed',
+                request_payload: payload,
+                error_message: errMsg,
+                response_data: jsonRes
+            });
             throw new Error(errMsg);
         }
     } catch (error: any) {
@@ -51,6 +80,15 @@ export async function sendAiSensyMessage(booking_id: string, campaignName: strin
         // Log failure if not already logged
         if (!error.message?.includes('Invalid phone')) {
             await logAutomationFailure(booking_id, `whatsapp_${campaignName}`, destination, errMsg);
+            await logWebhookApi({
+                log_type: 'api_outgoing',
+                name: `AiSensy WhatsApp API (${campaignName})`,
+                endpoint: AISENSY_URL,
+                method: 'POST',
+                status: 'failed',
+                request_payload: payload,
+                error_message: errMsg
+            });
         }
 
         // Re-throw to let caller handle

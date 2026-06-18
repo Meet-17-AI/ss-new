@@ -25,6 +25,7 @@ import { convertToIST } from './lib/timezone';
 import { startDashboardApiBookingSync } from './dashboardApiBookingSync';
 import { uploadFile } from './lib/minio';
 import { sendOTPEmail, sendPasswordResetOTP } from './lib/email';
+import { logWebhookApi } from './lib/webhookApiLogger.js';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -2884,8 +2885,11 @@ app.get('/api/public/booking/:booking_id', async (req, res) => {
         booking_host_name,
         booking_status,
         booking_cancel_reason,
-        booking_joining_link
-      FROM bookings 
+        booking_joining_link,
+        booking_mode,
+        therapist_id,
+        invitee_payment_amount
+      FROM bookings
       WHERE booking_id = $1
     `, [booking_id]);
 
@@ -2893,7 +2897,49 @@ app.get('/api/public/booking/:booking_id', async (req, res) => {
       return res.status(404).json({ error: 'Booking not found' });
     }
 
-    res.json(result.rows[0]);
+    const booking = result.rows[0];
+
+    // Look up matching service in therapy_services table to fetch description, duration, charges, etc.
+    let service = null;
+    if (booking.booking_resource_name) {
+      let serviceResult;
+      if (booking.therapist_id) {
+        serviceResult = await pool.query(`
+          SELECT title, duration, type, description, detailed_description, charges, slug
+          FROM therapy_services
+          WHERE (TRIM(title) ILIKE TRIM($1) OR TRIM(slug) ILIKE TRIM($1))
+            AND therapist_id = $2
+            AND is_active = true
+          LIMIT 1
+        `, [booking.booking_resource_name, booking.therapist_id]);
+      }
+
+      if (!serviceResult || serviceResult.rows.length === 0) {
+        serviceResult = await pool.query(`
+          SELECT title, duration, type, description, detailed_description, charges, slug
+          FROM therapy_services
+          WHERE (TRIM(title) ILIKE TRIM($1) OR TRIM(slug) ILIKE TRIM($1))
+            AND is_active = true
+          LIMIT 1
+        `, [booking.booking_resource_name]);
+      }
+
+      if (serviceResult.rows.length > 0) {
+        const s = serviceResult.rows[0];
+        service = {
+          title: s.title,
+          duration: s.duration,
+          type: s.type,
+          description: s.description,
+          detailedDescription: s.detailed_description || s.description || '',
+          charges: s.charges,
+          slug: s.slug
+        };
+      }
+    }
+
+    booking.service = service;
+    res.json(booking);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -6005,16 +6051,38 @@ app.post('/api/paperform-webhook/free-consultation', async (req, res) => {
     );
 
     if (docForm.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Booking not found in client_doc_form' });
+      const errMsg = 'Booking not found in client_doc_form';
+      await logWebhookApi({
+        log_type: 'webhook_incoming',
+        name: 'Paperform Free Consultation',
+        endpoint: '/api/paperform-webhook/free-consultation',
+        method: 'POST',
+        status: 'failed',
+        request_payload: req.body,
+        error_message: errMsg,
+        response_data: { success: false, error: errMsg }
+      });
+      return res.status(404).json({ success: false, error: errMsg });
     }
 
     const sessionType = docForm.rows[0].session_type;
 
     // Verify it's a free consultation
     if (sessionType !== 'Free Consultation - SafeStories') {
+      const errMsg = `Invalid session type: ${sessionType}. Expected: Free Consultation - SafeStories`;
+      await logWebhookApi({
+        log_type: 'webhook_incoming',
+        name: 'Paperform Free Consultation',
+        endpoint: '/api/paperform-webhook/free-consultation',
+        method: 'POST',
+        status: 'failed',
+        request_payload: req.body,
+        error_message: errMsg,
+        response_data: { success: false, error: errMsg }
+      });
       return res.status(400).json({
         success: false,
-        error: `Invalid session type: ${sessionType}. Expected: Free Consultation - SafeStories`
+        error: errMsg
       });
     }
 
@@ -6071,10 +6139,32 @@ app.post('/api/paperform-webhook/free-consultation', async (req, res) => {
 
     console.log('✅ client_doc_form updated to completed');
 
-    res.json({ success: true, message: 'Free consultation notes stored successfully' });
-  } catch (error) {
+    const resData = { success: true, message: 'Free consultation notes stored successfully' };
+    await logWebhookApi({
+      log_type: 'webhook_incoming',
+      name: 'Paperform Free Consultation',
+      endpoint: '/api/paperform-webhook/free-consultation',
+      method: 'POST',
+      status: 'success',
+      request_payload: req.body,
+      response_data: resData
+    });
+
+    res.json(resData);
+  } catch (error: any) {
     console.error('❌ Error storing free consultation notes:', error);
-    res.status(500).json({ success: false, error: 'Failed to store free consultation notes' });
+    const resData = { success: false, error: 'Failed to store free consultation notes' };
+    await logWebhookApi({
+      log_type: 'webhook_incoming',
+      name: 'Paperform Free Consultation',
+      endpoint: '/api/paperform-webhook/free-consultation',
+      method: 'POST',
+      status: 'failed',
+      request_payload: req.body,
+      error_message: error.message || String(error),
+      response_data: resData
+    });
+    res.status(500).json(resData);
   }
 });
 
@@ -6092,16 +6182,38 @@ app.post('/api/paperform-webhook/therapy-documentation', async (req, res) => {
     );
 
     if (docForm.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Booking not found in client_doc_form' });
+      const errMsg = 'Booking not found in client_doc_form';
+      await logWebhookApi({
+        log_type: 'webhook_incoming',
+        name: 'Paperform Therapy Documentation',
+        endpoint: '/api/paperform-webhook/therapy-documentation',
+        method: 'POST',
+        status: 'failed',
+        request_payload: req.body,
+        error_message: errMsg,
+        response_data: { success: false, error: errMsg }
+      });
+      return res.status(404).json({ success: false, error: errMsg });
     }
 
     const sessionType = docForm.rows[0].session_type;
 
     // Verify it's NOT a free consultation
     if (sessionType === 'Free Consultation - SafeStories') {
+      const errMsg = 'This is a free consultation. Use /api/paperform-webhook/free-consultation endpoint';
+      await logWebhookApi({
+        log_type: 'webhook_incoming',
+        name: 'Paperform Therapy Documentation',
+        endpoint: '/api/paperform-webhook/therapy-documentation',
+        method: 'POST',
+        status: 'failed',
+        request_payload: req.body,
+        error_message: errMsg,
+        response_data: { success: false, error: errMsg }
+      });
       return res.status(400).json({
         success: false,
-        error: 'This is a free consultation. Use /api/paperform-webhook/free-consultation endpoint'
+        error: errMsg
       });
     }
 
@@ -6265,10 +6377,32 @@ app.post('/api/paperform-webhook/therapy-documentation', async (req, res) => {
 
     console.log('✅ client_doc_form updated to completed');
 
-    res.json({ success: true, message: 'Therapy documentation stored successfully' });
-  } catch (error) {
+    const resData = { success: true, message: 'Therapy documentation stored successfully' };
+    await logWebhookApi({
+      log_type: 'webhook_incoming',
+      name: 'Paperform Therapy Documentation',
+      endpoint: '/api/paperform-webhook/therapy-documentation',
+      method: 'POST',
+      status: 'success',
+      request_payload: req.body,
+      response_data: resData
+    });
+
+    res.json(resData);
+  } catch (error: any) {
     console.error('❌ Error storing therapy documentation:', error);
-    res.status(500).json({ success: false, error: 'Failed to store therapy documentation' });
+    const resData = { success: false, error: 'Failed to store therapy documentation' };
+    await logWebhookApi({
+      log_type: 'webhook_incoming',
+      name: 'Paperform Therapy Documentation',
+      endpoint: '/api/paperform-webhook/therapy-documentation',
+      method: 'POST',
+      status: 'failed',
+      request_payload: req.body,
+      error_message: error.message || String(error),
+      response_data: resData
+    });
+    res.status(500).json(resData);
   }
 });
 

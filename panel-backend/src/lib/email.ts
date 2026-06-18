@@ -1,11 +1,57 @@
 import { Resend } from 'resend';
 import dotenv from 'dotenv';
+import { logWebhookApi } from './webhookApiLogger.js';
 
 // Load environment variables
 dotenv.config({ path: '.env.local' });
 
 const resendApiKey = process.env.RESEND_API_KEY || 'missing_api_key';
 const resend = new Resend(resendApiKey);
+
+const RESEND_ENDPOINT = 'https://api.resend.com/emails';
+
+async function sendEmailWithLogging(mailOptions: any, emailType: string): Promise<any> {
+  try {
+    const { data, error } = await resend.emails.send(mailOptions);
+    if (error) {
+      console.error(`❌ Resend API Error [${emailType}]:`, error);
+      await logWebhookApi({
+        log_type: 'api_outgoing',
+        name: `Resend Email API (${emailType})`,
+        endpoint: RESEND_ENDPOINT,
+        method: 'POST',
+        status: 'failed',
+        request_payload: mailOptions,
+        error_message: JSON.stringify(error),
+        response_data: error
+      });
+      throw error;
+    }
+    console.log(`✅ Email sent successfully [${emailType}]:`, data?.id);
+    await logWebhookApi({
+      log_type: 'api_outgoing',
+      name: `Resend Email API (${emailType})`,
+      endpoint: RESEND_ENDPOINT,
+      method: 'POST',
+      status: 'success',
+      request_payload: mailOptions,
+      response_data: data
+    });
+    return { data, error };
+  } catch (err: any) {
+    console.error(`❌ Exception sending email [${emailType}]:`, err);
+    await logWebhookApi({
+      log_type: 'api_outgoing',
+      name: `Resend Email API (${emailType})`,
+      endpoint: RESEND_ENDPOINT,
+      method: 'POST',
+      status: 'failed',
+      request_payload: mailOptions,
+      error_message: err.message || String(err)
+    });
+    throw err;
+  }
+}
 
 /**
  * Send OTP email to therapist
@@ -168,12 +214,7 @@ Best regards,
 The SafeStories Team`,
     };
 
-    const { data, error } = await resend.emails.send(mailOptions);
-    if (error) {
-      console.error('❌ Resend API Error:', error);
-      throw error;
-    }
-    console.log('✅ Email sent successfully:', data?.id);
+    await sendEmailWithLogging(mailOptions, 'Therapist OTP Setup');
   } catch (error) {
     console.error('❌ Error sending email:', error);
     throw error;
@@ -327,12 +368,7 @@ Best regards,
 The SafeStories Team`,
     };
 
-    const { data, error } = await resend.emails.send(mailOptions);
-    if (error) {
-      console.error('❌ Resend API Error:', error);
-      throw error;
-    }
-    console.log('✅ Password reset email sent successfully:', data?.id);
+    await sendEmailWithLogging(mailOptions, 'Password Reset OTP');
   } catch (error) {
     console.error('❌ Error sending password reset email:', error);
     throw error;
@@ -381,12 +417,7 @@ export async function sendAdminBookingConfirmationEmail(
       html: htmlContent,
     };
 
-    const { data, error } = await resend.emails.send(mailOptions);
-    if (error) {
-      console.error('❌ Resend API Error:', error);
-      throw error;
-    }
-    console.log('✅ Admin booking confirmation email sent successfully:', data?.id);
+    await sendEmailWithLogging(mailOptions, `Admin Booking Confirmation (${details.sessionName})`);
   } catch (error) {
     console.error('❌ Error sending admin booking confirmation email:', error);
     throw error;
@@ -524,12 +555,7 @@ export async function sendClientBookingConfirmationEmail(
       html: htmlContent,
     };
 
-    const { data, error } = await resend.emails.send(mailOptions);
-    if (error) {
-      console.error('❌ Resend API Error:', error);
-      throw error;
-    }
-    console.log('✅ Client booking confirmation email sent successfully:', data?.id);
+    await sendEmailWithLogging(mailOptions, `Client Booking Confirmation (${details.sessionName})`);
   } catch (error) {
     console.error('❌ Error sending client booking confirmation email:', error);
     throw error;
@@ -609,12 +635,7 @@ export async function sendClientBookingCancellationEmail(
       html: htmlContent,
     };
 
-    const { data, error } = await resend.emails.send(mailOptions);
-    if (error) {
-      console.error('❌ Resend API Error:', error);
-      throw error;
-    }
-    console.log('✅ Client booking cancellation email sent successfully:', data?.id);
+    await sendEmailWithLogging(mailOptions, `Client Booking Cancellation (${details.sessionName})`);
   } catch (error) {
     console.error('❌ Error sending client booking cancellation email:', error);
     throw error;

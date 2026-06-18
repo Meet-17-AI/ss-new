@@ -17,6 +17,7 @@ import { uploadFile } from './lib/minio';
 import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendClientBookingCancellationEmail } from './lib/email';
 import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage } from './automations/index';
 import { generateAdminOTP, verifyAdminOTP } from './otp';
+import { logWebhookApi } from './lib/webhookApiLogger.js';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -3630,7 +3631,9 @@ app.get('/api/public/booking/:booking_id', async (req, res) => {
         booking_status,
         booking_cancel_reason,
         booking_joining_link,
-        booking_mode
+        booking_mode,
+        therapist_id,
+        invitee_payment_amount
       FROM bookings
       WHERE booking_id = $1
     `, [booking_id]);
@@ -3639,11 +3642,54 @@ app.get('/api/public/booking/:booking_id', async (req, res) => {
       return res.status(404).json({ error: 'Booking not found' });
     }
 
-    res.json(result.rows[0]);
+    const booking = result.rows[0];
+
+    // Look up matching service in therapy_services table to fetch description, duration, charges, etc.
+    let service = null;
+    if (booking.booking_resource_name) {
+      let serviceResult;
+      if (booking.therapist_id) {
+        serviceResult = await pool.query(`
+          SELECT title, duration, type, description, detailed_description, charges, slug
+          FROM therapy_services
+          WHERE (TRIM(title) ILIKE TRIM($1) OR TRIM(slug) ILIKE TRIM($1))
+            AND therapist_id = $2
+            AND is_active = true
+          LIMIT 1
+        `, [booking.booking_resource_name, booking.therapist_id]);
+      }
+
+      if (!serviceResult || serviceResult.rows.length === 0) {
+        serviceResult = await pool.query(`
+          SELECT title, duration, type, description, detailed_description, charges, slug
+          FROM therapy_services
+          WHERE (TRIM(title) ILIKE TRIM($1) OR TRIM(slug) ILIKE TRIM($1))
+            AND is_active = true
+          LIMIT 1
+        `, [booking.booking_resource_name]);
+      }
+
+      if (serviceResult.rows.length > 0) {
+        const s = serviceResult.rows[0];
+        service = {
+          title: s.title,
+          duration: s.duration,
+          type: s.type,
+          description: s.description,
+          detailedDescription: s.detailed_description || s.description || '',
+          charges: s.charges,
+          slug: s.slug
+        };
+      }
+    }
+
+    booking.service = service;
+    res.json(booking);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
+
 
 
 
@@ -8360,16 +8406,38 @@ app.post('/api/paperform-webhook/free-consultation', async (req, res) => {
     );
 
     if (docForm.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Booking not found in client_doc_form' });
+      const errMsg = 'Booking not found in client_doc_form';
+      await logWebhookApi({
+        log_type: 'webhook_incoming',
+        name: 'Paperform Free Consultation',
+        endpoint: '/api/paperform-webhook/free-consultation',
+        method: 'POST',
+        status: 'failed',
+        request_payload: req.body,
+        error_message: errMsg,
+        response_data: { success: false, error: errMsg }
+      });
+      return res.status(404).json({ success: false, error: errMsg });
     }
 
     const sessionType = docForm.rows[0].session_type;
 
     // Verify it's a free consultation
     if (sessionType !== 'Free Consultation - SafeStories') {
+      const errMsg = `Invalid session type: ${sessionType}. Expected: Free Consultation - SafeStories`;
+      await logWebhookApi({
+        log_type: 'webhook_incoming',
+        name: 'Paperform Free Consultation',
+        endpoint: '/api/paperform-webhook/free-consultation',
+        method: 'POST',
+        status: 'failed',
+        request_payload: req.body,
+        error_message: errMsg,
+        response_data: { success: false, error: errMsg }
+      });
       return res.status(400).json({
         success: false,
-        error: `Invalid session type: ${sessionType}. Expected: Free Consultation - SafeStories`
+        error: errMsg
       });
     }
 
@@ -8426,10 +8494,32 @@ app.post('/api/paperform-webhook/free-consultation', async (req, res) => {
 
     console.log('✅ client_doc_form updated to completed');
 
-    res.json({ success: true, message: 'Free consultation notes stored successfully' });
-  } catch (error) {
+    const resData = { success: true, message: 'Free consultation notes stored successfully' };
+    await logWebhookApi({
+      log_type: 'webhook_incoming',
+      name: 'Paperform Free Consultation',
+      endpoint: '/api/paperform-webhook/free-consultation',
+      method: 'POST',
+      status: 'success',
+      request_payload: req.body,
+      response_data: resData
+    });
+
+    res.json(resData);
+  } catch (error: any) {
     console.error('❌ Error storing free consultation notes:', error);
-    res.status(500).json({ success: false, error: 'Failed to store free consultation notes' });
+    const resData = { success: false, error: 'Failed to store free consultation notes' };
+    await logWebhookApi({
+      log_type: 'webhook_incoming',
+      name: 'Paperform Free Consultation',
+      endpoint: '/api/paperform-webhook/free-consultation',
+      method: 'POST',
+      status: 'failed',
+      request_payload: req.body,
+      error_message: error.message || String(error),
+      response_data: resData
+    });
+    res.status(500).json(resData);
   }
 });
 
@@ -8447,16 +8537,38 @@ app.post('/api/paperform-webhook/therapy-documentation', async (req, res) => {
     );
 
     if (docForm.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Booking not found in client_doc_form' });
+      const errMsg = 'Booking not found in client_doc_form';
+      await logWebhookApi({
+        log_type: 'webhook_incoming',
+        name: 'Paperform Therapy Documentation',
+        endpoint: '/api/paperform-webhook/therapy-documentation',
+        method: 'POST',
+        status: 'failed',
+        request_payload: req.body,
+        error_message: errMsg,
+        response_data: { success: false, error: errMsg }
+      });
+      return res.status(404).json({ success: false, error: errMsg });
     }
 
     const sessionType = docForm.rows[0].session_type;
 
     // Verify it's NOT a free consultation
     if (sessionType === 'Free Consultation - SafeStories') {
+      const errMsg = 'This is a free consultation. Use /api/paperform-webhook/free-consultation endpoint';
+      await logWebhookApi({
+        log_type: 'webhook_incoming',
+        name: 'Paperform Therapy Documentation',
+        endpoint: '/api/paperform-webhook/therapy-documentation',
+        method: 'POST',
+        status: 'failed',
+        request_payload: req.body,
+        error_message: errMsg,
+        response_data: { success: false, error: errMsg }
+      });
       return res.status(400).json({
         success: false,
-        error: 'This is a free consultation. Use /api/paperform-webhook/free-consultation endpoint'
+        error: errMsg
       });
     }
 
@@ -8620,10 +8732,32 @@ app.post('/api/paperform-webhook/therapy-documentation', async (req, res) => {
 
     console.log('✅ client_doc_form updated to completed');
 
-    res.json({ success: true, message: 'Therapy documentation stored successfully' });
-  } catch (error) {
+    const resData = { success: true, message: 'Therapy documentation stored successfully' };
+    await logWebhookApi({
+      log_type: 'webhook_incoming',
+      name: 'Paperform Therapy Documentation',
+      endpoint: '/api/paperform-webhook/therapy-documentation',
+      method: 'POST',
+      status: 'success',
+      request_payload: req.body,
+      response_data: resData
+    });
+
+    res.json(resData);
+  } catch (error: any) {
     console.error('❌ Error storing therapy documentation:', error);
-    res.status(500).json({ success: false, error: 'Failed to store therapy documentation' });
+    const resData = { success: false, error: 'Failed to store therapy documentation' };
+    await logWebhookApi({
+      log_type: 'webhook_incoming',
+      name: 'Paperform Therapy Documentation',
+      endpoint: '/api/paperform-webhook/therapy-documentation',
+      method: 'POST',
+      status: 'failed',
+      request_payload: req.body,
+      error_message: error.message || String(error),
+      response_data: resData
+    });
+    res.status(500).json(resData);
   }
 });
 
@@ -8917,14 +9051,53 @@ app.post('/api/confirm-payment', async (req, res) => {
     };
 
     try {
-      await fetch(webhookUrl, {
+      const response = await fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(webhookPayload)
       });
-      console.log('✓ Triggered N8N Webhook for confirmed payment:', bookingId);
-    } catch (whErr) {
-      console.error('❌ Failed to trigger N8N webhook after payment:', whErr);
+      
+      const responseText = await response.text();
+      let responseJson;
+      try { responseJson = JSON.parse(responseText); } catch(e) { responseJson = responseText; }
+
+      if (response.ok) {
+        console.log('✓ Triggered N8N Webhook for confirmed payment:', bookingId);
+        await logWebhookApi({
+          log_type: 'webhook_outgoing',
+          name: 'N8N Payment Confirmation Webhook',
+          endpoint: webhookUrl,
+          method: 'POST',
+          status: 'success',
+          request_payload: webhookPayload,
+          response_data: responseJson || { success: true }
+        });
+      } else {
+        const errMsg = `HTTP ${response.status}: ${responseText}`;
+        console.error('❌ N8N Webhook returned error status:', errMsg);
+        await logWebhookApi({
+          log_type: 'webhook_outgoing',
+          name: 'N8N Payment Confirmation Webhook',
+          endpoint: webhookUrl,
+          method: 'POST',
+          status: 'failed',
+          request_payload: webhookPayload,
+          error_message: errMsg,
+          response_data: responseJson
+        });
+      }
+    } catch (whErr: any) {
+      const errMsg = whErr.message || String(whErr);
+      console.error('❌ Failed to trigger N8N webhook after payment:', errMsg);
+      await logWebhookApi({
+        log_type: 'webhook_outgoing',
+        name: 'N8N Payment Confirmation Webhook',
+        endpoint: webhookUrl,
+        method: 'POST',
+        status: 'failed',
+        request_payload: webhookPayload,
+        error_message: errMsg
+      });
     }
 
     res.json({ success: true, message: 'Payment confirmed and booking scheduled!' });
@@ -9286,6 +9459,27 @@ async function runStartupMigrations() {
     await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_id TEXT`);
     await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_status TEXT`);
     await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS razorpay_order_id TEXT`);
+    
+    // Webhook/API logs table
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS webhook_api_logs (
+        id SERIAL PRIMARY KEY,
+        log_type VARCHAR(50) NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        endpoint VARCHAR(255) NOT NULL,
+        method VARCHAR(10) NOT NULL,
+        status VARCHAR(20) NOT NULL,
+        request_payload JSONB,
+        response_data JSONB,
+        error_message TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_webhook_api_logs_type_created
+      ON webhook_api_logs(log_type, created_at DESC)
+    `);
+    
     console.log('✅ Startup migrations complete');
   } catch (err) {
     console.error('⚠️ Startup migration warning (non-fatal):', err);
@@ -9362,6 +9556,108 @@ app.get('/api/automation-logs/:id', async (req, res) => {
   } catch (error) {
     console.error('Error fetching automation log details:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch automation log details' });
+  }
+});
+
+app.get('/api/webhook-api-logs/stats', async (req, res) => {
+  try {
+    const statsResult = await pool.query(`
+      SELECT 
+        COUNT(*) as total_ran,
+        COUNT(*) FILTER (WHERE log_type IN ('webhook_incoming', 'webhook_outgoing')) as total_webhooks,
+        COUNT(*) FILTER (WHERE log_type IN ('webhook_incoming', 'webhook_outgoing') AND status = 'success') as webhook_success,
+        COUNT(*) FILTER (WHERE log_type IN ('webhook_incoming', 'webhook_outgoing') AND status = 'failed') as webhook_failed,
+        COUNT(*) FILTER (WHERE log_type = 'api_outgoing') as total_apis,
+        COUNT(*) FILTER (WHERE log_type = 'api_outgoing' AND status = 'success') as api_success,
+        COUNT(*) FILTER (WHERE log_type = 'api_outgoing' AND status = 'failed') as api_failed
+      FROM webhook_api_logs
+    `);
+    
+    res.json({
+      success: true,
+      data: statsResult.rows[0]
+    });
+  } catch (error) {
+    console.error('Error fetching webhook/API stats:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch stats' });
+  }
+});
+
+app.get('/api/webhook-api-logs', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 10;
+    const { type, status } = req.query;
+    const offset = (page - 1) * limit;
+
+    let queryConditions = [];
+    const params: any[] = [];
+
+    if (type) {
+      if (type === 'webhook') {
+        queryConditions.push(`log_type IN ('webhook_incoming', 'webhook_outgoing')`);
+      } else if (type === 'api') {
+        queryConditions.push(`log_type = 'api_outgoing'`);
+      }
+    }
+
+    if (status) {
+      params.push(status);
+      queryConditions.push(`status = $${params.length}`);
+    }
+
+    const whereClause = queryConditions.length > 0 ? 'WHERE ' + queryConditions.join(' AND ') : '';
+
+    const countQuery = `SELECT COUNT(*) FROM webhook_api_logs ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const totalCount = parseInt(countResult.rows[0].count);
+    const totalPages = Math.ceil(totalCount / limit);
+
+    params.push(limit);
+    const limitParam = `$${params.length}`;
+    params.push(offset);
+    const offsetParam = `$${params.length}`;
+
+    const selectQuery = `
+      SELECT * FROM webhook_api_logs
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT ${limitParam} OFFSET ${offsetParam}
+    `;
+    const logsResult = await pool.query(selectQuery, params);
+
+    res.json({
+      success: true,
+      data: logsResult.rows,
+      pagination: {
+        page,
+        limit,
+        totalCount,
+        totalPages
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching webhook/API logs:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch webhook/API logs' });
+  }
+});
+
+app.get('/api/webhook-api-logs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logResult = await pool.query('SELECT * FROM webhook_api_logs WHERE id = $1', [id]);
+    
+    if (logResult.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Log not found' });
+    }
+    
+    res.json({
+      success: true,
+      data: logResult.rows[0]
+    });
+  } catch (error) {
+    console.error('Error fetching webhook/API log details:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch details' });
   }
 });
 
