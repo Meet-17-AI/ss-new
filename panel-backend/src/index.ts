@@ -6899,6 +6899,120 @@ app.get('/api/payment-settings/public', async (req, res) => {
   }
 });
 
+app.post('/api/public/client-history', async (req, res) => {
+  try {
+    const { email, phone } = req.body;
+    const cleanEmail = email ? email.trim().toLowerCase() : '';
+    const cleanPhone = phone ? phone.replace(/[^0-9]/g, '') : '';
+
+    if (!cleanEmail && !cleanPhone) {
+      return res.json({ success: true, exists: false });
+    }
+
+    // 1. Query bookings for the client (excluding canceled and payment_failed)
+    const bookingsQuery = `
+      SELECT invitee_name, invitee_email, invitee_phone, booking_resource_name, booking_host_name, therapist_id, booking_mode, emergency_contact_name, emergency_contact_relation, emergency_contact_number, invitee_created_at
+      FROM bookings
+      WHERE 
+        (($1 <> '' AND LOWER(invitee_email) = LOWER($1))
+        OR 
+        ($2 <> '' AND (
+          REGEXP_REPLACE(invitee_phone, '[^0-9]', '', 'g') = $2
+          OR (LENGTH($2) >= 7 AND REGEXP_REPLACE(invitee_phone, '[^0-9]', '', 'g') LIKE '%' || $2)
+          OR (LENGTH(REGEXP_REPLACE(invitee_phone, '[^0-9]', '', 'g')) >= 7 AND $2 LIKE '%' || REGEXP_REPLACE(invitee_phone, '[^0-9]', '', 'g'))
+        )))
+        AND booking_status NOT IN ('cancelled', 'canceled', 'payment_failed')
+      ORDER BY invitee_created_at DESC NULLS LAST
+    `;
+    const bookingsResult = await pool.query(bookingsQuery, [cleanEmail, cleanPhone]);
+    const bookings = bookingsResult.rows;
+
+    let exists = false;
+    let clientName = '';
+    let clientEmail = '';
+    let clientPhone = '';
+    let sessionMode = '';
+    let emergencyName = '';
+    let emergencyRelation = '';
+    let emergencyNumber = '';
+    let assignedTherapy = null;
+    let assignedTherapistName = null;
+    let assignedTherapistId = null;
+
+    if (bookings.length > 0) {
+      exists = true;
+      const latestBooking = bookings[0];
+      clientName = latestBooking.invitee_name || '';
+      clientEmail = latestBooking.invitee_email || '';
+      clientPhone = latestBooking.invitee_phone || '';
+      sessionMode = latestBooking.booking_mode || '';
+      emergencyName = latestBooking.emergency_contact_name || '';
+      emergencyRelation = latestBooking.emergency_contact_relation || '';
+      emergencyNumber = latestBooking.emergency_contact_number || '';
+
+      // Find the most recent non-Free Consultation booking
+      const therapyBooking = bookings.find(b => 
+        b.booking_resource_name && 
+        !b.booking_resource_name.toLowerCase().includes('free consultation') &&
+        b.booking_host_name && 
+        b.booking_host_name.toLowerCase() !== 'safestories' &&
+        b.therapist_id && 
+        b.therapist_id !== 'SafeStories'
+      );
+
+      if (therapyBooking) {
+        assignedTherapy = therapyBooking.booking_resource_name;
+        assignedTherapistName = therapyBooking.booking_host_name;
+        assignedTherapistId = therapyBooking.therapist_id;
+      }
+    } else {
+      // Check all_clients_table if no booking found
+      const clientQuery = `
+        SELECT client_name, email_id, phone_number, assigned_therapist, therapist_id
+        FROM all_clients_table
+        WHERE 
+          (($1 <> '' AND LOWER(email_id) = LOWER($1))
+          OR 
+          ($2 <> '' AND (
+            REGEXP_REPLACE(phone_number, '[^0-9]', '', 'g') = $2
+            OR (LENGTH($2) >= 7 AND REGEXP_REPLACE(phone_number, '[^0-9]', '', 'g') LIKE '%' || $2)
+            OR (LENGTH(REGEXP_REPLACE(phone_number, '[^0-9]', '', 'g')) >= 7 AND $2 LIKE '%' || REGEXP_REPLACE(phone_number, '[^0-9]', '', 'g'))
+          )))
+        LIMIT 1
+      `;
+      const clientResult = await pool.query(clientQuery, [cleanEmail, cleanPhone]);
+      if (clientResult.rows.length > 0) {
+        exists = true;
+        const client = clientResult.rows[0];
+        clientName = client.client_name || '';
+        clientEmail = client.email_id || '';
+        clientPhone = client.phone_number || '';
+        assignedTherapistName = client.assigned_therapist || null;
+        assignedTherapistId = client.therapist_id || null;
+        assignedTherapy = null;
+      }
+    }
+
+    return res.json({
+      success: true,
+      exists,
+      clientName,
+      clientEmail,
+      clientPhone,
+      sessionMode,
+      emergencyName,
+      emergencyRelation,
+      emergencyNumber,
+      assignedTherapy,
+      assignedTherapistName,
+      assignedTherapistId
+    });
+  } catch (error) {
+    console.error('Error fetching client history:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 // Create Direct Booking natively
 app.post('/api/create-booking', async (req, res) => {
   try {

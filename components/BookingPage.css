@@ -16,7 +16,9 @@
   background: white;
   width: 100%;
   max-width: 1160px;
-  min-height: 680px;
+  height: calc(100vh - 48px);
+  max-height: 750px;
+  min-height: 600px;
   border-radius: 16px;
   box-shadow: 0 4px 32px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.04);
   display: grid;
@@ -422,7 +424,7 @@
   background: white;
   border-left: 1px solid #f1f5f9;
   overflow-y: auto;
-  max-height: 90vh;
+  max-height: 100%;
 }
 
 .bp-reg-header {
@@ -728,6 +730,16 @@
 
 .bp-pay-btn:hover { background: #000; transform: translateY(-1px); }
 
+.bp-pay-btn:disabled {
+  background: #f1f5f9;
+  color: #94a3b8;
+  border: 1px solid #e2e8f0;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+  pointer-events: none;
+}
+
 .bp-cancel-btn {
   background: white;
   color: #64748b;
@@ -742,6 +754,8 @@
   .bp-container {
     grid-template-columns: 1fr;
     max-width: 100%;
+    height: auto;
+    max-height: none;
     border-radius: 0;
     border: none;
     box-shadow: none;
@@ -750,7 +764,7 @@
   .bp-container.registration { grid-template-columns: 1fr; }
   .bp-pane { padding: 24px 20px; }
   .bp-calendar { border-left: none; border-right: none; border-top: 1px solid #e8edf2; border-bottom: 1px solid #e8edf2; }
-  .bp-registration { border-left: none; border-top: 1px solid #e8edf2; }
+  .bp-registration { border-left: none; border-top: 1px solid #e8edf2; max-height: none; }
   .bp-option-grid { grid-template-columns: 1fr; }
   .bp-summary { border-bottom: 1px solid #e8edf2; }
   .bp-summary .bp-logo { align-items: center; }
@@ -966,4 +980,31 @@
   color: #dc2626;
   font-weight: 500;
 }
+
+/* ─── Conflict Warning Banner ─── */
+.bp-conflict-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin-top: 20px;
+  margin-bottom: -10px;
+}
+
+.bp-conflict-icon {
+  color: #d97706;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.bp-conflict-text {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #92400e;
+  line-height: 1.5;
+}
+
 

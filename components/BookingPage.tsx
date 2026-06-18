@@ -73,6 +73,12 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   const [pendingBookingId, setPendingBookingId] = useState<string | null>(null);
   const [paymentFailed, setPaymentFailed] = useState(false);
 
+  // Real-time lookup & care continuity validation states
+  const [lastCheckedEmail, setLastCheckedEmail] = useState('');
+  const [lastCheckedPhone, setLastCheckedPhone] = useState('');
+  const [bookingConflictMessage, setBookingConflictMessage] = useState<string | null>(null);
+  const [isBookingBlocked, setIsBookingBlocked] = useState(false);
+
   // Timezone support
   const [clientTimezone, setClientTimezone] = useState(() => {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -96,6 +102,135 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
       })
       .catch(err => console.error('Error fetching timezone from IP, using system default:', err));
   }, []);
+
+  useEffect(() => {
+    if (view !== 'registration') return;
+
+    const emailVal = formData.email.trim().toLowerCase();
+    const phoneVal = formData.whatsapp.replace(/[^0-9]/g, '');
+
+    const isEmailComplete = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal);
+    const isPhoneComplete = phoneVal.length >= 10;
+
+    const shouldCheckEmail = isEmailComplete && emailVal !== lastCheckedEmail;
+    const shouldCheckPhone = isPhoneComplete && phoneVal !== lastCheckedPhone;
+
+    if (!shouldCheckEmail && !shouldCheckPhone) {
+      if (!isEmailComplete && !isPhoneComplete) {
+        setIsBookingBlocked(false);
+        setBookingConflictMessage(null);
+      }
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setLastCheckedEmail(emailVal);
+      setLastCheckedPhone(phoneVal);
+
+      try {
+        const response = await fetch('/api/public/client-history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: emailVal, phone: phoneVal }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.exists) {
+            const updatedForm = { ...formData };
+            let formChanged = false;
+
+            if (data.clientName && !formData.name) {
+              updatedForm.name = data.clientName;
+              formChanged = true;
+            }
+
+            if (shouldCheckPhone && data.clientEmail && formData.email !== data.clientEmail) {
+              updatedForm.email = data.clientEmail;
+              setLastCheckedEmail(data.clientEmail.trim().toLowerCase());
+              formChanged = true;
+            }
+
+            if (shouldCheckEmail && data.clientPhone) {
+              const parsed = parsePhoneNumber(data.clientPhone);
+              if (formData.whatsapp !== parsed.localNumber) {
+                updatedForm.whatsapp = parsed.localNumber;
+                updatedForm.whatsappCountryCode = parsed.countryCode;
+                setLastCheckedPhone(parsed.localNumber.replace(/[^0-9]/g, ''));
+                formChanged = true;
+              }
+            }
+
+            if (data.sessionMode) {
+              const mappedLocation = (data.sessionMode.toLowerCase().includes('online') || data.sessionMode.toLowerCase().includes('meet'))
+                ? 'google_meet'
+                : 'in_person';
+              if (formData.location !== mappedLocation) {
+                updatedForm.location = mappedLocation;
+                formChanged = true;
+              }
+            }
+
+            if (data.emergencyName && !formData.emergencyName) {
+              updatedForm.emergencyName = data.emergencyName;
+              formChanged = true;
+            }
+            if (data.emergencyRelation && !formData.emergencyRelation) {
+              updatedForm.emergencyRelation = data.emergencyRelation;
+              formChanged = true;
+            }
+            if (data.emergencyNumber && !formData.emergencyNumber) {
+              const parsedEmergency = parsePhoneNumber(data.emergencyNumber);
+              updatedForm.emergencyNumber = parsedEmergency.localNumber;
+              updatedForm.emergencyCountryCode = parsedEmergency.countryCode;
+              formChanged = true;
+            }
+
+            if (formChanged) {
+              setFormData(updatedForm);
+            }
+
+            const currentTherapy = getSimplifiedTherapyName();
+            const currentTherapist = session.owner;
+
+            if (data.assignedTherapistName) {
+              const assignedTherapist = data.assignedTherapistName;
+              const assignedTherapy = data.assignedTherapy;
+
+              const therapistMismatch = currentTherapist.toLowerCase().trim() !== assignedTherapist.toLowerCase().trim();
+              const therapyMismatch = assignedTherapy && currentTherapy.toLowerCase().trim() !== assignedTherapy.toLowerCase().trim();
+
+              if (therapistMismatch || therapyMismatch) {
+                setIsBookingBlocked(true);
+                if (assignedTherapy) {
+                  setBookingConflictMessage(
+                    `We noticed you are currently receiving ${assignedTherapy} with ${assignedTherapist}. To ensure continuity of care, please proceed with booking your session with your assigned therapist.`
+                  );
+                } else {
+                  setBookingConflictMessage(
+                    `We noticed you are currently assigned to therapist ${assignedTherapist}. To ensure continuity of care, please proceed with booking your session with your assigned therapist.`
+                  );
+                }
+              } else {
+                setIsBookingBlocked(false);
+                setBookingConflictMessage(null);
+              }
+            } else {
+              setIsBookingBlocked(false);
+              setBookingConflictMessage(null);
+            }
+          } else {
+            setIsBookingBlocked(false);
+            setBookingConflictMessage(null);
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching client details:', err);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [formData.email, formData.whatsapp, view]);
 
   const COMMON_TIMEZONES = [
     { value: 'Asia/Kolkata', label: 'India (IST, UTC+5:30)' },
@@ -205,22 +340,39 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
     return moment(timeStr, 'HH:mm').format(timeFormat === '12h' ? 'h:mm A' : 'HH:mm');
   };
 
+  const getSimplifiedTherapyName = () => {
+    const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free');
+    if (isFree) return 'Free Consultation';
+
+    if (!session.label) return session.title;
+    const category = session.label.split('/')[0].toLowerCase();
+    if (category === 'individual') return 'Individual Therapy';
+    if (category === 'couple') return 'Couples Therapy';
+    if (category === 'adolescent') return 'Adolescent Therapy';
+    return session.title;
+  };
+
+  const parsePhoneNumber = (fullPhone: string) => {
+    const codes = ['+91', '+1', '+44', '+971', '+61', '+65', '+49', '+33', '+81'];
+    const cleanFull = fullPhone.trim();
+    for (const code of codes) {
+      if (cleanFull.startsWith(code)) {
+        return {
+          countryCode: code,
+          localNumber: cleanFull.substring(code.length)
+        };
+      }
+    }
+    if (cleanFull.startsWith('+')) {
+      return { countryCode: '+91', localNumber: cleanFull.replace(/^\+91/, '') };
+    }
+    return { countryCode: '+91', localNumber: cleanFull };
+  };
+
   const fetchSlots = async (date: moment.Moment) => {
     setIsLoadingSlots(true);
     setAvailableSlots([]);
     setSelectedSlot(null);
-
-    const getSimplifiedTherapyName = () => {
-      const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free');
-      if (isFree) return 'Free Consultation';
-
-      if (!session.label) return session.title;
-      const category = session.label.split('/')[0].toLowerCase();
-      if (category === 'individual') return 'Individual Therapy';
-      if (category === 'couple') return 'Couples Therapy';
-      if (category === 'adolescent') return 'Adolescent Therapy';
-      return session.title;
-    };
 
     const payload = {
       selectedTherapy: getSimplifiedTherapyName(),
@@ -274,18 +426,6 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
       alert('Please agree to the Terms & Conditions');
       return;
     }
-
-    const getSimplifiedTherapyName = () => {
-      const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free');
-      if (isFree) return 'Free Consultation';
-
-      if (!session.label) return session.title;
-      const category = session.label.split('/')[0].toLowerCase();
-      if (category === 'individual') return 'Individual Therapy';
-      if (category === 'couple') return 'Couples Therapy';
-      if (category === 'adolescent') return 'Adolescent Therapy';
-      return session.title;
-    };
 
     setIsSubmitting(true);
     const amountVal = parseFloat(sessionCharges.replace('₹', '').replace(',', '')) || 0;
@@ -898,10 +1038,17 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
                 </div>
               )}
 
+              {bookingConflictMessage && (
+                <div className="bp-conflict-banner">
+                  <AlertCircle size={20} className="bp-conflict-icon" />
+                  <span className="bp-conflict-text">{bookingConflictMessage}</span>
+                </div>
+              )}
+
               <div className="bp-reg-actions">
                 <button
                   className="bp-pay-btn"
-                  disabled={isSubmitting || !formData.agreedTerms || !formData.name || !formData.email || !formData.whatsapp}
+                  disabled={isSubmitting || !formData.agreedTerms || !formData.name || !formData.email || !formData.whatsapp || isBookingBlocked}
                   onClick={handleBookingSubmit}
                 >
                   {isSubmitting ? (
