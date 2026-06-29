@@ -397,17 +397,17 @@ app.post('/api/native/fetch-slots', async (req, res) => {
       }
     }
 
-    const realNow = new Date();
-    const fourHoursFromNow = new Date(realNow.getTime() + 4 * 60 * 60 * 1000);
+    // const realNow = new Date();
+    // const fourHoursFromNow = new Date(realNow.getTime() + 4 * 60 * 60 * 1000);
     
-    availableSlots = availableSlots.filter(slot => {
-      const [time, modifier] = slot.split(' ');
-      let [hours, minutes] = time.split(':');
-      if (hours === '12') hours = '00';
-      if (modifier === 'PM') hours = (parseInt(hours, 10) + 12).toString();
-      const slotDateIST = new Date(`${payload.selectedDate}T${hours.padStart(2, '0')}:${minutes}:00+05:30`);
-      return slotDateIST >= fourHoursFromNow;
-    });
+    // availableSlots = availableSlots.filter(slot => {
+    //   const [time, modifier] = slot.split(' ');
+    //   let [hours, minutes] = time.split(':');
+    //   if (hours === '12') hours = '00';
+    //   if (modifier === 'PM') hours = (parseInt(hours, 10) + 12).toString();
+    //   const slotDateIST = new Date(`${payload.selectedDate}T${hours.padStart(2, '0')}:${minutes}:00+05:30`);
+    //   return slotDateIST >= fourHoursFromNow;
+    // });
 
     res.json([{ "Available Slots": availableSlots, success: true }]);
   } catch (error) {
@@ -6116,12 +6116,12 @@ app.post('/api/fetch-slots', async (req, res) => {
       }
     }
 
-    const realNow = new Date();
-    const fourHoursFromNow = new Date(realNow.getTime() + 4 * 60 * 60 * 1000);
+    // const realNow = new Date();
+    // const fourHoursFromNow = new Date(realNow.getTime() + 4 * 60 * 60 * 1000);
     
-    availableSlots = availableSlots.filter(slot => {
-      return slot.timestampMs >= fourHoursFromNow.getTime();
-    });
+    // availableSlots = availableSlots.filter(slot => {
+    //   return slot.timestampMs >= fourHoursFromNow.getTime();
+    // });
 
     const formattedSlots = availableSlots
       .map(slot => {
