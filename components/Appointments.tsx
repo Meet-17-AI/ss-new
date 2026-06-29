@@ -79,7 +79,10 @@ export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onC
   };
   const monthOptions = generateMonthOptions();
 
-  const therapistOptions = ['All Therapists', ...Array.from(new Set(appointments.map(a => a.booking_host_name).filter(Boolean))).sort()];
+  const therapistOptions = ['All Therapists', ...Array.from(new Map(appointments.filter(a => a.booking_host_name).map(a => {
+    const trimmed = a.booking_host_name.trim();
+    return [trimmed.toLowerCase(), trimmed.charAt(0).toUpperCase() + trimmed.slice(1)] as [string, string];
+  })).values()).sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))];
   const isFilterActive = selectedMonth !== 'All Time' || selectedTherapist !== 'All Therapists';
 
   // Reschedule state
@@ -436,7 +439,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
     }
 
     // Therapist filter
-    if (selectedTherapist !== 'All Therapists' && apt.booking_host_name !== selectedTherapist) return false;
+    if (selectedTherapist !== 'All Therapists' && apt.booking_host_name?.trim().toLowerCase() !== selectedTherapist.toLowerCase()) return false;
 
     if (activeTab === 'all') return true;
     if (activeTab === 'free_consultation') return apt.is_free === true;
@@ -515,7 +518,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
       <div className="flex gap-6 mb-6 flex-wrap">
         {tabs.map((tab) => {
           const tabCount = appointments.filter(apt => {
-            if (selectedTherapist !== 'All Therapists' && apt.booking_host_name !== selectedTherapist) return false;
+            if (selectedTherapist !== 'All Therapists' && apt.booking_host_name?.trim().toLowerCase() !== selectedTherapist.toLowerCase()) return false;
             if (selectedMonth !== 'All Time') {
               const [mName, mYear] = selectedMonth.split(' ');
               const monthMap: { [key: string]: number } = { 'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5, 'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11 };
