@@ -2059,7 +2059,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const now = new Date();
     const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
-    const EXCL_SS = ";
+    const EXCL_SS = "";
 
     const revenue = hasDateFilter
       ? await pool.query(
@@ -2929,6 +2929,7 @@ app.get('/api/appointments', async (req, res) => {
         b.booking_id,
         b.booking_invitee_time,
         b.booking_resource_name,
+        b.invitee_payment_amount,
         b.booking_subject,
         b.invitee_name,
         b.invitee_phone,
@@ -2964,6 +2965,7 @@ app.get('/api/appointments', async (req, res) => {
 
       return {
         booking_id: row.booking_id,
+        is_free: row.invitee_payment_amount === null || Number(row.invitee_payment_amount) === 0,
         booking_start_at: convertToIST(row.booking_invitee_time) || 'N/A',
         booking_resource_name: row.booking_resource_name,
         invitee_name: row.invitee_name,
