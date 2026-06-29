@@ -5335,19 +5335,16 @@ app.put('/api/sos-assessments', async (req, res) => {
 // Generate SOS Access Token
 app.post('/api/generate-sos-token', async (req, res) => {
   try {
-    const { sos_assessment_id, client_email, client_phone, client_name, expires_in_days = 7 } = req.body;
+    const { sos_assessment_id, expires_in_days = 7 } = req.body;
+    let { client_email, client_phone, client_name } = req.body;
 
     if (!sos_assessment_id) {
       return res.status(400).json({ error: 'Missing sos_assessment_id', received: req.body });
     }
 
-    if (!client_email) {
-      return res.status(400).json({ error: 'Missing client_email', received: req.body });
-    }
-
-    if (!client_phone) {
-      return res.status(400).json({ error: 'Missing client_phone', received: req.body });
-    }
+    if (!client_email) client_email = 'unknown@example.com';
+    if (!client_phone) client_phone = 'Unknown';
+    if (!client_name) client_name = 'Unknown';
 
     // Generate unique token (UUID)
     const token = randomUUID();

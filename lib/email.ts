@@ -563,9 +563,9 @@ export async function sendSOSEmailAlert(details: {
     `;
 
     const mailOptions = {
-      from: \`"SafeStories" <\${process.env.GMAIL_USER}>\`,
+      from: `"SafeStories" <${process.env.GMAIL_USER}>`,
       to: 'meetpandya@fluid.live', // Admin email requested by user
-      subject: \`SOS Alert Raised | Immediate Attention Required - \${details.clientName}\`,
+      subject: `SOS Alert Raised | Immediate Attention Required - ${details.clientName}`,
       html: htmlContent,
     };
 
