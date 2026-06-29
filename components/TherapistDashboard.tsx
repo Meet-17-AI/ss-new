@@ -3522,7 +3522,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                       <button
                         onClick={() => {
                           setActiveView('appointments');
-                          setActiveAppointmentTab('pending_notes');
+                          setActiveAppointmentTab('completed_sessions');
                         }}
                         className="text-sm text-teal-700 hover:text-teal-800 font-medium"
                       >
