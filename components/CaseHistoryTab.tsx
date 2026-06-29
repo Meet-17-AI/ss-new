@@ -16,7 +16,7 @@ export const CaseHistoryTab: React.FC<CaseHistoryTabProps> = ({ clientId }) => {
 
   const fetchCaseHistory = async () => {
     try {
-      const response = await fetch(`/api/case-history?client_id=${clientId}`);
+      const response = await fetch(`/api/case-history?client_id=${encodeURIComponent(clientId)}`);
       const data = await response.json();
       if (data.success) {
         setCaseHistory(data.data);
