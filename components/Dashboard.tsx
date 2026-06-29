@@ -105,10 +105,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
     { title: 'Revenue', value: '₹0', lastMonth: '₹0', clickable: false },
     { title: 'Refunded', value: '₹0', lastMonth: '₹0', clickable: false },
     { title: 'Bookings', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'all' },
-    { title: 'Sessions Completed', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed' },
+    { title: 'Sessions Completed', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
     { title: 'Cancelled', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'cancelled' },
     { title: 'Refunds', value: '0', lastMonth: '0', clickable: true, targetView: 'refunds', targetTab: 'Pending' },
     { title: 'No Show', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'no_show' },
+    { title: 'Free Consultations', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'free_consultation' },
   ]);
   const [bookings, setBookings] = useState<any[]>([]);
 
@@ -349,10 +350,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
         { title: 'Revenue', value: `₹${Number(statsData.revenue || 0).toLocaleString('en-IN')}`, lastMonth: '₹0', clickable: false },
         { title: 'Refunded', value: `₹${Number(statsData.refundedAmount || 0).toLocaleString('en-IN')}`, lastMonth: '₹0', clickable: false },
         { title: 'Bookings', value: (statsData.bookings || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'all' },
-        { title: 'Sessions Completed', value: (statsData.sessionsCompleted || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed' },
+        { title: 'Sessions Completed', value: (statsData.sessionsCompleted || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
         { title: 'Cancelled', value: (statsData.cancelled || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'cancelled' },
         { title: 'Refunds', value: (statsData.refunds || 0).toString(), lastMonth: '0', clickable: true, targetView: 'refunds', targetTab: 'Pending' },
         { title: 'No Show', value: (statsData.noShows || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'no_show' },
+        { title: 'Free Consultations', value: (statsData.freeConsultations || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'free_consultation' },
       ]);
 
       // Fetch all bookings (with a high limit to get total count)

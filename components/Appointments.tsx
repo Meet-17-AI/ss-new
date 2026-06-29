@@ -25,6 +25,7 @@ interface Appointment {
   booking_status?: string;
   duration?: number;
   client_rating?: string | null;
+  is_free?: boolean;
 }
 
 // Returns a clean session name — falls back to booking_subject if resource_name is just a location string
@@ -103,6 +104,7 @@ export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onC
     { id: 'completed_sessions', label: 'Completed Sessions' },
     { id: 'cancelled', label: 'Cancelled' },
     { id: 'no_show', label: 'No Show' },
+    { id: 'free_consultation', label: 'Free Consultations' },
   ];
 
   // Feedback state
@@ -401,15 +403,8 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
   const getAppointmentStatus = (apt: Appointment) => {
     if (apt.booking_status === 'cancelled' || apt.booking_status === 'canceled') return 'cancelled';
     if (apt.booking_status === 'no_show' || apt.booking_status === 'no show') return 'no_show';
-    if (apt.has_session_notes) return 'completed';
-    if (apt.booking_start_at) {
-      const timeMatch = apt.booking_start_at.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M)/);
-      if (timeMatch) {
-        const [, dateStr, , endTimeStr] = timeMatch;
-        const endDateTime = new Date(`${dateStr} ${endTimeStr}`);
-        if (endDateTime < new Date() && !apt.has_session_notes) return 'pending_notes';
-      }
-    }
+    if (apt.booking_status === 'completed') return 'completed';
+    if (apt.booking_status === 'pending_notes') return 'pending_notes';
     return 'scheduled';
   };
 
@@ -444,6 +439,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
     if (selectedTherapist !== 'All Therapists' && apt.booking_host_name !== selectedTherapist) return false;
 
     if (activeTab === 'all') return true;
+    if (activeTab === 'free_consultation') return apt.is_free === true;
     const status = getAppointmentStatus(apt);
     if (activeTab === 'completed_sessions') return status === 'completed' || status === 'pending_notes';
     return status === activeTab;
@@ -528,6 +524,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
               if (rawDate.getFullYear() !== parseInt(mYear) || rawDate.getMonth() !== monthMap[mName]) return false;
             }
             if (tab.id === 'all') return true;
+            if (tab.id === 'free_consultation') return apt.is_free === true;
             const status = getAppointmentStatus(apt);
             if (tab.id === 'completed_sessions') return status === 'completed' || status === 'pending_notes';
             return status === tab.id;

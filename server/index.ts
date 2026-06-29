@@ -2059,7 +2059,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const now = new Date();
     const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
-    const EXCL_SS = "AND LOWER(TRIM(booking_host_name)) != 'safestories'";
+    const EXCL_SS = ";
 
     const revenue = hasDateFilter
       ? await pool.query(
