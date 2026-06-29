@@ -1207,37 +1207,21 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                   </div>
                 )}
               </div>
-              <div className="border rounded-lg p-4 bg-gray-50 min-h-[100px]">
-                {clientSessionType.hasPaidSessions ? (
-                  // Show case history for paid sessions
-                  isCaseHistoryVisible ? (
-                    caseHistoryData ? (
-                      <div className="space-y-2 text-sm text-gray-700">
-                        {caseHistoryData.age && <p><span className="font-medium">Age:</span> {caseHistoryData.age}</p>}
-                        {caseHistoryData.gender_identity && <p><span className="font-medium">Gender:</span> {caseHistoryData.gender_identity}</p>}
-                        {caseHistoryData.presenting_concerns && <p><span className="font-medium">Presenting Concerns:</span> {caseHistoryData.presenting_concerns}</p>}
-                        {caseHistoryData.medical_history && <p><span className="font-medium">Medical History:</span> {caseHistoryData.medical_history}</p>}
-                        {caseHistoryData.previous_mental_health && <p><span className="font-medium">Previous Mental Health:</span> {caseHistoryData.previous_mental_health}</p>}
-                        {caseHistoryData.insight_level && <p><span className="font-medium">Insight Level:</span> {caseHistoryData.insight_level}</p>}
-                        {!caseHistoryData.age && !caseHistoryData.presenting_concerns && (
-                          <p className="text-gray-400 italic">Case history form not yet filled</p>
-                        )}
-                      </div>
-                    ) : (
-                      <p className="text-gray-400 text-sm italic">No case history found. Fill the session form to add.</p>
-                    )
-                  ) : (
-                    <div className="flex items-center justify-center h-20">
-                      <p className="text-gray-400 text-sm">Case history is hidden. Click the eye icon to view.</p>
-                    </div>
-                  )
+              {clientSessionType.hasPaidSessions ? (
+                // Show case history for paid sessions
+                isCaseHistoryVisible ? (
+                  <CaseHistoryTab clientId={selectedClient.invitee_phone || selectedClient.client_phone} />
                 ) : (
-                  // Show message for free consultation only
-                  <div className="flex items-center justify-center h-20">
-                    <p className="text-gray-400 text-sm">Pre-therapy notes will appear after consultation form is filled</p>
+                  <div className="border rounded-lg p-4 bg-gray-50 min-h-[100px] flex items-center justify-center">
+                    <p className="text-gray-400 text-sm">Case history is hidden. Click the eye icon to view.</p>
                   </div>
-                )}
-              </div>
+                )
+              ) : (
+                // Show message for free consultation only
+                <div className="border rounded-lg p-4 bg-gray-50 min-h-[100px] flex items-center justify-center">
+                  <p className="text-gray-400 text-sm">Pre-therapy notes will appear after consultation form is filled</p>
+                </div>
+              )}
             </div>
 
             {/* Client's Remarks */}

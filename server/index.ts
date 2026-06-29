@@ -5539,16 +5539,51 @@ app.get('/api/sos-documentation', async (req, res) => {
 
 // 1. Receive session documentation from N8N
 app.post('/api/session-documentation', async (req, res) => {
-  try {
-    const { session_type, session_status, client_id, client_name, booking_id, case_history, progress_notes, therapy_goals, consultation_data } = req.body;
+  const { session_type, session_status, client_id, client_name, booking_id, case_history, progress_notes, therapy_goals, consultation_data } = req.body;
 
+  // Track which sections stored successfully so one bad/optional field doesn't fail the whole submit.
+  const sectionErrors: { section: string; error: string }[] = [];
+  let primaryStored = false; // the actual session note (consultation / case history / progress notes)
+
+  // Coerce a value to an integer or null (avoids "invalid input syntax for integer")
+  const toIntOrNull = (v: any) => {
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  // Coerce to an ISO date (YYYY-MM-DD) or null (avoids "invalid input syntax for date")
+  const toDateOrNull = (v: any) => {
+    if (!v) return null;
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
+  };
+
+  try {
     // Map session_status from form to doc_form status value
     const docFormStatus = session_status
-      ? session_status.toLowerCase().replace(' ', '_') // 'No Show' → 'no_show', 'Completed' → 'completed', 'Cancelled' → 'cancelled'
+      ? String(session_status).toLowerCase().replace(' ', '_') // 'No Show' → 'no_show', 'Completed' → 'completed', 'Cancelled' → 'cancelled'
       : 'completed';
+
+    // Stable client id (#6): if the form sent an empty client_id, derive one
+    // from the booking (phone → email). Empty ids previously collided across
+    // clients in client_therapy_goals' (client_id, goal_description) upsert.
+    let effectiveClientId = (client_id || '').toString().trim();
+    if (!effectiveClientId && booking_id) {
+      try {
+        const bRes = await pool.query(
+          'SELECT invitee_phone, invitee_email FROM bookings WHERE booking_id = $1',
+          [booking_id]
+        );
+        if (bRes.rows.length > 0) {
+          effectiveClientId = (bRes.rows[0].invitee_phone || bRes.rows[0].invitee_email || '').trim();
+        }
+      } catch (e) {
+        console.error('[session-documentation] client_id fallback lookup failed:', e);
+      }
+    }
 
     // If Consultation - store pre-therapy call form data
     if (session_type === 'Consultation' && consultation_data) {
+     try {
       const vals = [
         booking_id,
         consultation_data.age,
@@ -5592,11 +5627,16 @@ app.post('/api/session-documentation', async (req, res) => {
         ON CONFLICT (booking_id) WHERE booking_id IS NOT NULL DO UPDATE SET
           consultation_outcome = EXCLUDED.consultation_outcome
       `, vals);
-      console.log('✅ Consultation form data stored');
+      primaryStored = true;
+     } catch (e: any) {
+       console.error('❌ [session-documentation] consultation insert failed:', e?.message || e);
+       sectionErrors.push({ section: 'consultation', error: e?.message || String(e) });
+     }
     }
 
     // If First Session - store case history
     if (session_type === 'First Session' && case_history) {
+     try {
       await pool.query(`
         INSERT INTO client_case_history (
           client_id, client_name, booking_id,
@@ -5613,7 +5653,7 @@ app.post('/api/session-documentation', async (req, res) => {
           education = EXCLUDED.education,
           occupation = EXCLUDED.occupation
       `, [
-        client_id, client_name, booking_id,
+        effectiveClientId, client_name, booking_id,
         case_history.age, case_history.gender_identity, case_history.education,
         case_history.occupation,
         case_history.marital_status, case_history.children, case_history.religion,
@@ -5625,10 +5665,16 @@ app.post('/api/session-documentation', async (req, res) => {
         case_history.medical_history, case_history.medications,
         case_history.previous_mental_health, case_history.insight_level
       ]);
+      primaryStored = true;
+     } catch (e: any) {
+       console.error('❌ [session-documentation] case_history insert failed:', e?.message || e);
+       sectionErrors.push({ section: 'case_history', error: e?.message || String(e) });
+     }
     }
 
     // If Follow-up Session - store progress notes
     if ((session_type === 'Follow-up Session' || session_type === 'First Session') && progress_notes) {
+     try {
       await pool.query(`
         INSERT INTO client_progress_notes (
           client_id, client_name, booking_id, session_number, session_date,
@@ -5675,51 +5721,80 @@ app.post('/api/session-documentation', async (req, res) => {
           signature_date = EXCLUDED.signature_date,
           updated_at = NOW()
       `, [
-        client_id, client_name, booking_id,
-        progress_notes.session_number, progress_notes.session_date || null,
+        effectiveClientId, client_name, booking_id,
+        toIntOrNull(progress_notes.session_number), progress_notes.session_date || null,
         progress_notes.session_duration, progress_notes.session_mode,
         progress_notes.client_report, progress_notes.direct_quotes,
-        progress_notes.client_presentation, progress_notes.presentation_tags,
+        progress_notes.client_presentation, progress_notes.presentation_tags ?? null,
         progress_notes.techniques_used, progress_notes.homework_assigned,
-        progress_notes.client_reaction, progress_notes.reaction_tags, progress_notes.engagement_notes,
+        progress_notes.client_reaction, progress_notes.reaction_tags ?? null, progress_notes.engagement_notes,
         progress_notes.themes_patterns, progress_notes.progress_regression, progress_notes.clinical_concerns,
         progress_notes.self_harm_mention, progress_notes.self_harm_details, progress_notes.risk_level,
         progress_notes.risk_factors, progress_notes.protective_factors, progress_notes.safety_plan,
         progress_notes.future_interventions, progress_notes.session_frequency,
-        progress_notes.therapist_name, progress_notes.therapist_signature, progress_notes.signature_date || null
+        progress_notes.therapist_name, progress_notes.therapist_signature, toDateOrNull(progress_notes.signature_date)
       ]);
+      primaryStored = true;
+     } catch (e: any) {
+       console.error('❌ [session-documentation] progress_notes insert failed:', e?.message || e);
+       sectionErrors.push({ section: 'progress_notes', error: e?.message || String(e) });
+     }
     }
 
-    // Always store/update therapy goals
-    if (therapy_goals) {
+    // Always store/update therapy goals (secondary — never blocks the note).
+    if (therapy_goals && therapy_goals.goal_description && effectiveClientId) {
+     try {
       await pool.query(`
         INSERT INTO client_therapy_goals (
           client_id, client_name, goal_description, current_stage, initiation_date, is_active
         ) VALUES ($1, $2, $3, $4, $5, true)
-        ON CONFLICT (client_id, goal_description) DO UPDATE 
+        ON CONFLICT (client_id, goal_description) DO UPDATE
         SET current_stage = EXCLUDED.current_stage,
             updated_at = NOW(),
             is_active = true
       `, [
-        client_id, client_name,
+        effectiveClientId, client_name,
         therapy_goals.goal_description,
         therapy_goals.current_stage || 'Initiation',
         new Date()
       ]);
       console.log('✅ Therapy goals stored/updated');
+     } catch (e: any) {
+       console.error('❌ [session-documentation] therapy_goals upsert failed:', e?.message || e);
+       sectionErrors.push({ section: 'therapy_goals', error: e?.message || String(e) });
+     }
     }
 
-    // Update documentation form status
-    await pool.query(`
-      UPDATE client_doc_form 
-      SET status = $1
-      WHERE booking_id = $2
-    `, [docFormStatus, booking_id]);
+    // Update documentation form status (secondary)
+    try {
+      await pool.query(`
+        UPDATE client_doc_form
+        SET status = $1
+        WHERE booking_id = $2
+      `, [docFormStatus, booking_id]);
+    } catch (e: any) {
+      console.error('❌ [session-documentation] doc_form status update failed:', e?.message || e);
+      sectionErrors.push({ section: 'doc_form_status', error: e?.message || String(e) });
+    }
 
-    res.json({ success: true, message: 'Session documentation stored successfully' });
-  } catch (error) {
+    // Decide overall result:
+    const primaryFailed = sectionErrors.some(s => ['consultation', 'case_history', 'progress_notes'].includes(s.section));
+    if (primaryFailed) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to store session documentation',
+        details: sectionErrors,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Session documentation stored successfully',
+      warnings: sectionErrors.length ? sectionErrors : undefined,
+    });
+  } catch (error: any) {
     console.error('❌ Error storing session documentation:', error);
-    res.status(500).json({ success: false, error: 'Failed to store session documentation' });
+    res.status(500).json({ success: false, error: error?.message || 'Failed to store session documentation' });
   }
 });
 
