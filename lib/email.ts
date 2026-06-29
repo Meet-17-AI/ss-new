@@ -523,3 +523,55 @@ export async function sendClientBookingConfirmationEmail(
     console.error('❌ Error sending client booking confirmation email:', error);
   }
 }
+export async function sendSOSEmailAlert(details: {
+  clientName: string;
+  clientPhone: string;
+  therapistName: string;
+  sessionTimings: string;
+  mode: string;
+  totalBookings: number | string;
+  emergencyContactName: string;
+  emergencyContactNumber: string;
+  severityLevel: string;
+  currentRiskIndicators: string;
+  riskSummary: string;
+  documentationLink: string;
+}): Promise<void> {
+  try {
+    const htmlContent = `
+<p>Hello!</p>
+<p>An SOS has been raised following a therapy session. Please review the details below and initiate the required safety steps as per risk protocol.</p>
+
+<p><strong>Client Details</strong><br />
+● Client Name: ${details.clientName}<br />
+● Client Phone Number: ${details.clientPhone}<br />
+● Therapist Name: ${details.therapistName}<br />
+● Last Session Date &amp; Time: ${details.sessionTimings}<br />
+● Mode of Session: ${details.mode}<br />
+● Number of sessions: ${details.totalBookings}<br />
+● Emergency Contact Name: ${details.emergencyContactName}<br />
+● Emergency Contact Number: ${details.emergencyContactNumber}</p>
+
+<p><strong>SOS Summary</strong><br />
+● Risk Severity (1-5): ${details.severityLevel}<br />
+● Current Risk Indicators: ${details.currentRiskIndicators}<br />
+● Risk summary: ${details.riskSummary}</p>
+
+<p>Link to client’s documentation profile: <a href="${details.documentationLink}">${details.documentationLink}</a>.</p>
+
+<p>Thank you for responding promptly and supporting client safety.</p>
+    `;
+
+    const mailOptions = {
+      from: \`"SafeStories" <\${process.env.GMAIL_USER}>\`,
+      to: 'meetpandya@fluid.live', // Admin email requested by user
+      subject: \`SOS Alert Raised | Immediate Attention Required - \${details.clientName}\`,
+      html: htmlContent,
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ SOS email alert sent successfully:', info.messageId);
+  } catch (error) {
+    console.error('❌ Error sending SOS email alert:', error);
+  }
+}

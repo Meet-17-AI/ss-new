@@ -1215,23 +1215,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           timestamp: new Date().toISOString(),
           risk_assessment: riskAssessmentData
         };
-
-        const webhookResponse = await fetch('https://n8n.srv1169280.hstgr.cloud/webhook/3e725c04-ed19-4967-8a05-c0a1e8c8441d', {
+        // 2. Trigger direct Whatsapp/Email alert via backend
+        const webhookResponse = await fetch('/api/send-sos-alert', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(webhookData)
         });
-
-        // 2b. Trigger direct Whatsapp/Email alert via backend
-        try {
-          await fetch('/api/send-sos-alert', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(webhookData)
-          });
-        } catch (alertError) {
-          console.error('⚠️ Direct SOS alert failed:', alertError);
-        }
 
         // 3. Update database with webhook status
         if (assessmentId) {
