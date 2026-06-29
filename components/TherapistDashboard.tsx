@@ -443,7 +443,6 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     { id: 'scheduled', label: 'Upcoming' },
     { id: 'all', label: 'All Bookings' },
     { id: 'completed', label: 'Completed' },
-    { id: 'pending_notes', label: 'Pending Session Notes' },
     { id: 'cancelled', label: 'Cancelled' },
     { id: 'no_show', label: 'No Show' },
   ];
@@ -2040,8 +2039,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                         }
 
                         if (activeAppointmentTab === 'all') return true;
-
-                        return getAppointmentStatus(appointment) === activeAppointmentTab;
+                        
+                        const status = getAppointmentStatus(appointment);
+                        if (activeAppointmentTab === 'completed') {
+                          return status === 'completed' || status === 'pending_notes';
+                        }
+                        return status === activeAppointmentTab;
                       }).sort((a, b) => {
                         // Sort appointments by date - for upcoming appointments, show soonest first
                         const getAppointmentDate = (apt: any) => {
@@ -2219,7 +2222,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                     }
 
                     if (activeAppointmentTab === 'all') return true;
-                    return getAppointmentStatus(appointment) === activeAppointmentTab;
+                    
+                    const status = getAppointmentStatus(appointment);
+                    if (activeAppointmentTab === 'completed') {
+                      return status === 'completed' || status === 'pending_notes';
+                    }
+                    return status === activeAppointmentTab;
                   }).sort((a, b) => {
                     // Sort appointments by date - for upcoming appointments, show soonest first
                     const getAppointmentDate = (apt: any) => {
@@ -2832,7 +2840,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                                     return false;
                                   }
                                   if (activeAppointmentTab === 'all') return true;
-                                  return getAppointmentStatus(apt) === activeAppointmentTab;
+                                  
+                                  const status = getAppointmentStatus(apt);
+                                  if (activeAppointmentTab === 'completed') {
+                                    return status === 'completed' || status === 'pending_notes';
+                                  }
+                                  return status === activeAppointmentTab;
                                 }).sort((a, b) => {
                                   // Sort appointments by date - for upcoming appointments, show soonest first
                                   const getAppointmentDate = (apt: any) => {
@@ -2868,7 +2881,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                                       return false;
                                     }
                                     if (activeAppointmentTab === 'all') return true;
-                                    return getAppointmentStatus(apt) === activeAppointmentTab;
+                                    
+                                    const status = getAppointmentStatus(apt);
+                                    if (activeAppointmentTab === 'completed') {
+                                      return status === 'completed' || status === 'pending_notes';
+                                    }
+                                    return status === activeAppointmentTab;
                                   }).sort((a, b) => {
                                     // Sort appointments by date - for upcoming appointments, show soonest first
                                     const getAppointmentDate = (apt: any) => {
