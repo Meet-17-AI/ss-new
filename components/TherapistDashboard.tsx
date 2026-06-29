@@ -71,10 +71,10 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
   const [stats, setStats] = useState([
     { title: 'Bookings', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'all' },
-    { title: 'Sessions Completed', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed' },
+    { title: 'Sessions Completed', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
     { title: 'No-shows', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'no_show' },
     { title: 'Cancelled', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'cancelled' },
-    { title: 'Pending Session Notes', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'pending_notes' },
+    { title: 'Pending Session Notes', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
     { title: 'Avg Rating', value: '—', lastMonth: '0', clickable: false, targetView: '', targetTab: '' },
   ]);
   const [bookings, setBookings] = useState<any[]>([]);
@@ -751,10 +751,10 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     if (isProfileUnderReview) {
       setStats([
         { title: 'Bookings', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'all' },
-        { title: 'Sessions Completed', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed' },
+        { title: 'Sessions Completed', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
         { title: 'No-shows', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'no_show' },
         { title: 'Cancelled', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'cancelled' },
-        { title: 'Pending Session Notes', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'pending_notes' },
+        { title: 'Pending Session Notes', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
       ]);
       setBookings([]);
       setDashboardLoading(false);
@@ -798,10 +798,10 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
         setStats([
           { title: 'Bookings', value: (data.stats.bookings || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'all' },
-          { title: 'Sessions Completed', value: (data.stats.sessionsCompleted || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed' },
+          { title: 'Sessions Completed', value: (data.stats.sessionsCompleted || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
           { title: 'No-shows', value: (data.stats.noShows || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'no_show' },
           { title: 'Cancelled', value: (data.stats.cancelled || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'cancelled' },
-          { title: 'Pending Session Notes', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'pending_notes' },
+          { title: 'Pending Session Notes', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
         ]);
 
         setBookings(data.upcomingBookings || []);
@@ -836,10 +836,10 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
           setStats([
             { title: 'Bookings', value: (data.stats.bookings || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'all' },
-            { title: 'Sessions Completed', value: (data.stats.sessionsCompleted || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed' },
+            { title: 'Sessions Completed', value: (data.stats.sessionsCompleted || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
             { title: 'No-shows', value: (data.stats.noShows || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'no_show' },
             { title: 'Cancelled', value: (data.stats.cancelled || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'cancelled' },
-            { title: 'Pending Session Notes', value: pendingNotesCount.toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'pending_notes' },
+            { title: 'Pending Session Notes', value: pendingNotesCount.toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
             { title: 'Avg Rating', value: data.stats.avgRating ? `⭐ ${data.stats.avgRating}/5` : '—', lastMonth: '0', clickable: false, targetView: '', targetTab: '' },
           ]);
         }
@@ -847,10 +847,10 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
         // Fallback to empty data
         setStats([
           { title: 'Bookings', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'all' },
-          { title: 'Sessions Completed', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed' },
+          { title: 'Sessions Completed', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
           { title: 'No-shows', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'no_show' },
           { title: 'Cancelled', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'cancelled' },
-          { title: 'Pending Session Notes', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'pending_notes' },
+          { title: 'Pending Session Notes', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
         ]);
         setBookings([]);
       }
@@ -859,10 +859,10 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
       // Fallback to empty data
       setStats([
         { title: 'Bookings', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'all' },
-        { title: 'Sessions Completed', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed' },
+        { title: 'Sessions Completed', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
         { title: 'No-shows', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'no_show' },
         { title: 'Cancelled', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'cancelled' },
-        { title: 'Pending Session Notes', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'pending_notes' },
+        { title: 'Pending Session Notes', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'completed_sessions' },
       ]);
       setBookings([]);
     } finally {

@@ -100,8 +100,7 @@ export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onC
   const tabs = [
     { id: 'scheduled', label: 'Upcoming' },
     { id: 'all', label: 'All Bookings' },
-    { id: 'completed', label: 'Completed' },
-    { id: 'pending_notes', label: 'Pending Session Notes' },
+    { id: 'completed_sessions', label: 'Completed Sessions' },
     { id: 'cancelled', label: 'Cancelled' },
     { id: 'no_show', label: 'No Show' },
   ];
@@ -117,7 +116,7 @@ export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onC
   const [isSendingBulkFeedback, setIsSendingBulkFeedback] = useState(false);
   const [bulkFeedbackProgress, setBulkFeedbackProgress] = useState(0);
 
-  const isFeedbackTab = activeTab === 'completed' || activeTab === 'pending_notes';
+  const isFeedbackTab = activeTab === 'completed_sessions';
 
   const toggleSelectForFeedback = (bookingId: number, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -445,7 +444,9 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
     if (selectedTherapist !== 'All Therapists' && apt.booking_host_name !== selectedTherapist) return false;
 
     if (activeTab === 'all') return true;
-    return getAppointmentStatus(apt) === activeTab;
+    const status = getAppointmentStatus(apt);
+    if (activeTab === 'completed_sessions') return status === 'completed' || status === 'pending_notes';
+    return status === activeTab;
   }).sort((a, b) => {
     // Sort appointments by date - for upcoming appointments, show soonest first
     const getAppointmentDate = (apt: Appointment) => {
@@ -479,7 +480,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
   const startIndex = (currentPage - 1) * itemsPerPage;
   const paginatedAppointments = filteredAppointments.slice(startIndex, startIndex + itemsPerPage);
 
-  const showRating = ['all', 'completed', 'pending_notes'].includes(activeTab);
+  const showRating = ['all', 'completed_sessions'].includes(activeTab);
   const colCount = 7 + (isFeedbackTab ? 1 : 0) + (showRating ? 1 : 0);
 
   const exportToCSV = () => {
@@ -526,7 +527,10 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
               if (!rawDate) return false;
               if (rawDate.getFullYear() !== parseInt(mYear) || rawDate.getMonth() !== monthMap[mName]) return false;
             }
-            return tab.id === 'all' ? true : getAppointmentStatus(apt) === tab.id;
+            if (tab.id === 'all') return true;
+            const status = getAppointmentStatus(apt);
+            if (tab.id === 'completed_sessions') return status === 'completed' || status === 'pending_notes';
+            return status === tab.id;
           }).length;
 
           return (
