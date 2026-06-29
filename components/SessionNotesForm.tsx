@@ -296,6 +296,8 @@ export function SessionNotesForm({ sessionInfo, onClose, onSubmit }: SessionNote
         appetite, energy_levels: energyLevels,
         libido, menstrual_history: menstrualHistory,
         developmental_history: developmentalHistory,
+        family_history: null,
+        genogram_url: null,
         medical_history: medicalHistory,
         medications,
         previous_mental_health: previousMentalHealth,
