@@ -1031,14 +1031,16 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     // Time validation ENABLED - 24-hour window after session ends
     const timeMatch = booking.session_timings?.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M) IST/);
     if (timeMatch) {
-      const [, dateStr, , endTimeStr] = timeMatch;
+      const [, dateStr, startTimeStr, endTimeStr] = timeMatch;
+      const startDateTime = new Date(`${dateStr} ${startTimeStr}`);
       const endDateTime = new Date(`${dateStr} ${endTimeStr}`);
       const now = new Date();
+      const hoursSinceStart = (now.getTime() - startDateTime.getTime()) / (1000 * 60 * 60);
       const hoursSinceEnd = (now.getTime() - endDateTime.getTime()) / (1000 * 60 * 60);
 
-      // Check if session has ended
-      if (hoursSinceEnd < 0) {
-        setToast({ message: 'SOS ticket can only be raised after the session ends', type: 'error' });
+      // Check if session has started
+      if (hoursSinceStart < 0) {
+        setToast({ message: 'SOS ticket can only be raised during or after the session', type: 'error' });
         setSelectedAppointmentIndex(null);
         return;
       }
@@ -1068,14 +1070,16 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
     const timeMatch = booking.session_timings?.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M) IST/);
     if (timeMatch) {
-      const [, dateStr, , endTimeStr] = timeMatch;
+      const [, dateStr, startTimeStr, endTimeStr] = timeMatch;
+      const startDateTime = new Date(`${dateStr} ${startTimeStr}`);
       const endDateTime = new Date(`${dateStr} ${endTimeStr}`);
       const now = new Date();
+      const hoursSinceStart = (now.getTime() - startDateTime.getTime()) / (1000 * 60 * 60);
       const hoursSinceEnd = (now.getTime() - endDateTime.getTime()) / (1000 * 60 * 60);
 
-      // Check if session has ended
-      if (hoursSinceEnd < 0) {
-        setToast({ message: 'SOS ticket can only be raised after the session ends', type: 'error' });
+      // Check if session has started
+      if (hoursSinceStart < 0) {
+        setToast({ message: 'SOS ticket can only be raised during or after the session', type: 'error' });
         return;
       }
 
