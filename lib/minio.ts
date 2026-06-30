@@ -4,6 +4,11 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config({ path: '.env.local' });
 
+// Bypass SSL validation since the MinIO server cert is expired or self-signed
+if (process.env.MINIO_USE_SSL === 'true') {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
+
 export const minioClient = new Minio.Client({
   endPoint: process.env.MINIO_ENDPOINT || 's3.fluidjobs.ai',
   port: parseInt(process.env.MINIO_PORT || '9002'),

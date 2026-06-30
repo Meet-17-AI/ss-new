@@ -4,6 +4,11 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config({ path: '.env.local' });
 
+// Bypass SSL validation since the MinIO server cert is expired or self-signed
+if (process.env.MINIO_USE_SSL === 'true') {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+}
+
 // Validate required MinIO configuration
 const requiredMinioVars = ['MINIO_ENDPOINT', 'MINIO_PORT', 'MINIO_ACCESS_KEY', 'MINIO_SECRET_KEY'];
 const missingMinioVars = requiredMinioVars.filter(v => !process.env[v]);
