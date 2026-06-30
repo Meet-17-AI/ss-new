@@ -121,7 +121,7 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
         let mergedAvail = [...(data.availability || [])];
         if (data.date_overrides) {
           data.date_overrides.forEach((ov: any) => {
-            mergedAvail.push({ day: ov.date, is_available: true, times: ov.availability || [] });
+            mergedAvail.push({ day: ov.date, is_available: ov.is_available !== false, times: ov.availability || [] });
           });
         }
         if (data.exclusions) {
@@ -182,14 +182,15 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
 
       // Format overrides for schedule schema
       const dateOverrides = overridesList
-        .filter((a: any) => a.is_available)
+        .filter((a: any) => a.is_available || (a.times || []).length > 0)
         .map((a: any) => ({
           date: a.day || a.date,
+          is_available: a.is_available,
           availability: (a.times || []).map((t: any) => ({ start: t.start, end: t.end }))
         }));
 
       const exclusions = overridesList
-        .filter((a: any) => !a.is_available)
+        .filter((a: any) => !a.is_available && (a.times || []).length === 0)
         .map((a: any) => ({
           start: a.day || a.date,
           end: a.day || a.date,
