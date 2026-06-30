@@ -304,7 +304,7 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
     const newOverride = {
       day: dayStr,
       is_available: overrideAvailability === 'available',
-      times: overrideAvailability === 'available' ? [...modalTimeSlots] : []
+      times: (overrideAvailability === 'unavailable' && allDayUnavailable) ? [] : [...modalTimeSlots]
     };
 
     // Avoid duplicates
@@ -314,6 +314,7 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
       availability: [...filtered, newOverride]
     });
     setModalTimeSlots([{ start: "09:00", end: "17:00" }]);
+    setAllDayUnavailable(true);
     setShowOverrideModal(false);
   };
 
@@ -329,6 +330,7 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
   const [calYear, setCalYear] = useState(today.getFullYear());
   const [selectedDate, setSelectedDate] = useState<number | null>(today.getDate());
   const [overrideAvailability, setOverrideAvailability] = useState<'available' | 'unavailable'>('available');
+  const [allDayUnavailable, setAllDayUnavailable] = useState(true);
 
   const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -489,9 +491,9 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
                               {formatOverrideDate(ov.day)}
                             </span>
                             <span className="ov-time-label">
-                              {ov.is_available && (ov.times || []).length > 0
-                                ? (ov.times || []).map((t: any) => `${t.start}-${t.end}`).join(', ')
-                                : 'Unavailable'}
+                              {ov.is_available
+                                ? ((ov.times || []).length > 0 ? (ov.times || []).map((t: any) => `${t.start}-${t.end}`).join(', ') : 'Available')
+                                : ((ov.times || []).length > 0 ? 'Unavailable: ' + (ov.times || []).map((t: any) => `${t.start}-${t.end}`).join(', ') : 'Unavailable All Day')}
                             </span>
                           </div>
                           <button className="delete-ov-btn" onClick={() => deleteOverride(ov.day)}>✕</button>
@@ -569,10 +571,17 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
                         <input type="radio" name="overrideAvail" checked={overrideAvailability === 'unavailable'} onChange={() => setOverrideAvailability('unavailable')} />
                         <span>Unavailable</span>
                       </label>
+                      
+                      {overrideAvailability === 'unavailable' && (
+                        <label className="checkbox-label mt8" style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: 13, marginTop: 8 }}>
+                          <input type="checkbox" checked={allDayUnavailable} onChange={(e) => setAllDayUnavailable(e.target.checked)} />
+                          <span>Unavailable All Day</span>
+                        </label>
+                      )}
                     </div>
 
                     {/* Time Slots */}
-                    {overrideAvailability === 'available' && (
+                    {(overrideAvailability === 'available' || !allDayUnavailable) && (
                       <div className="modal-section">
                         <span className="modal-section-title">Time Slots</span>
                         {modalTimeSlots.map((slot, tIdx) => (

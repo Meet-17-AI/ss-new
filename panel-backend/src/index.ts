@@ -6055,11 +6055,46 @@ app.post('/api/fetch-slots', async (req, res) => {
         let dayRule: any = null;
 
         if (override) {
-          dayRule = {
-            day: dStr,
-            is_available: true,
-            times: override.availability || override.times || []
-          };
+          const isAvailable = override.is_available ?? (override.availability !== false && override.isAvailable !== false);
+          const overrideTimes = override.availability || override.times || [];
+          
+          if (isAvailable) {
+            dayRule = {
+              day: dStr,
+              is_available: true,
+              times: overrideTimes
+            };
+          } else {
+            // Unavailability override
+            if (overrideTimes.length > 0) {
+              // Partial day unavailability override: base is standard weekly schedule
+              const dObj = new Date(`${dStr}T12:00:00Z`);
+              const dayOfWeekIST = dObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' }).toLowerCase();
+              const weeklyRule = availabilityRules.find((r) => r.day.toLowerCase() === dayOfWeekIST);
+              
+              if (weeklyRule && weeklyRule.is_available && Array.isArray(weeklyRule.times)) {
+                dayRule = {
+                  day: dStr,
+                  is_available: true,
+                  times: weeklyRule.times,
+                  excludeTimes: overrideTimes
+                };
+              } else {
+                dayRule = {
+                  day: dStr,
+                  is_available: false,
+                  times: []
+                };
+              }
+            } else {
+              // Full day unavailability
+              dayRule = {
+                day: dStr,
+                is_available: false,
+                times: []
+              };
+            }
+          }
         } else {
           // 3. Fallback to weekly schedule
           const dObj = new Date(`${dStr}T12:00:00Z`);
@@ -6076,10 +6111,26 @@ app.post('/api/fetch-slots', async (req, res) => {
               const slotEndCheck = new Date(current.getTime() + 50 * 60000);
               if (slotEndCheck > end) break;
               
-              availableSlots.push({ 
-                timestampMs: current.getTime(), 
-                dateObj: new Date(current.getTime())
-              });
+              // Check if this slot overlaps with any hourly unavailability override
+              let isExcludedSlot = false;
+              if (Array.isArray(dayRule.excludeTimes)) {
+                for (const exBlock of dayRule.excludeTimes) {
+                  const exStart = new Date(`${dStr}T${exBlock.start}:00+05:30`);
+                  const exEnd = new Date(`${dStr}T${exBlock.end}:00+05:30`);
+                  
+                  if (current < exEnd && slotEndCheck > exStart) {
+                    isExcludedSlot = true;
+                    break;
+                  }
+                }
+              }
+              
+              if (!isExcludedSlot) {
+                availableSlots.push({ 
+                  timestampMs: current.getTime(), 
+                  dateObj: new Date(current.getTime())
+                });
+              }
               
               current.setMinutes(current.getMinutes() + 30);
             }
@@ -7236,8 +7287,8 @@ app.post('/api/create-booking', async (req, res) => {
         booking_invitee_time, booking_host_time, invitee_payment_amount, invitee_payment_currency,
         booking_status, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id, google_event_id,
-        payment_id, payment_status, invitee_payment_gateway
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
+        payment_id, payment_status, invitee_payment_gateway, invitee_question
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
       [
         booking_id,
         invitee_id,
@@ -7263,7 +7314,8 @@ app.post('/api/create-booking', async (req, res) => {
         google_event_id,
         payload.payment_id || payload.razorpay_payment_id || null,
         payload.payment_id ? 'Paid' : (payload.isFreeConsultation ? 'Free' : 'Pending'),
-        payload.payment_gateway || null
+        payload.payment_gateway || null,
+        payload.invitee_question || payload.notes || null
       ]
     );
 
@@ -7426,8 +7478,8 @@ app.post('/api/create-pending-booking', async (req, res) => {
         booking_status, payment_status, invitee_payment_gateway,
         razorpay_order_id, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, mask_id,
-        booking_invitee_time, booking_host_time
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+        booking_invitee_time, booking_host_time, invitee_question
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
       [
         booking_id, invitee_id, 'Direct Booking',
         payload.clientName || 'Unknown Client',
@@ -7443,7 +7495,8 @@ app.post('/api/create-pending-booking', async (req, res) => {
         therapistName, therapistId,
         payload.sessionMode === 'online' ? 'Online Video Call' : 'In Person (Pune)',
         maskId,
-        '', ''
+        '', '',
+        payload.invitee_question || payload.notes || null
       ]
     );
 

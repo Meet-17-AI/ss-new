@@ -32,6 +32,17 @@ interface BookingPageProps {
   isPublic?: boolean;
 }
 
+const DEFAULT_QUESTIONS = [
+  { id: '1', type: 'text', label: 'Name', required: true },
+  { id: '2', type: 'email', label: 'Email address', required: true },
+  { id: '3', type: 'tel', label: 'Whatsapp Number', required: true },
+  { id: '4', type: 'text', label: 'Emergency Contact Name', required: false },
+  { id: '5', type: 'text', label: 'Emergency Contact Relation', required: false },
+  { id: '6', type: 'tel', label: 'Emergency Contact Number', required: false },
+  { id: '7', type: 'textarea', label: 'Please share anything that will help prepare for our meeting', required: false },
+  { id: '8', type: 'checkbox', label: 'I confirm that I have read and agree to the Terms & Conditions.', required: true }
+];
+
 export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPublic }) => {
   const [view, setView] = useState<'selection' | 'registration'>('selection');
   const [currentMonth, setCurrentMonth] = useState(moment());
@@ -59,6 +70,8 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
     paymentMethod: 'razorpay',
     agreedTerms: false
   });
+
+  const [customResponses, setCustomResponses] = useState<Record<string, string>>({});
 
   const [availableSlots, setAvailableSlots] = useState<string[]>([]);
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
@@ -422,15 +435,58 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
 
   const handleBookingSubmit = async () => {
     if (isSubmitting) return; // guard against double-clicks creating duplicate bookings
-    if (!formData.agreedTerms) {
-      alert('Please agree to the Terms & Conditions');
-      return;
+
+    // Validate required questions (standard & custom)
+    const questions = session.form_questions || DEFAULT_QUESTIONS;
+    for (const q of questions) {
+      if (q.required) {
+        if (q.id === '1' && !formData.name) { alert(`${q.label || 'Name'} is required`); return; }
+        if (q.id === '2' && !formData.email) { alert(`${q.label || 'Email address'} is required`); return; }
+        if (q.id === '3' && !formData.whatsapp) { alert(`${q.label || 'Whatsapp Number'} is required`); return; }
+        if (q.id === '8' && !formData.agreedTerms) { alert('Please confirm that you have read and agree to the Terms & Conditions'); return; }
+        
+        // Couple session validations (only if client fields are required, partner fields are also checked)
+        if (isCoupleSession) {
+          if (q.id === '1' && !formData.name2) { alert("Partner's Name is required"); return; }
+          if (q.id === '2' && !formData.email2) { alert("Partner's Email is required"); return; }
+          if (q.id === '3' && !formData.whatsapp2) { alert("Partner's Whatsapp number is required"); return; }
+        }
+        
+        // Custom questions validation
+        if (!['1', '2', '3', '4', '5', '6', '7', '8'].includes(q.id)) {
+          if (!customResponses[q.id]) {
+            alert(`"${q.label || 'Untitled Question'}" is required`);
+            return;
+          }
+        }
+      }
     }
 
     setIsSubmitting(true);
     const amountVal = parseFloat(sessionCharges.replace('₹', '').replace(',', '')) || 0;
     // Free if charges are zero OR if the service has payment disabled
     const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free') || amountVal === 0 || session.is_payment_enabled === false;
+
+    // Compile custom responses into a readable text block
+    let compiledNotes = formData.notes || '';
+    const customQuestions = (session.form_questions || DEFAULT_QUESTIONS).filter(
+      (q: any) => !['1', '2', '3', '4', '5', '6', '7', '8'].includes(q.id)
+    );
+    
+    if (customQuestions.length > 0) {
+      const answersText = customQuestions
+        .map((q: any) => {
+          const ans = customResponses[q.id];
+          if (q.type === 'tel') {
+            const code = customResponses[q.id + '_code'] || '+91';
+            return `${q.label}: ${code}${ans || ''}`;
+          }
+          return `${q.label}: ${ans || 'Not answered'}`;
+        })
+        .join('\n');
+      
+      compiledNotes = `${compiledNotes}\n\nAdditional Details:\n${answersText}`.trim();
+    }
 
     const payload: any = {
       therapyName: getSimplifiedTherapyName(),
@@ -449,7 +505,8 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
       emergencyContactNumber: `${formData.emergencyCountryCode}${formData.emergencyNumber}`,
       sessionMode: formData.location === 'google_meet' ? 'online' : 'in-person',
       timezone: 'Asia/Kolkata',
-      notes: formData.notes,
+      notes: compiledNotes,
+      invitee_question: compiledNotes, // Send both
       isAdmin: false,
       clientTimezone: clientTimezone,
       amount: amountVal
@@ -874,121 +931,256 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
             </div>
 
             <div className="bp-reg-form">
-              <div className="bp-form-field">
-                <label>Name <span className="req">*</span></label>
-                <input type="text" className="bp-input" autoComplete="off"
-                  value={formData.name}
-                  onChange={e => setFormData({ ...formData, name: e.target.value })} />
-              </div>
+              {(session.form_questions && session.form_questions.length > 0 ? session.form_questions : DEFAULT_QUESTIONS).map((q: any) => {
+                // If it is couple session, hide emergency contact questions
+                if (isCoupleSession && ['4', '5', '6'].includes(q.id)) {
+                  return null;
+                }
 
-              <div className="bp-form-field">
-                <label>Email address <span className="req">*</span></label>
-                <input type="email" className="bp-input" autoComplete="off"
-                  value={formData.email}
-                  onChange={e => setFormData({ ...formData, email: e.target.value })} />
-              </div>
+                // If standard fields, bind to standard state
+                if (q.id === '1') {
+                  return (
+                    <React.Fragment key={q.id}>
+                      <div className="bp-form-field">
+                        <label>{q.label || 'Name'} {q.required && <span className="req">*</span>}</label>
+                        <input type="text" className="bp-input" autoComplete="off"
+                          value={formData.name}
+                          onChange={e => setFormData({ ...formData, name: e.target.value })} />
+                      </div>
+                      {isCoupleSession && (
+                        <div className="bp-form-field">
+                          <label>Partner's Name <span className="req">*</span></label>
+                          <input type="text" className="bp-input"
+                            value={formData.name2}
+                            onChange={e => setFormData({ ...formData, name2: e.target.value })} />
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                }
 
-              <div className="bp-form-field">
-                <label>Whatsapp {isCoupleSession ? 'number' : 'Number'} <span className="req">*</span></label>
-                <div className="bp-phone-input">
-                  <select
-                    className="bp-country-select"
-                    value={formData.whatsappCountryCode}
-                    onChange={e => setFormData({ ...formData, whatsappCountryCode: e.target.value })}
-                  >
-                    {COUNTRY_CODES.map(c => <option key={c.code} value={c.code}>{c.label} ({c.code})</option>)}
-                  </select>
-                  <input type="tel" className="bp-input" autoComplete="off"
-                    value={formData.whatsapp}
-                    onChange={e => setFormData({ ...formData, whatsapp: e.target.value })} />
-                </div>
-              </div>
+                if (q.id === '2') {
+                  return (
+                    <React.Fragment key={q.id}>
+                      <div className="bp-form-field">
+                        <label>{q.label || 'Email address'} {q.required && <span className="req">*</span>}</label>
+                        <input type="email" className="bp-input" autoComplete="off"
+                          value={formData.email}
+                          onChange={e => setFormData({ ...formData, email: e.target.value })} />
+                      </div>
+                      {isCoupleSession && (
+                        <div className="bp-form-field">
+                          <label>Partner's Email <span className="req">*</span></label>
+                          <input type="email" className="bp-input"
+                            value={formData.email2}
+                            onChange={e => setFormData({ ...formData, email2: e.target.value })} />
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                }
 
-              {isCoupleSession && (
-                <>
-                  <div className="bp-form-field">
-                    <label>Partner's Name <span className="req">*</span></label>
-                    <input type="text" className="bp-input"
-                      value={formData.name2}
-                      onChange={e => setFormData({ ...formData, name2: e.target.value })} />
-                  </div>
+                if (q.id === '3') {
+                  return (
+                    <React.Fragment key={q.id}>
+                      <div className="bp-form-field">
+                        <label>{q.label || 'Whatsapp Number'} {q.required && <span className="req">*</span>}</label>
+                        <div className="bp-phone-input">
+                          <select
+                            className="bp-country-select"
+                            value={formData.whatsappCountryCode}
+                            onChange={e => setFormData({ ...formData, whatsappCountryCode: e.target.value })}
+                          >
+                            {COUNTRY_CODES.map(c => <option key={c.code} value={c.code}>{c.label} ({c.code})</option>)}
+                          </select>
+                          <input type="tel" className="bp-input" autoComplete="off"
+                            value={formData.whatsapp}
+                            onChange={e => setFormData({ ...formData, whatsapp: e.target.value })} />
+                        </div>
+                      </div>
+                      {isCoupleSession && (
+                        <div className="bp-form-field">
+                          <label>Partner's Whatsapp number <span className="req">*</span></label>
+                          <div className="bp-phone-input">
+                            <select
+                              className="bp-country-select"
+                              value={formData.whatsapp2CountryCode}
+                              onChange={e => setFormData({ ...formData, whatsapp2CountryCode: e.target.value })}
+                            >
+                              {COUNTRY_CODES.map(c => <option key={c.code} value={c.code}>{c.label} ({c.code})</option>)}
+                            </select>
+                            <input type="tel" className="bp-input"
+                              value={formData.whatsapp2}
+                              onChange={e => setFormData({ ...formData, whatsapp2: e.target.value })} />
+                          </div>
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                }
 
-                  <div className="bp-form-field">
-                    <label>Partner's Email <span className="req">*</span></label>
-                    <input type="email" className="bp-input"
-                      value={formData.email2}
-                      onChange={e => setFormData({ ...formData, email2: e.target.value })} />
-                  </div>
-
-                  <div className="bp-form-field">
-                    <label>Partner's Whatsapp number <span className="req">*</span></label>
-                    <div className="bp-phone-input">
-                      <select
-                        className="bp-country-select"
-                        value={formData.whatsapp2CountryCode}
-                        onChange={e => setFormData({ ...formData, whatsapp2CountryCode: e.target.value })}
-                      >
-                        {COUNTRY_CODES.map(c => <option key={c.code} value={c.code}>{c.label} ({c.code})</option>)}
-                      </select>
-                      <input type="tel" className="bp-input"
-                        value={formData.whatsapp2}
-                        onChange={e => setFormData({ ...formData, whatsapp2: e.target.value })} />
+                if (q.id === '4') {
+                  return (
+                    <div className="bp-form-field" key={q.id}>
+                      <label>{q.label || 'Emergency Contact Name'} {q.required && <span className="req">*</span>}</label>
+                      <input type="text" className="bp-input"
+                        value={formData.emergencyName}
+                        onChange={e => setFormData({ ...formData, emergencyName: e.target.value })} />
                     </div>
-                  </div>
-                </>
-              )}
+                  );
+                }
 
-              {!isCoupleSession && (
-                <>
-                  <div className="bp-form-field">
-                    <label>Emergency Contact Name</label>
-                    <input type="text" className="bp-input"
-                      value={formData.emergencyName}
-                      onChange={e => setFormData({ ...formData, emergencyName: e.target.value })} />
-                  </div>
-
-                  <div className="bp-form-field">
-                    <label>Emergency Contact Relation</label>
-                    <input type="text" className="bp-input"
-                      value={formData.emergencyRelation}
-                      onChange={e => setFormData({ ...formData, emergencyRelation: e.target.value })} />
-                  </div>
-
-                  <div className="bp-form-field">
-                    <label>Emergency Contact Number</label>
-                    <div className="bp-phone-input">
-                      <select
-                        className="bp-country-select"
-                        value={formData.emergencyCountryCode}
-                        onChange={e => setFormData({ ...formData, emergencyCountryCode: e.target.value })}
-                      >
-                        {COUNTRY_CODES.map(c => <option key={c.code} value={c.code}>{c.label} ({c.code})</option>)}
-                      </select>
-                      <input type="tel" className="bp-input"
-                        value={formData.emergencyNumber}
-                        onChange={e => setFormData({ ...formData, emergencyNumber: e.target.value })} />
+                if (q.id === '5') {
+                  return (
+                    <div className="bp-form-field" key={q.id}>
+                      <label>{q.label || 'Emergency Contact Relation'} {q.required && <span className="req">*</span>}</label>
+                      <input type="text" className="bp-input"
+                        value={formData.emergencyRelation}
+                        onChange={e => setFormData({ ...formData, emergencyRelation: e.target.value })} />
                     </div>
-                  </div>
-                </>
-              )}
+                  );
+                }
 
-              <div className="bp-form-field">
-                <label>Please share anything that will help prepare for our meeting</label>
-                <textarea className="bp-textarea"
-                  value={formData.notes}
-                  onChange={e => setFormData({ ...formData, notes: e.target.value })} />
-              </div>
+                if (q.id === '6') {
+                  return (
+                    <div className="bp-form-field" key={q.id}>
+                      <label>{q.label || 'Emergency Contact Number'} {q.required && <span className="req">*</span>}</label>
+                      <div className="bp-phone-input">
+                        <select
+                          className="bp-country-select"
+                          value={formData.emergencyCountryCode}
+                          onChange={e => setFormData({ ...formData, emergencyCountryCode: e.target.value })}
+                        >
+                          {COUNTRY_CODES.map(c => <option key={c.code} value={c.code}>{c.label} ({c.code})</option>)}
+                        </select>
+                        <input type="tel" className="bp-input"
+                          value={formData.emergencyNumber}
+                          onChange={e => setFormData({ ...formData, emergencyNumber: e.target.value })} />
+                      </div>
+                    </div>
+                  );
+                }
 
-              <div className="bp-form-field checkbox-field-container">
-                <p className="bp-terms-text">Please review the <a href="https://safestories.in/tnc" target="_blank" rel="noopener noreferrer" style={{ color: '#0d9488', textDecoration: 'none' }} onMouseOver={e => e.currentTarget.style.textDecoration = 'underline'} onMouseOut={e => e.currentTarget.style.textDecoration = 'none'}>Terms & Conditions</a> before completing your booking. <span className="req">*</span></p>
-                <div className="checkbox-field">
-                  <label className="bp-checkbox-label">
-                    <input type="checkbox" checked={formData.agreedTerms}
-                      onChange={e => setFormData({ ...formData, agreedTerms: e.target.checked })} />
-                    I confirm that I have read and agree to the Terms & Conditions.
-                  </label>
-                </div>
-              </div>
+                if (q.id === '7') {
+                  return (
+                    <div className="bp-form-field" key={q.id}>
+                      <label>{q.label || 'Please share anything that will help prepare for our meeting'} {q.required && <span className="req">*</span>}</label>
+                      <textarea className="bp-textarea"
+                        value={formData.notes}
+                        onChange={e => setFormData({ ...formData, notes: e.target.value })} />
+                    </div>
+                  );
+                }
+
+                if (q.id === '8') {
+                  return (
+                    <div className="bp-form-field checkbox-field-container" key={q.id}>
+                      <p className="bp-terms-text">Please review the <a href="https://safestories.in/tnc" target="_blank" rel="noopener noreferrer" style={{ color: '#0d9488', textDecoration: 'none' }} onMouseOver={e => e.currentTarget.style.textDecoration = 'underline'} onMouseOut={e => e.currentTarget.style.textDecoration = 'none'}>Terms & Conditions</a> before completing your booking. <span className="req">*</span></p>
+                      <div className="checkbox-field">
+                        <label className="bp-checkbox-label">
+                          <input type="checkbox" checked={formData.agreedTerms}
+                            onChange={e => setFormData({ ...formData, agreedTerms: e.target.checked })} />
+                          {q.label || 'I confirm that I have read and agree to the Terms & Conditions.'}
+                        </label>
+                      </div>
+                    </div>
+                  );
+                }
+
+                // Rendering Custom Questions dynamically
+                if (q.type === 'text' || q.type === 'email') {
+                  return (
+                    <div className="bp-form-field" key={q.id}>
+                      <label>{q.label} {q.required && <span className="req">*</span>}</label>
+                      <input 
+                        type={q.type} 
+                        className="bp-input" 
+                        required={q.required}
+                        value={customResponses[q.id] || ''}
+                        onChange={e => setCustomResponses({ ...customResponses, [q.id]: e.target.value })}
+                      />
+                    </div>
+                  );
+                }
+
+                if (q.type === 'textarea') {
+                  return (
+                    <div className="bp-form-field" key={q.id}>
+                      <label>{q.label} {q.required && <span className="req">*</span>}</label>
+                      <textarea 
+                        className="bp-textarea" 
+                        required={q.required}
+                        value={customResponses[q.id] || ''}
+                        onChange={e => setCustomResponses({ ...customResponses, [q.id]: e.target.value })}
+                      />
+                    </div>
+                  );
+                }
+
+                if (q.type === 'dropdown') {
+                  return (
+                    <div className="bp-form-field" key={q.id}>
+                      <label>{q.label} {q.required && <span className="req">*</span>}</label>
+                      <select 
+                        className="bp-input bg-white" 
+                        required={q.required}
+                        value={customResponses[q.id] || ''}
+                        onChange={e => setCustomResponses({ ...customResponses, [q.id]: e.target.value })}
+                      >
+                        <option value="">Select Option</option>
+                        {(q.options || '').split(',').map((opt: string) => {
+                          const o = opt.trim();
+                          return <option key={o} value={o}>{o}</option>;
+                        })}
+                      </select>
+                    </div>
+                  );
+                }
+
+                if (q.type === 'checkbox') {
+                  return (
+                    <div className="bp-form-field checkbox-field-container" key={q.id}>
+                      <div className="checkbox-field">
+                        <label className="bp-checkbox-label">
+                          <input 
+                            type="checkbox" 
+                            required={q.required}
+                            checked={!!customResponses[q.id]}
+                            onChange={e => setCustomResponses({ ...customResponses, [q.id]: e.target.checked ? 'true' : '' })}
+                          />
+                          {q.label} {q.required && <span className="req">*</span>}
+                        </label>
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (q.type === 'tel') {
+                  return (
+                    <div className="bp-form-field" key={q.id}>
+                      <label>{q.label} {q.required && <span className="req">*</span>}</label>
+                      <div className="bp-phone-input">
+                        <select
+                          className="bp-country-select"
+                          value={customResponses[q.id + '_code'] || '+91'}
+                          onChange={e => setCustomResponses({ ...customResponses, [q.id + '_code']: e.target.value })}
+                        >
+                          {COUNTRY_CODES.map(c => <option key={c.code} value={c.code}>{c.label} ({c.code})</option>)}
+                        </select>
+                        <input 
+                          type="tel" 
+                          className="bp-input" 
+                          required={q.required}
+                          value={customResponses[q.id] || ''}
+                          onChange={e => setCustomResponses({ ...customResponses, [q.id]: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                  );
+                }
+
+                return null;
+              })}
 
               <div className="bp-reg-section">
                 <h3 className="bp-section-title">Select Location</h3>

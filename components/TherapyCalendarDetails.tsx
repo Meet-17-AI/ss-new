@@ -66,6 +66,7 @@ export function TherapyCalendarDetails() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
   const [therapists, setTherapists] = useState<Therapist[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -263,6 +264,27 @@ export function TherapyCalendarDetails() {
   const removeQuestion = (index: number) => {
     const updated = formData.form_questions.filter((_, i) => i !== index);
     setFormData({ ...formData, form_questions: updated });
+  };
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    if (draggedIndex === null || draggedIndex === index) return;
+
+    const updated = [...formData.form_questions];
+    const [draggedQuestion] = updated.splice(draggedIndex, 1);
+    updated.splice(index, 0, draggedQuestion);
+
+    setFormData({ ...formData, form_questions: updated });
+    setDraggedIndex(null);
   };
 
   const selectedTherapistObj = therapists.find(t => t.therapist_id === formData.therapist_id);
@@ -510,7 +532,14 @@ export function TherapyCalendarDetails() {
                     const isEditing = editingQuestionId === q.id;
 
                     return (
-                      <div key={q.id} className={`flex flex-col bg-white border rounded-xl overflow-hidden hover:shadow-md transition-shadow ${isEditing ? 'ring-2 ring-teal-500' : ''}`}>
+                      <div 
+                        key={q.id} 
+                        draggable={!isEditing}
+                        onDragStart={(e) => handleDragStart(e, idx)}
+                        onDragOver={(e) => handleDragOver(e, idx)}
+                        onDrop={(e) => handleDrop(e, idx)}
+                        className={`flex flex-col bg-white border rounded-xl overflow-hidden hover:shadow-md transition-all ${isEditing ? 'ring-2 ring-teal-500' : ''} ${draggedIndex === idx ? 'opacity-50 scale-95 border-teal-200' : ''}`}
+                      >
                         {isEditing ? (
                           <div className="flex gap-4 items-start p-6 bg-gray-50">
                             <div className="pt-3 text-gray-400 cursor-grab">

@@ -74,6 +74,8 @@ async function setupMinIO() {
   } catch (error: any) {
     console.error('❌ Error setting up MinIO:', error.message);
     console.error('Full error:', error);
+    console.error('Error keys:', Object.keys(error));
+    console.error('Error stringified:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
     process.exit(1);
   }
 }
