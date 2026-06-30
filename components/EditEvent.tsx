@@ -780,9 +780,9 @@ const EditEvent: React.FC<EditEventProps> = ({ event, therapistId, onBack, onSav
                         {formatOverrideDate(ov.day)}
                       </span>
                       <span className="override-time">
-                        {ov.is_available && (ov.times || []).length > 0
-                          ? (ov.times || []).map((t: any) => `${formatTime(t.start)} - ${formatTime(t.end)}`).join(', ')
-                          : 'Unavailable'}
+                        {ov.is_available
+                          ? ((ov.times || []).length > 0 ? (ov.times || []).map((t: any) => `${formatTime(t.start)} - ${formatTime(t.end)}`).join(', ') : 'Available')
+                          : ((ov.times || []).length > 0 ? 'Unavailable: ' + (ov.times || []).map((t: any) => `${formatTime(t.start)} - ${formatTime(t.end)}`).join(', ') : 'Unavailable All Day')}
                       </span>
                     </div>
                   ))}
