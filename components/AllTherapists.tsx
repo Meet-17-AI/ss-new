@@ -2826,7 +2826,11 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                         {therapist.name.charAt(0)}
                       </div>
                       <h3 className="text-lg font-semibold text-gray-900 mb-1">{displayTherapistName(therapist.name, therapist.therapist_id)}</h3>
-                      <p className="text-sm text-gray-500 mb-4 truncate w-full">{therapist.contact_info}</p>
+                      {therapist.google_calendar_connected ? (
+                        <p className="text-sm text-gray-500 mb-4 truncate w-full">{therapist.contact_info}</p>
+                      ) : (
+                        <div className="mb-4 h-5"></div>
+                      )}
                       <div className="mt-auto pt-4 border-t border-gray-100 w-full flex flex-col gap-3">
                         {canManage ? (
                           <>

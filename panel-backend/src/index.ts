@@ -3993,6 +3993,7 @@ app.get('/api/therapists-admin', async (req, res) => {
         t.profile_picture_url,
         t.phone_number,
         COALESCE(t.is_active, true) as is_active,
+        COALESCE(t.google_refresh_token IS NOT NULL, false) AS google_calendar_connected,
         (SELECT MAX(schedule_id) FROM therapist_resources WHERE therapist_id = t.therapist_id) as "scheduleId",
         COUNT(DISTINCT CASE 
           WHEN LOWER(b.booking_status) NOT IN ('cancelled', 'canceled') 
@@ -4022,7 +4023,7 @@ app.get('/api/therapists-admin', async (req, res) => {
         TRIM(b.booking_host_name) ILIKE '%' || SPLIT_PART(t.name, ' ', 1) || '%'
         OR TRIM(b.booking_host_name) ILIKE t.name
       )
-      GROUP BY t.therapist_id, t.name, t.specialization, t.contact_info, t.profile_picture_url, t.phone_number, t.is_active
+      GROUP BY t.therapist_id, t.name, t.specialization, t.contact_info, t.profile_picture_url, t.phone_number, t.is_active, t.google_refresh_token
       ORDER BY t.name ASC
     `);
 
