@@ -931,6 +931,13 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
             </div>
 
             <div className="bp-reg-form">
+              <div className="bp-info-banner" style={{ background: '#f0fdfa', border: '1px solid #ccfbf1', borderRadius: '12px', padding: '16px', display: 'flex', gap: '12px', marginBottom: '8px' }}>
+                <Info size={20} style={{ color: '#0d9488', flexShrink: 0, marginTop: '2px' }} />
+                <span style={{ fontSize: '13.5px', color: '#115e59', lineHeight: '1.5', fontWeight: 500 }}>
+                  Enter your WhatsApp number first! If you’ve booked before, your details will auto-fill—just review and book. If you're new, please fill out the form below
+                </span>
+              </div>
+
               {(session.form_questions && session.form_questions.length > 0 ? session.form_questions : DEFAULT_QUESTIONS).map((q: any) => {
                 // If it is couple session, hide emergency contact questions
                 if (isCoupleSession && ['4', '5', '6'].includes(q.id)) {
