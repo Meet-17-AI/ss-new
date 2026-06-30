@@ -203,7 +203,15 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
               setFormData(updatedForm);
             }
 
-            const currentTherapy = getSimplifiedTherapyName();
+            const getCategory = (name: string) => {
+              const n = (name || '').toLowerCase();
+              if (n.includes('free consultation')) return 'Free Consultation';
+              if (n.includes('couple')) return 'Couples Therapy';
+              if (n.includes('adolescent')) return 'Adolescent Therapy';
+              if (n.includes('individual')) return 'Individual Therapy';
+              return n.trim();
+            };
+
             const currentTherapist = session.owner;
 
             if (data.assignedTherapistName) {
@@ -211,7 +219,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
               const assignedTherapy = data.assignedTherapy;
 
               const therapistMismatch = currentTherapist.toLowerCase().trim() !== assignedTherapist.toLowerCase().trim();
-              const therapyMismatch = assignedTherapy && currentTherapy.toLowerCase().trim() !== assignedTherapy.toLowerCase().trim();
+              const therapyMismatch = assignedTherapy && getCategory(session.title) !== getCategory(assignedTherapy);
 
               if (therapistMismatch || therapyMismatch) {
                 setIsBookingBlocked(true);
