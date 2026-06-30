@@ -791,7 +791,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
             </div>
             <div style={{ fontSize: '12px', color: '#6b7280' }}>
               <a href="https://safestories.in" target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none', color: '#6b7280' }} onMouseOver={e => e.currentTarget.style.color = '#0d9488'} onMouseOut={e => e.currentTarget.style.color = '#6b7280'}>
-                &copy; 2025 SAFETY AND YOU WELLBEING CENTRE LLP All Rights Reserved!
+                &copy; 2026 SAFETY AND YOU WELLBEING CENTRE LLP All Rights Reserved!
               </a>
             </div>
           </div>
