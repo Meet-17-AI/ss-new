@@ -23,6 +23,7 @@ interface Client {
   booking_mode?: string;
   session_count: number;
   therapists: Therapist[];
+  client_type?: string;
   latest_booking_date?: string;
   booking_link_sent_at?: string;
   last_session_date?: string;
@@ -39,6 +40,7 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [activeTab, setActiveTab] = useState<'all' | 'nri'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive' | 'drop-out'>('all');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [showBookingLinkConfirmModal, setShowBookingLinkConfirmModal] = useState(false);
@@ -270,6 +272,9 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
     );
     if (!matchesSearch) return false;
 
+    if (activeTab === 'nri' && client.client_type !== 'NRI') {
+      return false;
+    }
 
     if (statusFilter !== 'all') {
       if (client.session_count === 0) return false;
@@ -536,15 +541,28 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-6 mb-6">
+      <div className="flex gap-6 mb-6 border-b">
         <button
           onClick={() => {
-            setStatusFilter('all');
+            setActiveTab('all');
             setCurrentPage(1);
           }}
-          className="pb-2 font-medium text-teal-700 border-b-2 border-teal-700"
+          className={`pb-2 font-medium text-sm transition-colors ${
+            activeTab === 'all' ? 'text-teal-700 border-b-2 border-teal-700' : 'text-gray-500 hover:text-gray-700'
+          }`}
         >
-          Clients
+          All Clients
+        </button>
+        <button
+          onClick={() => {
+            setActiveTab('nri');
+            setCurrentPage(1);
+          }}
+          className={`pb-2 font-medium text-sm transition-colors ${
+            activeTab === 'nri' ? 'text-teal-700 border-b-2 border-teal-700' : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          NRI Clients
         </button>
       </div>
 
@@ -712,6 +730,11 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
                                     {formatClientName(client.invitee_name)}
                                   </button>
                                 </span>
+                                {client.client_type === 'NRI' && (
+                                  <span className="bg-purple-100 text-purple-700 text-xs font-semibold px-2 py-0.5 rounded border border-purple-200">
+                                    NRI
+                                  </span>
+                                )}
                               </div>
                             )}
                           </td>
@@ -880,12 +903,12 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
       {editingClient && (
         <EditClientContactModal
           isOpen={!!editingClient}
-          client={{ name: editingClient.invitee_name, phone: editingClient.invitee_phone, email: editingClient.invitee_email }}
+          client={{ name: editingClient.invitee_name, phone: editingClient.invitee_phone, email: editingClient.invitee_email, client_type: editingClient.client_type || 'Indian' }}
           onClose={() => setEditingClient(null)}
           onSaved={(updated) => {
             setClients(prev => prev.map(c =>
               c.invitee_phone === editingClient.invitee_phone && c.invitee_email === editingClient.invitee_email
-                ? { ...c, invitee_name: updated.name, invitee_phone: updated.phone, invitee_email: updated.email }
+                ? { ...c, invitee_name: updated.name, invitee_phone: updated.phone, invitee_email: updated.email, client_type: updated.client_type }
                 : c
             ));
             setEditingClient(null);

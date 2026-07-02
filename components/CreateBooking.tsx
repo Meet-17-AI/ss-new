@@ -55,6 +55,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   const [allowedTherapists, setAllowedTherapists] = useState<string[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [hasRestrictions, setHasRestrictions] = useState(false);
+  const [paymentMode, setPaymentMode] = useState<'link' | 'qr' | 'cash' | ''>('');
+  const [customAmount, setCustomAmount] = useState<string>('');
+  const [currency, setCurrency] = useState<string>('INR');
+  const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
+  const [clientType, setClientType] = useState<string>('Indian');
 
   const timezones = [
     { name: 'Asia/Kolkata', offset: 'GMT+5:30' },
@@ -420,6 +425,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
           const modeString = data[0]['mode'] || '';
           
           setSessionCharges(charges || 0);
+          setCustomAmount((charges || 0).toString());
           
           const modes: string[] = [];
           try {
@@ -477,13 +483,17 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       } else {
         setAvailableSlots([]);
         setSessionCharges(0);
+        setCustomAmount('0');
         setAvailableModes([]);
+        setScreenshotFile(null);
       }
     } catch (error) {
       console.error('Error:', error);
       setAvailableSlots([]);
       setSessionCharges(0);
+      setCustomAmount('0');
       setAvailableModes([]);
+      setScreenshotFile(null);
     } finally {
       setIsLoadingSlots(false);
     }
@@ -499,7 +509,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
     setIsSubmitting(true);
     
     // Check if we should generate a payment link
-    if (!isFreeConsultation && sessionCharges > 0 && isDirectBooking) {
+    if (!isFreeConsultation && paymentMode === 'link') {
       const linkPayload = {
         therapistName: selectedTherapist,
         clientName,
@@ -508,7 +518,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
         date: selectedDate,
         time: selectedSlot,
         serviceType: selectedTherapy,
-        amount: sessionCharges
+        amount: Number(customAmount) || sessionCharges
       };
 
       try {
@@ -534,6 +544,29 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       return;
     }
 
+    let uploadedScreenshotUrl = null;
+    if (screenshotFile) {
+      try {
+        const formData = new FormData();
+        formData.append('file', screenshotFile);
+        
+        const uploadRes = await fetch('/api/upload-file', {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (uploadRes.ok) {
+          const uploadData = await uploadRes.json();
+          if (uploadData.success && uploadData.fileUrl) {
+            uploadedScreenshotUrl = uploadData.fileUrl;
+          }
+        }
+      } catch (err) {
+        console.error('Failed to upload screenshot:', err);
+        // Continue with booking even if screenshot upload fails, as it's optional
+      }
+    }
+
     const payload = {
       therapyName: isFreeConsultation ? 'Free Consultation' : selectedTherapy,
       therapistName: isFreeConsultation ? 'SafeStories' : selectedTherapist,
@@ -546,7 +579,12 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       sessionMode,
       timezone: selectedTimezone,
       skipPayment: true,
-      isAdmin: true
+      isAdmin: true,
+      paymentMode: !isFreeConsultation ? paymentMode : null,
+      amount: !isFreeConsultation ? (Number(customAmount) || sessionCharges) : 0,
+      currency: !isFreeConsultation ? currency : 'INR',
+      paymentScreenshot: uploadedScreenshotUrl,
+      clientType
     };
     
     try {
@@ -575,7 +613,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   };
 
   const isPaymentLinkEnabled = () => {
-    return selectedSlot && clientName.trim() && clientEmail.trim() && clientWhatsApp.trim();
+    const baseValid = selectedSlot && clientName.trim() && clientEmail.trim() && clientWhatsApp.trim();
+    if (!isFreeConsultation) {
+      return baseValid && paymentMode !== '' && customAmount.trim() !== '';
+    }
+    return baseValid;
   };
 
   return (
@@ -752,8 +794,27 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
           </div>
 
           {/* Client Details */}
-          <div className="grid grid-cols-2 gap-6">
-            <div className="relative" ref={clientDropdownRef}>
+          <div className="flex gap-4 mb-6 relative">
+            <div className="w-1/3">
+              <label className="block text-sm font-medium mb-2">
+                Client Type
+              </label>
+              <div className="relative">
+                <select
+                  value={clientType}
+                  onChange={(e) => setClientType(e.target.value)}
+                  className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white pr-8"
+                >
+                  <option value="Indian">Indian</option>
+                  <option value="NRI">NRI</option>
+                </select>
+                <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
+                  ▼
+                </div>
+              </div>
+            </div>
+            
+            <div className="w-2/3" ref={clientDropdownRef}>
               <label className="block text-sm font-medium mb-2">
                 Client Name<span className="text-red-500">*</span>
               </label>
@@ -832,7 +893,9 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 </div>
               )}
             </div>
+          </div>
 
+          <div className="grid grid-cols-2 gap-6">
             {/* Client Booking History Info */}
             {clientBookingHistory && (
               <div className="col-span-2 rounded-lg p-3 text-sm" style={{ backgroundColor: '#21615D', borderColor: '#21615D' }}>
@@ -930,18 +993,91 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
 
           {/* Grand Total and Payment */}
           <div className="pt-6 border-t">
-            {!isFreeConsultation && sessionCharges > 0 && (
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-lg font-medium text-gray-600">Session Charges:</span>
-                <span className="text-2xl font-bold">Rs. {sessionCharges}/-</span>
+            {!isFreeConsultation && (
+              <div className="flex flex-col gap-6 mb-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div>
+                    <label className="block text-sm font-medium mb-2">
+                      Payment Method<span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={paymentMode}
+                        onChange={(e) => setPaymentMode(e.target.value as any)}
+                        className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white pr-10"
+                      >
+                        <option value="">Select Payment Method</option>
+                        <option value="qr">QR (Paid)</option>
+                        <option value="cash">Cash (Paid)</option>
+                      </select>
+                      <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
+                        ▼
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex gap-4">
+                    <div className="w-1/3">
+                      <label className="block text-sm font-medium mb-2">
+                        Currency
+                      </label>
+                      <div className="relative">
+                        <select
+                          value={currency}
+                          onChange={(e) => setCurrency(e.target.value)}
+                          className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white pr-8"
+                        >
+                          <option value="INR">₹ INR</option>
+                          <option value="USD">$ USD</option>
+                          <option value="EUR">€ EUR</option>
+                        </select>
+                        <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
+                          ▼
+                        </div>
+                      </div>
+                    </div>
+                    <div className="w-2/3">
+                      <label className="block text-sm font-medium mb-2">
+                        Amount<span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        value={customAmount}
+                        onChange={(e) => setCustomAmount(e.target.value)}
+                        placeholder={sessionCharges > 0 ? `e.g. ${sessionCharges}` : "Enter amount"}
+                        className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {paymentMode === 'qr' && (
+                  <div>
+                    <label className="block text-sm font-medium mb-2">
+                      Upload Payment screenshot here <span className="text-gray-400 text-xs">(Optional)</span>
+                    </label>
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      onChange={(e) => setScreenshotFile(e.target.files?.[0] || null)}
+                      className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
+                    />
+                  </div>
+                )}
               </div>
             )}
+            
             <button
               onClick={handleSendPaymentLink}
               disabled={!isPaymentLinkEnabled() || isSubmitting}
               className="w-full bg-teal-700 text-white px-6 py-3 rounded-lg hover:bg-teal-800 font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
-              {isSubmitting ? 'Processing...' : (!isFreeConsultation && sessionCharges > 0 && isDirectBooking ? 'Generate Payment Link' : 'Book Session')}
+              {isSubmitting 
+                ? 'Processing...' 
+                : (!isFreeConsultation
+                    ? (paymentMode === 'link' ? 'Generate Payment Link' : (paymentMode ? 'Book & Record Payment' : 'Select Payment Mode')) 
+                    : 'Book Session'
+                  )
+              }
             </button>
           </div>
         </div>

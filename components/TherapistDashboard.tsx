@@ -3,8 +3,8 @@ import { LayoutDashboard, Users, Calendar, LogOut, PieChart, ChevronUp, ChevronD
 import { Logo } from './Logo';
 import { Notifications } from './Notifications';
 import { Toast } from './Toast';
-import { useAuth } from '../context/AuthContext';
 import { Loader } from './Loader';
+import { EditClientContactModal } from './EditClientContactModal';
 import { TherapistCalendar } from './TherapistCalendar';
 import { EditProfile } from './EditProfile';
 import { ChangePassword } from './ChangePassword';
@@ -40,9 +40,9 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   const { socket } = useSocket();
   const navigate = useNavigate();
   const location = useLocation();
-  const [searchParams, setSearchParams] = useSearchParams();
   const activeView = location.pathname.split('/')[2] || 'dashboard';
   const setActiveView = (view: string) => navigate(`/therapist/${view}`);
+  const [activeTab, setActiveTab] = useState<'all' | 'nri'>('all');
   
   // Use state instead of useUrlState
   const [activeAppointmentTab, setActiveAppointmentTab] = useState<string>('all');
@@ -55,6 +55,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
+  const [editingClient, setEditingClient] = useState<any>(null);
 
   const generateMonthOptions = () => {
     const months = [];
@@ -1375,6 +1376,11 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
       (client.client_email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (client.client_phone || '').includes(searchTerm);
 
+    // Tab filter
+    if (activeTab === 'nri' && client.client_type !== 'NRI') {
+      return false;
+    }
+
     // Status filter
     const clientStatus = getClientStatus(client);
     const matchesStatus = clientStatusFilter === 'all' || clientStatus === clientStatusFilter;
@@ -1412,6 +1418,32 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                 <h1 className="text-3xl font-bold mb-1">My Clients</h1>
                 <p className="text-gray-600">View Client Details, Sessions and more...</p>
               </div>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex gap-6 mb-6 border-b">
+              <button
+                onClick={() => {
+                  setActiveTab('all');
+                  setCurrentPage(1);
+                }}
+                className={`pb-2 font-medium text-sm transition-colors ${
+                  activeTab === 'all' ? 'text-teal-700 border-b-2 border-teal-700' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                All Clients
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab('nri');
+                  setCurrentPage(1);
+                }}
+                className={`pb-2 font-medium text-sm transition-colors ${
+                  activeTab === 'nri' ? 'text-teal-700 border-b-2 border-teal-700' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                NRI Clients
+              </button>
             </div>
 
             {/* Search Bar, Export and Bulk Actions */}
@@ -1554,17 +1586,22 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                                 />
                               </td>
                               <td className="px-6 py-4 text-sm">
-                                <span
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setActiveAppointmentTab('all');
-                                    fetchClientDetails(client);
-                                    setSelectedClient(client);
-                                  }}
-                                  className="text-teal-700 hover:underline cursor-pointer"
-                                >
-                                  {formatClientName(client.client_name)}
-                                </span>
+                                  <span
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setActiveAppointmentTab('all');
+                                      fetchClientDetails(client);
+                                      setSelectedClient(client);
+                                    }}
+                                    className="text-teal-700 hover:underline cursor-pointer"
+                                  >
+                                    {formatClientName(client.client_name)}
+                                  </span>
+                                  {client.client_type === 'NRI' && (
+                                    <span className="bg-purple-100 text-purple-700 text-xs font-semibold px-2 py-0.5 rounded border border-purple-200 ml-2">
+                                      NRI
+                                    </span>
+                                  )}
                               </td>
                               <td className="px-6 py-4 text-sm">{client.booking_resource_name || 'N/A'}</td>
                               <td className="px-6 py-4 text-sm">{formatMode(client.booking_mode)}</td>
@@ -2484,6 +2521,11 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
               </button>
               <div className="flex items-center gap-3">
                 <h1 className="text-3xl font-bold">{formatClientName(selectedClient.client_name)}</h1>
+                {selectedClient.client_type === 'NRI' && (
+                  <span className="bg-purple-100 text-purple-700 text-xs font-semibold px-2 py-0.5 rounded border border-purple-200">
+                    NRI
+                  </span>
+                )}
                 <span
                   className="px-3 py-1 rounded-full text-sm font-medium text-white"
                   style={{
@@ -2492,6 +2534,13 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                 >
                   {getClientStatus(selectedClient) === 'active' ? 'Active' : 'Inactive'}
                 </span>
+                <button
+                  onClick={() => setEditingClient(selectedClient)}
+                  className="p-1.5 hover:bg-gray-200 rounded transition-colors text-gray-500 ml-auto"
+                  title="Edit Client"
+                >
+                  <Edit size={18} />
+                </button>
               </div>
             </div>
 
@@ -4167,6 +4216,33 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           </div>
         )}
       </div>
+      
+      {editingClient && (
+        <EditClientContactModal
+          isOpen={!!editingClient}
+          client={{ name: editingClient.client_name, phone: editingClient.client_phone || '', email: editingClient.client_email || '', client_type: editingClient.client_type || 'Indian' }}
+          onClose={() => setEditingClient(null)}
+          onSaved={(updated) => {
+            const updatedClient = {
+              ...editingClient,
+              client_name: updated.name,
+              client_phone: updated.phone,
+              client_email: updated.email,
+              client_type: updated.client_type
+            };
+            setClients(prev => prev.map(c =>
+              c.client_phone === editingClient.client_phone && c.client_email === editingClient.client_email
+                ? updatedClient
+                : c
+            ));
+            if (selectedClient && selectedClient.client_phone === editingClient.client_phone) {
+              setSelectedClient(updatedClient);
+            }
+            setEditingClient(null);
+          }}
+          adminUser={user}
+        />
+      )}
     </div>
   );
 };

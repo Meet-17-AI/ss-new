@@ -4,9 +4,9 @@ import { Toast } from './Toast';
 
 interface EditClientContactModalProps {
   isOpen: boolean;
-  client: { name: string; phone: string; email: string };
+  client: { name: string; phone: string; email: string; client_type: string };
   onClose: () => void;
-  onSaved: (updated: { name: string; phone: string; email: string }) => void;
+  onSaved: (updated: { name: string; phone: string; email: string; client_type: string }) => void;
   adminUser?: any;
 }
 
@@ -16,6 +16,7 @@ export const EditClientContactModal: React.FC<EditClientContactModalProps> = ({
   const [name, setName] = useState(client.name);
   const [phone, setPhone] = useState(client.phone);
   const [email, setEmail] = useState(client.email);
+  const [clientType, setClientType] = useState(client.client_type || 'Indian');
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -24,7 +25,8 @@ export const EditClientContactModal: React.FC<EditClientContactModalProps> = ({
     setName(client.name);
     setPhone(client.phone);
     setEmail(client.email);
-  }, [client.name, client.phone, client.email]);
+    setClientType(client.client_type || 'Indian');
+  }, [client.name, client.phone, client.email, client.client_type]);
 
   if (!isOpen) return null;
 
@@ -44,13 +46,14 @@ export const EditClientContactModal: React.FC<EditClientContactModalProps> = ({
           new_name: name !== client.name ? name : undefined,
           new_phone: phone !== client.phone ? phone : undefined,
           new_email: email !== client.email ? email : undefined,
+          new_client_type: clientType !== client.client_type ? clientType : undefined,
           _audit_user: { id: adminUser?.id, name: adminUser?.full_name || adminUser?.username || 'Admin' }
         })
       });
       if (res.ok) {
         setToast({ message: 'Client updated successfully!', type: 'success' });
         setTimeout(() => {
-          onSaved({ name, phone, email });
+          onSaved({ name, phone, email, client_type: clientType });
           onClose();
         }, 800);
       } else {
@@ -99,6 +102,17 @@ export const EditClientContactModal: React.FC<EditClientContactModalProps> = ({
               onChange={e => setEmail(e.target.value)}
               className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm"
             />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">Client Type</label>
+            <select
+              value={clientType}
+              onChange={e => setClientType(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm bg-white"
+            >
+              <option value="Indian">Indian</option>
+              <option value="NRI">NRI</option>
+            </select>
           </div>
         </div>
 

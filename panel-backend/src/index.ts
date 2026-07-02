@@ -2795,7 +2795,7 @@ app.get('/api/dashboard/bookings', async (req, res) => {
 
 // Update client contact info across all bookings
 app.patch('/api/clients/update-contact', async (req: any, res: any) => {
-  const { old_phone, old_email, new_name, new_phone, new_email, _audit_user } = req.body;
+  const { old_phone, old_email, new_name, new_phone, new_email, new_client_type, _audit_user } = req.body;
 
   if (!old_phone && !old_email) {
     return res.status(400).json({ error: 'Must provide old_phone or old_email to identify client' });
@@ -2817,6 +2817,7 @@ app.patch('/api/clients/update-contact', async (req: any, res: any) => {
     if (new_name !== undefined) { setClauses.push(`invitee_name = $${idx++}`); values.push(new_name); }
     if (new_phone !== undefined) { setClauses.push(`invitee_phone = $${idx++}`); values.push(new_phone); }
     if (new_email !== undefined) { setClauses.push(`invitee_email = $${idx++}`); values.push(new_email); }
+    if (new_client_type !== undefined) { setClauses.push(`client_type = $${idx++}`); values.push(new_client_type); }
 
     if (setClauses.length === 0) {
       return res.status(400).json({ error: 'No fields to update' });
@@ -2890,7 +2891,8 @@ app.get('/api/clients', async (req, res) => {
         END as session_count,
         invitee_created_at as created_at,
         booking_start_at as latest_booking_date,
-        booking_invitee_time
+        booking_invitee_time,
+        client_type
       FROM bookings
       ORDER BY invitee_created_at DESC
     `);
@@ -2949,7 +2951,8 @@ app.get('/api/clients', async (req, res) => {
           latest_booking_date: null,
           last_session_date: null,
           last_session_date_raw: null,
-          therapists: []
+          therapists: [],
+          client_type: row.client_type || 'Indian'
         });
       }
 
@@ -2963,6 +2966,10 @@ app.get('/api/clients', async (req, res) => {
             client.invitee_email = row.invitee_email;
           }
         }
+      }
+
+      if (row.client_type && row.client_type !== 'Indian') {
+        client.client_type = row.client_type;
       }
 
       // Track last session date and mode for past sessions (excluding cancelled and no_show)
@@ -3010,6 +3017,8 @@ app.get('/api/clients', async (req, res) => {
 
         if (existing) {
           existing.session_count += parseInt(row.session_count) || 0;
+          if (!existing.invitee_name && row.invitee_name) existing.invitee_name = row.invitee_name;
+          if (!existing.invitee_phone && row.invitee_phone) existing.invitee_phone = row.invitee_phone;
         } else {
           client.therapists.push({
             invitee_name: row.invitee_name,
@@ -6166,6 +6175,47 @@ app.post('/api/fetch-slots', async (req, res) => {
       } catch (err) {
         console.error('Error fetching bookings to filter slots:', err);
       }
+
+      // Google Calendar Free/Busy Filter
+      try {
+        const tRes = await pool.query('SELECT google_refresh_token, email, name FROM therapists WHERE therapist_id = $1', [therapistId]);
+        if (tRes.rows.length > 0 && tRes.rows[0].google_refresh_token) {
+          const therapist = tRes.rows[0];
+          // Since getAuthenticatedClient expects an object with google_refresh_token, we can pass therapist directly.
+          // Note: Ensure google API requires are available in scope.
+          const { google } = require('googleapis');
+          const oauth2ClientFb = await getAuthenticatedClient(therapist);
+          const calendarFb = google.calendar({ version: 'v3', auth: oauth2ClientFb });
+          
+          const timeMin = new Date(`${daysToCheck[0]}T00:00:00+05:30`);
+          const timeMax = new Date(`${daysToCheck[2]}T23:59:59+05:30`);
+          
+          const fb = await calendarFb.freebusy.query({
+            requestBody: {
+              timeMin: timeMin.toISOString(),
+              timeMax: timeMax.toISOString(),
+              items: [{ id: 'primary' }]
+            }
+          });
+          
+          const busyBlocks = fb.data.calendars?.primary?.busy || [];
+          if (busyBlocks.length > 0) {
+            availableSlots = availableSlots.filter(slot => {
+              const slotStart = slot.timestampMs;
+              const slotEnd = slotStart + 50 * 60000; // 50 mins duration
+              
+              return !busyBlocks.some((busy: any) => {
+                const busyStart = new Date(busy.start).getTime();
+                const busyEnd = new Date(busy.end).getTime();
+                // Check if slot overlaps with busy block
+                return slotStart < busyEnd && slotEnd > busyStart;
+              });
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching Google Calendar free/busy for slots:', err);
+      }
     }
 
     const realNow = new Date();
@@ -7287,8 +7337,8 @@ app.post('/api/create-booking', async (req, res) => {
         booking_invitee_time, booking_host_time, invitee_payment_amount, invitee_payment_currency,
         booking_status, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id, google_event_id,
-        payment_id, payment_status, invitee_payment_gateway, invitee_question
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)`,
+        payment_id, payment_status, invitee_payment_gateway, invitee_question, client_type
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)`,
       [
         booking_id,
         invitee_id,
@@ -7303,7 +7353,7 @@ app.post('/api/create-booking', async (req, res) => {
         inviteeTime,
         hostTime,
         payload.amount || payload.paymentDetails?.amount || 0,
-        'INR',
+        payload.currency || 'INR',
         'confirmed',
         publicBookingCheckinUrl,
         therapistName,
@@ -7313,11 +7363,32 @@ app.post('/api/create-booking', async (req, res) => {
         maskId,
         google_event_id,
         payload.payment_id || payload.razorpay_payment_id || null,
-        payload.payment_id ? 'Paid' : (payload.isFreeConsultation ? 'Free' : 'Pending'),
-        payload.payment_gateway || null,
-        payload.invitee_question || payload.notes || null
+        (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') ? 'Paid' : (payload.payment_id ? 'Paid' : (payload.isFreeConsultation ? 'Free' : 'Pending')),
+        (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') ? (payload.paymentMode === 'qr' ? 'QR' : 'Cash') : (payload.payment_gateway || null),
+        payload.invitee_question || payload.notes || null,
+        payload.clientType || 'Indian'
       ]
     );
+
+    // If payment was made directly (QR/Cash), record it in the payments table
+    if (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') {
+      const paymentAmount = payload.amount || payload.paymentDetails?.amount || 0;
+      await pool.query(
+        `INSERT INTO payments (
+          booking_id, invitee_name, invitee_email, amount, currency,
+          payment_gateway_name, payment_date, payment_screenshot
+        ) VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7)`,
+        [
+          booking_id,
+          payload.clientName || 'Unknown Client',
+          payload.clientEmail,
+          paymentAmount,
+          payload.currency || 'INR',
+          payload.paymentMode === 'qr' ? 'QR' : 'Cash',
+          payload.paymentScreenshot || null
+        ]
+      );
+    }
 
     // Keep this client's contact info up to date across their bookings (#8)
     await reconcileClientContact(payload.clientEmail, payload.clientWhatsApp);

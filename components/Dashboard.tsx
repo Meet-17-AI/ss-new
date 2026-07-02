@@ -190,6 +190,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
     }
   };
 
+  // Formats raw datetime string as "(Mon), 30/06/2026 - 4:30PM"
+  const formatSessionTiming = (timing: string | undefined | null) => {
+    if (!timing) return 'N/A';
+    const regex = /^(\w+),\s+([a-zA-Z]+)\s+(\d+)(?:st|nd|rd|th)?,\s+(\d+)\s+at\s+(.+?)\s+-/;
+    const match = timing.match(regex);
+    if (!match) return timing;
+    
+    const [ , dayFull, monthStr, dayNum, year, startTime ] = match;
+    const dayShort = dayFull.substring(0, 3);
+    const monthMap: Record<string, string> = {
+      'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04', 'May': '05', 'Jun': '06',
+      'Jul': '07', 'Aug': '08', 'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
+    };
+    const month = monthMap[monthStr] || '01';
+    const paddedDay = dayNum.padStart(2, '0');
+    const formattedStartTime = startTime.replace(/^0/, '').replace(/\s+/, '');
+    
+    return `(${dayShort}), ${paddedDay}/${month}/${year} - ${formattedStartTime}`;
+  };
+
   const copyBookingDetails = (booking: any) => {
     const details = `${booking.therapy_type}\n${booking.booking_start_at}\nTime zone: Asia/Kolkata\n${formatMode(booking.mode)} joining info${booking.booking_joining_link ? `\nVideo call link: ${booking.booking_joining_link}` : ''}`;
     navigator.clipboard.writeText(details).then(() => {
@@ -742,8 +762,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                     <tr>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Client Name</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Therapy Type</th>
-                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Mode</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Assigned Therapist</th>
+                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Mode</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Session Timings</th>
                     </tr>
                   </thead>
@@ -772,8 +792,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                               >
                                 {formatClientName(booking.client_name)}
                               </button>
+                              <div className="text-gray-500 text-xs mt-1">{booking.client_phone}</div>
+                              <div className="text-gray-500 text-xs">{booking.client_email}</div>
                             </td>
                             <td className="px-6 py-4">{booking.therapy_type}</td>
+                            <td className="px-6 py-4">{booking.therapist_name}</td>
                             <td className="px-6 py-4">
                               <div className="flex items-center gap-2">
                                 <span>{formatMode(booking.mode)}</span>
@@ -794,8 +817,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                                 )}
                               </div>
                             </td>
-                            <td className="px-6 py-4">{booking.therapist_name}</td>
-                            <td className="px-6 py-4">{booking.booking_start_at}</td>
+                            <td className="px-6 py-4">{formatSessionTiming(booking.booking_start_at)}</td>
                           </tr>
                           {selectedBookingIndex === index && user?.username !== 'Test' && (
                             <tr className="bg-gray-100">
