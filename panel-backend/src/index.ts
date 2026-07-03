@@ -3062,6 +3062,22 @@ app.get('/api/client-booking-history/:clientId', async (req, res) => {
   try {
     const clientId = req.params.clientId;
 
+    // First get the client's phone and email to find all their bookings
+    const clientRes = await pool.query(
+      `SELECT invitee_phone, invitee_email, invitee_name FROM bookings WHERE invitee_id = $1 LIMIT 1`,
+      [clientId]
+    );
+
+    let phone = null;
+    let email = null;
+    let clientName = '';
+
+    if (clientRes.rows.length > 0) {
+      phone = clientRes.rows[0].invitee_phone;
+      email = clientRes.rows[0].invitee_email;
+      clientName = clientRes.rows[0].invitee_name || '';
+    }
+
     const result = await pool.query(`
       SELECT
         DISTINCT
@@ -3071,15 +3087,15 @@ app.get('/api/client-booking-history/:clientId', async (req, res) => {
         booking_start_at,
         (booking_resource_name ILIKE '%free consultation%' OR booking_resource_name ILIKE '%pre-therapy%') as is_free_consultation
       FROM bookings
-      WHERE invitee_id = $1
+      WHERE (invitee_id = $1 OR (invitee_phone = $2 AND $2 IS NOT NULL) OR (invitee_email = $3 AND $3 IS NOT NULL))
         AND booking_status NOT IN ('cancelled', 'canceled', 'no_show', 'no show')
-      ORDER BY booking_start_at DESC
-    `, [clientId]);
+      ORDER BY booking_start_at DESC NULLS LAST
+    `, [clientId, phone, email]);
 
     if (result.rows.length === 0) {
       return res.json({
         clientId: clientId,
-        clientName: '',
+        clientName: clientName,
         therapies: [],
         therapists: [],
         modes: [],
@@ -3095,16 +3111,6 @@ app.get('/api/client-booking-history/:clientId', async (req, res) => {
 
     // Get most recent booking
     const lastBooking = result.rows[0];
-
-    // Fetch client name from the bookings table
-    const clientNameResult = await pool.query(`
-      SELECT DISTINCT invitee_name
-      FROM bookings
-      WHERE invitee_id = $1
-      LIMIT 1
-    `, [clientId]);
-
-    const clientName = clientNameResult.rows[0]?.invitee_name || '';
 
     res.json({
       clientId: clientId,
