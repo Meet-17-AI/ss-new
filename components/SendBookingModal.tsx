@@ -416,6 +416,7 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
     // Reset dropdowns before loading history
     setTherapyType('');
     setTherapistName('');
+    setIsFreeConsultation(false); // Clear free consultation checkbox when selecting a client
 
     // Fetch and restrict to client's booking history
     handleExistingClientSelect(client);
