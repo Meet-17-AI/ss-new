@@ -261,8 +261,13 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
 
       setClientBookingHistory(history);
 
-      // Always restrict and auto-select based on the client's last booking history
-      if (history.lastBooking && history.lastBooking.therapy && history.lastBooking.therapist) {
+      // Restrict and auto-select based on the client's last booking history, unless it was a Free Consultation
+      if (
+        history.lastBooking && 
+        history.lastBooking.therapy && 
+        history.lastBooking.therapist &&
+        history.lastBooking.therapy !== 'Free Consultation'
+      ) {
         // Show the last booking's therapy and therapist (not changeable)
         setAllowedTherapies([history.lastBooking.therapy]);
         setAllowedTherapists([history.lastBooking.therapist]);
