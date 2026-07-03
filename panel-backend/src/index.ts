@@ -12,7 +12,6 @@ import { startSessionRemindersCron } from './automations/cron';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from './lib/timezone';
-import { startDashboardApiBookingSync } from './dashboardApiBookingSync';
 import { uploadFile } from './lib/minio';
 import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendClientBookingCancellationEmail } from './lib/email';
 import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage } from './automations/index';
@@ -9909,7 +9908,6 @@ app.get('/api/webhook-api-logs/:id', async (req, res) => {
 httpServer.listen(PORT, async () => {
   console.log(`\nAPI server running on http://localhost:${PORT}`);
   await runStartupMigrations();
-  startDashboardApiBookingSync();
   startPaymentLinkExpiryCron();
 }).on('error', (err: any) => {
   if (err.code === 'EADDRINUSE') console.error('Port is in use.');
