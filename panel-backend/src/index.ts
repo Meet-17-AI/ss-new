@@ -64,6 +64,19 @@ const TIMESTAMP_COLUMN_MAP: Record<string, string> = {
   'closed': 'stage_closed_at',
 };
 
+// ==================== ENVIRONMENT VALIDATION ====================
+// Validate required environment variables at startup
+const requiredEnvVars = ['JWT_SECRET', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET'];
+const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
+
+if (missingEnvVars.length > 0) {
+  console.error(`\n❌ CRITICAL: Missing required environment variables:\n   ${missingEnvVars.join('\n   ')}\n`);
+  process.exit(1);
+}
+
+const JWT_SECRET = process.env.JWT_SECRET!;
+const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '10');
+
 const app = express();
 
 // Auto-migrate schema
@@ -76,9 +89,18 @@ const app = express();
   }
 })();
 
-// Secure CORS configuration
+// ==================== CORS CONFIGURATION ====================
+// Determine allowed origins from environment or defaults
+const getAllowedOrigins = () => {
+  if (process.env.ALLOWED_ORIGINS) {
+    return process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim());
+  }
+  // Default to localhost for development
+  return ['http://localhost:5174', 'http://localhost:3006', 'http://localhost:3004'];
+};
+
 const corsOptions = {
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:5174', 'http://localhost:3004'],
+  origin: getAllowedOrigins(),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -89,10 +111,6 @@ app.use(express.json({
     req.rawBody = buf;
   }
 }));
-
-// Environment variables
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
-const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '10');
 
 // Authentication middleware
 const authMiddleware = async (req: any, res: any, next: any) => {
@@ -6543,18 +6561,24 @@ async function reconcileClientContact(email?: string | null, phone?: string | nu
 }
 
 async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrderId, booking, payload, paymentInfo = null) {
-  // 3. Resolve therapist (for Google Calendar)
-  const therapistName = payload.therapistName || booking.booking_host_name || 'Unknown Therapist';
-  let therapistId = payload.therapistId || booking.therapist_id || null;
-  let therapist = null;
-  if (therapistName !== 'SafeStories' && therapistName !== 'Unknown Therapist') {
-    const qParam = therapistId ? therapistId : `%${therapistName.split(' ')[0]}%`;
-    const qStr = therapistId
-      ? 'SELECT * FROM therapists WHERE therapist_id = $1 LIMIT 1'
-      : 'SELECT * FROM therapists WHERE name ILIKE $1 LIMIT 1';
-    const tRes = await pool.query(qStr, [qParam]);
-    if (tRes.rows.length > 0) { therapist = tRes.rows[0]; therapistId = therapist.therapist_id; }
-  }
+  const client = await pool.connect();
+
+  try {
+    // Start transaction for all database updates
+    await client.query('BEGIN');
+
+    // 3. Resolve therapist (for Google Calendar)
+    const therapistName = payload.therapistName || booking.booking_host_name || 'Unknown Therapist';
+    let therapistId = payload.therapistId || booking.therapist_id || null;
+    let therapist = null;
+    if (therapistName !== 'SafeStories' && therapistName !== 'Unknown Therapist') {
+      const qParam = therapistId ? therapistId : `%${therapistName.split(' ')[0]}%`;
+      const qStr = therapistId
+        ? 'SELECT * FROM therapists WHERE therapist_id = $1 LIMIT 1'
+        : 'SELECT * FROM therapists WHERE name ILIKE $1 LIMIT 1';
+      const tRes = await client.query(qStr, [qParam]);
+      if (tRes.rows.length > 0) { therapist = tRes.rows[0]; therapistId = therapist.therapist_id; }
+    }
 
   // 4. Build time strings from stored booking dates
   const { randomUUID } = require('crypto');
@@ -6588,7 +6612,7 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
   }
   const inviteeTime = `${cDay}, ${cMonth} ${cDate}, ${cYear} at ${fmtClient(startAt)} - ${fmtClient(endAt)} ${tzShort}`;
 
-  const maskedEmailRes = await pool.query(
+  const maskedEmailRes = await client.query(
     'SELECT masked_email FROM masked_emails WHERE id = $1', [booking.mask_id]
   );
   const maskedEmail = maskedEmailRes.rows[0]?.masked_email || booking.invitee_email;
@@ -6644,7 +6668,8 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
     ? new Date(Number(paymentInfo.created_at) * 1000)
     : new Date();
 
-  await pool.query(
+  // Update bookings table (critical - must succeed or roll back)
+  await client.query(
     `UPDATE bookings
      SET booking_status = 'confirmed', payment_status = 'Paid',
          payment_id = $1, invitee_payment_gateway = 'Razorpay', razorpay_order_id = $2,
@@ -6657,13 +6682,13 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
      inviteeTime, hostTime, capturedAmount, bookingId]
   );
 
-  // Update payments table with deep Razorpay info if available
+  // Update payments table with deep Razorpay info if available (critical - must succeed or roll back)
   if (paymentInfo) {
     const pMode = paymentInfo.method || null;
     const utr = paymentInfo.acquirer_data?.utr || paymentInfo.acquirer_data?.rrn || null;
     const custEmail = paymentInfo.email || null;
     const custPhone = paymentInfo.contact || null;
-    await pool.query(
+    await client.query(
       `UPDATE payments
        SET razorpay_payment_id = $1,
            razorpay_order_id = COALESCE($2, razorpay_order_id),
@@ -6687,7 +6712,7 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
     );
   } else {
     // Basic update if no deep info
-    await pool.query(
+    await client.query(
       `UPDATE payments SET razorpay_payment_id = $1,
            razorpay_order_id = COALESCE($2, razorpay_order_id),
            amount = COALESCE(NULLIF($3, 0), amount),
@@ -6705,54 +6730,76 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
   const sessionMode = payload.sessionMode  || 'online';
   const checkinUrl  = booking.public_booking_checkin_url;
 
-  // 7. Send confirmation emails (best-effort)
-  try {
-    await sendClientBookingConfirmationEmail(clientEmail, {
-      clientName,
-      inviteeTimeStr: inviteeTime,
-      sessionName: therapyName,
-      dateStr: `${dayName}, ${monthName} ${dateNum}, ${yearNum}`,
-      timeRangeStr: `${startTimeStr} - ${endTimeStr}`,
-      duration: 50,
-      joinLink: hasCalendar ? meetLink : sessionMode,
-      checkinUrl,
-      calendarStartRaw: startAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z',
-      calendarEndRaw:   endAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
-    });
-    await pool.query(
-      `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at)
-       VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)`,
-      [bookingId, 'client_confirmation_email', clientEmail, 'success', JSON.stringify({ sent: true })]
-    );
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@safestories.in';
-    await sendAdminBookingConfirmationEmail(adminEmail, {
-      clientName, clientPhone, clientEmail,
-      sessionName: therapyName, sessionTiming: hostTime, sessionMode: sessionMode,
-      therapistName, therapistEmail: therapist?.contact_info || 'Not available'
-    });
-  } catch (emailErr) {
-    console.error('[verify-payment] Email send failed:', emailErr);
+    // 7. Send confirmation emails and log (best-effort, but log within transaction)
+    try {
+      await sendClientBookingConfirmationEmail(clientEmail, {
+        clientName,
+        inviteeTimeStr: inviteeTime,
+        sessionName: therapyName,
+        dateStr: `${dayName}, ${monthName} ${dateNum}, ${yearNum}`,
+        timeRangeStr: `${startTimeStr} - ${endTimeStr}`,
+        duration: 50,
+        joinLink: hasCalendar ? meetLink : sessionMode,
+        checkinUrl,
+        calendarStartRaw: startAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z',
+        calendarEndRaw:   endAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
+      });
+      await client.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at)
+         VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)`,
+        [bookingId, 'client_confirmation_email', clientEmail, 'success', JSON.stringify({ sent: true })]
+      );
+      const adminEmail = process.env.ADMIN_EMAIL || 'admin@safestories.in';
+      await sendAdminBookingConfirmationEmail(adminEmail, {
+        clientName, clientPhone, clientEmail,
+        sessionName: therapyName, sessionTiming: hostTime, sessionMode: sessionMode,
+        therapistName, therapistEmail: therapist?.contact_info || 'Not available'
+      });
+    } catch (emailErr) {
+      console.error('[verify-payment] Email send failed:', emailErr);
+    }
+
+    // 8. Send WhatsApp confirmation and log (best-effort, but log within transaction)
+    try {
+      const { sendBookingConfirmedClient } = await import('./automations/whatsapp.js');
+      await sendBookingConfirmedClient(bookingId, clientPhone, clientName, therapyName, inviteeTime, checkinUrl);
+      await client.query(
+        `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at)
+         VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)`,
+        [bookingId, 'client_confirmation_whatsapp', clientPhone, 'success', JSON.stringify({ sent: true })]
+      );
+    } catch (waErr: any) {
+      console.error('[verify-payment] WhatsApp send failed:', waErr?.message || waErr);
+      try {
+        await client.query(
+          `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at)
+           VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)`,
+          [bookingId, 'client_confirmation_whatsapp', clientPhone, 'failed', waErr?.message || String(waErr)]
+        );
+      } catch (logErr) {
+        console.error('[verify-payment] Failed to log WhatsApp error:', logErr);
+      }
+    }
+
+    // Commit transaction if all database operations succeed
+    await client.query('COMMIT');
+    console.log(`[verify-payment] ✅ Database transaction committed for booking ${bookingId}`);
+
+  } catch (txErr) {
+    // Rollback on any error
+    try {
+      await client.query('ROLLBACK');
+      console.error(`[verify-payment] ❌ Transaction rolled back for booking ${bookingId}:`, txErr);
+    } catch (rollbackErr) {
+      console.error(`[verify-payment] ❌ Rollback failed:`, rollbackErr);
+    }
+    throw txErr;
+  } finally {
+    // Always release the client back to the pool
+    client.release();
   }
 
-  // 8. Send WhatsApp confirmation (best-effort)
-  try {
-    const { sendBookingConfirmedClient } = await import('./automations/whatsapp.js');
-    await sendBookingConfirmedClient(bookingId, clientPhone, clientName, therapyName, inviteeTime, checkinUrl);
-    await pool.query(
-      `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at)
-       VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)`,
-      [bookingId, 'client_confirmation_whatsapp', clientPhone, 'success', JSON.stringify({ sent: true })]
-    );
-  } catch (waErr: any) {
-    console.error('[verify-payment] WhatsApp send failed:', waErr?.message || waErr);
-    await pool.query(
-      `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, error_message, created_at)
-       VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)`,
-      [bookingId, 'client_confirmation_whatsapp', clientPhone, 'failed', waErr?.message || String(waErr)]
-    ).catch(() => {});
-  }
-
-  // 9. Internal new-booking webhook for CRM pipeline movement
+  // 9. Internal new-booking webhook for CRM pipeline movement (outside transaction, best-effort)
   try {
     const port = process.env.PORT || 3002;
     await fetch(`http://localhost:${port}/api/webhooks/new-booking`, {
@@ -9905,12 +9952,85 @@ app.get('/api/webhook-api-logs/:id', async (req, res) => {
 
 // ==================== END AUTOMATION LOGS ENDPOINTS ====================
 
+// ==================== GLOBAL ERROR HANDLING ====================
+// Catch unhandled promise rejections
+process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
+  console.error('[CRITICAL] Unhandled Promise Rejection:', reason);
+  console.error('Promise:', promise);
+});
+
+// Catch uncaught exceptions
+process.on('uncaughtException', (error: Error) => {
+  console.error('[CRITICAL] Uncaught Exception:', error);
+  // Attempt graceful shutdown
+  process.exit(1);
+});
+
+// Global error middleware (must be last)
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error('[ERROR] Express Error Handler:', {
+    message: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+    ip: req.ip
+  });
+
+  // Don't expose error details in production
+  const isDevelopment = process.env.NODE_ENV !== 'production';
+  const errorResponse = {
+    error: 'Internal Server Error',
+    ...(isDevelopment && { details: err.message })
+  };
+
+  res.status(err.status || 500).json(errorResponse);
+});
+
+// ==================== GRACEFUL SHUTDOWN ====================
+let isShuttingDown = false;
+
+const gracefulShutdown = async (signal: string) => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  console.log(`\n[SHUTDOWN] ${signal} received. Shutting down gracefully...`);
+
+  httpServer.close(async () => {
+    console.log('[SHUTDOWN] HTTP server closed');
+
+    try {
+      // Close database pool
+      await pool.end();
+      console.log('[SHUTDOWN] Database pool closed');
+    } catch (err) {
+      console.error('[SHUTDOWN] Error closing database pool:', err);
+    }
+
+    console.log('[SHUTDOWN] ✅ Graceful shutdown complete');
+    process.exit(0);
+  });
+
+  // Force shutdown after 30 seconds
+  setTimeout(() => {
+    console.error('[SHUTDOWN] ❌ Forced shutdown after 30 seconds');
+    process.exit(1);
+  }, 30000);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// ==================== SERVER STARTUP ====================
 httpServer.listen(PORT, async () => {
   console.log(`\nAPI server running on http://localhost:${PORT}`);
+  console.log(`Allowed CORS origins: ${getAllowedOrigins().join(', ')}`);
   await runStartupMigrations();
   startPaymentLinkExpiryCron();
 }).on('error', (err: any) => {
-  if (err.code === 'EADDRINUSE') console.error('Port is in use.');
-  else console.error('Server error', err);
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[ERROR] Port ${PORT} is already in use. Please use a different port or kill the process using this port.`);
+  } else {
+    console.error('[ERROR] Server failed to start:', err);
+  }
   process.exit(1);
 });

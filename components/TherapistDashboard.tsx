@@ -17,7 +17,6 @@ import { FreeConsultationDetail } from './FreeConsultationDetail';
 import { CompleteProfileModal } from './CompleteProfileModal';
 import { ProfileUnderReviewBanner } from './ProfileUnderReviewBanner';
 import { EmptyStateCard } from './EmptyStateCard';
-import { CaseHistoryTab } from './CaseHistoryTab';
 import { SendBookingModal } from './SendBookingModal';
 import { useUrlState } from '../hooks/useUrlState';
 import Resources from './Resources';
