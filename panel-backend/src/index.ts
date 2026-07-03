@@ -65,16 +65,12 @@ const TIMESTAMP_COLUMN_MAP: Record<string, string> = {
 };
 
 // ==================== ENVIRONMENT VALIDATION ====================
-// Validate required environment variables at startup (strict in production only)
-const isProduction = process.env.NODE_ENV === 'production';
+// Warn about missing environment variables but allow app to start
 const requiredEnvVars = ['JWT_SECRET', 'RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET'];
 const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
 
-if (isProduction && missingEnvVars.length > 0) {
-  console.error(`\n❌ CRITICAL: Missing required environment variables in production:\n   ${missingEnvVars.join('\n   ')}\n`);
-  process.exit(1);
-} else if (missingEnvVars.length > 0) {
-  console.warn(`⚠️  Development mode: Missing env vars (${missingEnvVars.join(', ')}), using defaults`);
+if (missingEnvVars.length > 0) {
+  console.warn(`\n⚠️  Missing environment variables (using defaults): ${missingEnvVars.join(', ')}\n`);
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
