@@ -6501,7 +6501,7 @@ httpServer.listen(PORT, () => {
   else console.error('Server error', err);
   process.exit(1);
 });
-\n
+
 // Direct SOS Alert via WhatsApp and Email
 app.post('/api/send-sos-alert', async (req, res) => {
   try {
