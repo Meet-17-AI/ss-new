@@ -363,18 +363,27 @@ export const SendBookingModal: React.FC<SendBookingModalProps> = ({ isOpen, onCl
 
       setClientBookingHistory(history);
 
-      // Always restrict and auto-select based on the client's last booking history
+      // Only restrict if previous booking is NOT a free consultation
       if (history.lastBooking && history.lastBooking.therapy && history.lastBooking.therapist) {
-        // Show the last booking's therapy and therapist (not changeable)
-        setAllowedTherapies([history.lastBooking.therapy]);
-        setAllowedTherapists([history.lastBooking.therapist]);
-        setHasRestrictions(true);
+        const isFreeConsult = history.lastBooking.therapy?.toLowerCase().includes('free consultation');
 
-        // Auto-select from last booking
-        setTherapyType(history.lastBooking.therapy);
-        setTherapistName(history.lastBooking.therapist);
+        if (isFreeConsult) {
+          // Free consultation allows selection of other therapies and therapists
+          setAllowedTherapies([]);
+          setAllowedTherapists([]);
+          setHasRestrictions(false);
+        } else {
+          // Restrict to the last booking's therapy and therapist
+          setAllowedTherapies([history.lastBooking.therapy]);
+          setAllowedTherapists([history.lastBooking.therapist]);
+          setHasRestrictions(true);
+
+          // Auto-select from last booking
+          setTherapyType(history.lastBooking.therapy);
+          setTherapistName(history.lastBooking.therapist);
+        }
       } else {
-        // Free consultation or no booking history - allow all selections
+        // No booking history - allow all selections
         setAllowedTherapies([]);
         setAllowedTherapists([]);
         setHasRestrictions(false);
