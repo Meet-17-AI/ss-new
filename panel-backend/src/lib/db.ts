@@ -18,7 +18,7 @@ const pool = new Pool({
   database: process.env.PGDATABASE,
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
-  max: 1, // Limit connections for serverless
+  max: 10, // Increased to 10 to allow concurrent API requests and background jobs
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,

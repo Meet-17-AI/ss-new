@@ -8,39 +8,45 @@ export async function startDashboardApiBookingSync() {
       const pendingBookings = await pool.query(
         `SELECT id, booking_id, created_at 
          FROM dashboard_api_booking 
-         WHERE booking_status = 'waiting for payment'`
+         WHERE booking_status = 'waiting for payment'
+         LIMIT 100` // Process in batches to avoid overwhelming the database
       );
 
-      await Promise.all(pendingBookings.rows.map(async (booking) => {
-        const { id, booking_id, created_at } = booking;
-        const now = new Date();
-        const createdTime = new Date(created_at);
-        const timeDiffMinutes = (now.getTime() - createdTime.getTime()) / (1000 * 60);
+      // Execute sequentially to prevent database connection pool exhaustion
+      for (const booking of pendingBookings.rows) {
+        try {
+          const { id, booking_id, created_at } = booking;
+          const now = new Date();
+          const createdTime = new Date(created_at);
+          const timeDiffMinutes = (now.getTime() - createdTime.getTime()) / (1000 * 60);
 
-        const bookingExists = await pool.query(
-          'SELECT booking_id, booking_status FROM bookings WHERE booking_id = $1',
-          [booking_id]
-        );
+          const bookingExists = await pool.query(
+            'SELECT booking_id, booking_status FROM bookings WHERE booking_id = $1',
+            [booking_id]
+          );
 
-        if (bookingExists.rows.length > 0) {
-          const bookingStatus = bookingExists.rows[0].booking_status;
-          await pool.query(
-            `UPDATE dashboard_api_booking 
-             SET booking_status = $1, payment_status = 'Completed' 
-             WHERE id = $2`,
-            [bookingStatus, id]
-          );
-          console.log(`✅ Booking ${booking_id} → Completed (${bookingStatus})`);
-        } else if (timeDiffMinutes > 30) {
-          await pool.query(
-            `UPDATE dashboard_api_booking 
-             SET booking_status = 'Failed', payment_status = 'Failed' 
-             WHERE id = $1`,
-            [id]
-          );
-          console.log(`❌ Booking ${booking_id} → Failed (timeout)`);
+          if (bookingExists.rows.length > 0) {
+            const bookingStatus = bookingExists.rows[0].booking_status;
+            await pool.query(
+              `UPDATE dashboard_api_booking 
+               SET booking_status = $1, payment_status = 'Completed' 
+               WHERE id = $2`,
+              [bookingStatus, id]
+            );
+            console.log(`✅ Booking ${booking_id} → Completed (${bookingStatus})`);
+          } else if (timeDiffMinutes > 30) {
+            await pool.query(
+              `UPDATE dashboard_api_booking 
+               SET booking_status = 'Failed', payment_status = 'Failed' 
+               WHERE id = $1`,
+              [id]
+            );
+            console.log(`❌ Booking ${booking_id} → Failed (timeout)`);
+          }
+        } catch (innerError) {
+          console.error(`Error processing pending booking ${booking.booking_id}:`, innerError);
         }
-      }));
+      }
     } catch (error) {
       console.error('❌ Sync error:', error);
     }
