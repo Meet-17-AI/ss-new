@@ -103,8 +103,13 @@ services:
       - FRONTEND_URL=${FRONTEND_URL}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
     restart: always
-    ports:
-      - 127.0.0.1:3002:3002
+    deploy:
+      update_config:
+        order: start-first
+        failure_action: rollback
+        delay: 5s
+      rollback_config:
+        order: start-first
     networks:
       - default
       - root_default
