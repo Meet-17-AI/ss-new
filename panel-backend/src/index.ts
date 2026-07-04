@@ -7233,7 +7233,8 @@ app.post('/api/create-booking', async (req, res) => {
     if (isNaN(startAt.getTime())) {
       startAt = new Date();
     }
-    const endAt = new Date(startAt.getTime() + 50 * 60000);
+    const sessionDurationMinutes = payload.therapyName === 'Free Consultation' || payload.isFreeConsultation ? 15 : 50;
+    const endAt = new Date(startAt.getTime() + sessionDurationMinutes * 60000);
 
     // ── Double-booking / conflict prevention (#3) ──
     // 1. Idempotency: if an identical active booking for this client+slot already exists
@@ -9228,7 +9229,8 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
 
     const bookingId = randomUUID();
     const startObj = new Date(`${date}T${time}:00+05:30`);
-    const endObj = new Date(startObj.getTime() + 50 * 60000); // 50 mins
+    const sessionDurationMinutes = serviceType === 'Free Consultation' ? 15 : 50;
+    const endObj = new Date(startObj.getTime() + sessionDurationMinutes * 60000);
 
     await pool.query(
       `INSERT INTO bookings (
