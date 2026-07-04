@@ -10041,7 +10041,7 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 // ==================== SERVER STARTUP ====================
-httpServer.listen(PORT, async () => {
+httpServer.listen(PORT as number, '0.0.0.0', async () => {
   console.log(`\nAPI server running on http://localhost:${PORT}`);
   console.log(`Allowed CORS origins: ${getAllowedOrigins().join(', ')}`);
   await runStartupMigrations();
