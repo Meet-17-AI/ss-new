@@ -4798,14 +4798,15 @@ app.post('/api/webhooks/new-booking', async (req, res) => {
 
     const booking = bookingResult.rows[0];
     
-    // ── Dedup: skip if we already sent a notification for this booking_id ──
+    // ── Dedup marker: a new_booking notification may already exist (the DB
+    // trigger booking_notification_trigger creates one on booking INSERT).
+    // That must NOT block lead auto-movement below — it only means we skip
+    // re-sending notifications at the end of this handler.
     const existingNotif = await pool.query(
       `SELECT 1 FROM notifications WHERE related_id = $1 AND notification_type = 'new_booking' LIMIT 1`,
       [booking_id]
     );
-    if (existingNotif.rows.length > 0) {
-      return res.json({ success: true, skipped: true, reason: 'Notification already sent for this booking' });
-    }
+    const alreadyNotified = existingNotif.rows.length > 0;
 
     // Resolve therapist internal ID (users.id) from bookings table
     const therapistExternalId = booking.therapist_id || booking.booking_host_user_id?.toString();
@@ -4939,28 +4940,31 @@ app.post('/api/webhooks/new-booking', async (req, res) => {
       ? 'In-person Session'
       : rawName.replace(/ with [^"]+$/, '').trim() || 'Session';
 
-    // Notify therapist
-    if (therapistInternalId) {
-      await pool.query(
-        `INSERT INTO notifications (user_id, user_role, notification_type, title, message, related_id)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [therapistInternalId, 'therapist', 'new_booking', 'New Booking Assigned',
-         `New session "${sessionName}" booked with ${booking.invitee_name}`, booking.booking_id]
-      );
+    // Notifications: skip if already sent (e.g. by the DB booking trigger)
+    if (!alreadyNotified) {
+      // Notify therapist
+      if (therapistInternalId) {
+        await pool.query(
+          `INSERT INTO notifications (user_id, user_role, notification_type, title, message, related_id)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [therapistInternalId, 'therapist', 'new_booking', 'New Booking Assigned',
+           `New session "${sessionName}" booked with ${booking.invitee_name}`, booking.booking_id]
+        );
+      }
+
+      // Notify all admins
+      const admins = await pool.query("SELECT id FROM users WHERE role = 'admin'");
+      for (const admin of admins.rows) {
+        await pool.query(
+          `INSERT INTO notifications (user_id, user_role, notification_type, title, message, related_id)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [admin.id, 'admin', 'new_booking', 'New Booking Created',
+           `${booking.invitee_name} booked "${sessionName}" with ${booking.booking_host_name}`, booking.booking_id]
+        );
+      }
     }
 
-    // Notify all admins
-    const admins = await pool.query("SELECT id FROM users WHERE role = 'admin'");
-    for (const admin of admins.rows) {
-      await pool.query(
-        `INSERT INTO notifications (user_id, user_role, notification_type, title, message, related_id)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [admin.id, 'admin', 'new_booking', 'New Booking Created',
-         `${booking.invitee_name} booked "${sessionName}" with ${booking.booking_host_name}`, booking.booking_id]
-      );
-    }
-
-    res.json({ success: true });
+    res.json({ success: true, notificationsSkipped: alreadyNotified });
   } catch (error) {
     console.error('Error notifying new booking:', error);
     res.status(500).json({ error: 'Failed to notify new booking' });

@@ -930,35 +930,39 @@ app.post('/api/complete-therapist-profile', async (req, res) => {
     console.log('🔔 Sending data to webhook...');
     try {
       const webhookUrl = process.env.N8N_WEBHOOK_ISSUE_REPORT;
-      const webhookPayload = {
-        id: details.id,
-        request_id: details.request_id,
-        therapist_id: therapistId,
-        name: details.name,
-        email: details.email,
-        phone: details.phone,
-        specializations: details.specializations,
-        specialization_details: details.specialization_details,
-        qualification: details.qualification,
-        qualification_pdf_url: details.qualification_pdf_url,
-        profile_picture_url: details.profile_picture_url,
-        status: details.status,
-        created_at: details.created_at,
-        updated_at: details.updated_at
-      };
-
-      const webhookResponse = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(webhookPayload)
-      });
-
-      if (webhookResponse.ok) {
-        console.log('✅ Webhook notification sent successfully');
+      if (!webhookUrl) {
+        console.warn('⚠️ N8N_WEBHOOK_ISSUE_REPORT not configured in environment');
       } else {
-        console.error('⚠️ Webhook notification failed:', webhookResponse.status, webhookResponse.statusText);
+        const webhookPayload = {
+          id: details.id,
+          request_id: details.request_id,
+          therapist_id: therapistId,
+          name: details.name,
+          email: details.email,
+          phone: details.phone,
+          specializations: details.specializations,
+          specialization_details: details.specialization_details,
+          qualification: details.qualification,
+          qualification_pdf_url: details.qualification_pdf_url,
+          profile_picture_url: details.profile_picture_url,
+          status: details.status,
+          created_at: details.created_at,
+          updated_at: details.updated_at
+        };
+
+        const webhookResponse = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(webhookPayload)
+        });
+
+        if (webhookResponse.ok) {
+          console.log('✅ Webhook notification sent successfully');
+        } else {
+          console.error('⚠️ Webhook notification failed:', webhookResponse.status, webhookResponse.statusText);
+        }
       }
     } catch (webhookError) {
       console.error('⚠️ Error sending webhook notification:', webhookError);
@@ -4986,15 +4990,21 @@ app.post('/api/transfer-client', async (req, res) => {
       reason: reason || 'No reason provided',
       timestamp: new Date().toISOString()
     };
-    const webhookUrl = `https://n8n.srv1169280.hstgr.cloud/webhook/efc4396f-401b-4d46-bfdb-e990a3ac3846?${new URLSearchParams(webhookData as any).toString()}`;
+    const webhookUrl = `https://n8n.srv1169280.hstgr.cloud/webhook/efc4396f-401b-4d46-bfdb-e990a3ac3846`;
 
     try {
       const webhookResponse = await fetch(webhookUrl, {
-        method: 'GET'
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(webhookData)
       });
-      const webhookResponseData = await webhookResponse.text();
+      if (!webhookResponse.ok) {
+        console.error('❌ Webhook failed:', webhookResponse.status, webhookResponse.statusText);
+      } else {
+        console.log('✅ Client transfer webhook sent successfully');
+      }
     } catch (webhookError) {
-      console.error('Webhook error:', webhookError);
+      console.error('❌ Webhook error:', webhookError);
     }
 
     // Notify new therapist
@@ -5785,177 +5795,6 @@ app.post('/api/notifications/create-admin', async (req, res) => {
   } catch (error) {
     console.error('Error creating admin notifications:', error);
     res.status(500).json({ error: 'Failed to create notifications' });
-  }
-});
-
-// Webhook to notify new bookings
-app.post('/api/webhooks/new-booking', async (req, res) => {
-  try {
-    const { booking_id } = req.body;
-
-    if (!booking_id) {
-      return res.status(400).json({ error: 'Booking ID required' });
-    }
-
-    const bookingResult = await pool.query(
-      `SELECT b.booking_id, b.invitee_name, b.invitee_email, b.invitee_phone, 
-              b.booking_resource_name, b.booking_host_name, b.invitee_payment_amount,
-              t.therapist_id, u.id as user_id
-       FROM bookings b
-       LEFT JOIN therapists t ON LOWER(TRIM(b.booking_host_name)) = LOWER(TRIM(t.name))
-                              OR LOWER(TRIM(b.booking_host_name)) ILIKE '%' || LOWER(TRIM(t.name)) || '%'
-       LEFT JOIN users u ON u.therapist_id = t.therapist_id
-       WHERE b.booking_id = $1`,
-      [booking_id]
-    );
-
-    if (bookingResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Booking not found' });
-    }
-
-    const booking = bookingResult.rows[0];
-    
-    // ── Dedup: skip if we already sent a notification for this booking_id ──
-    const existingNotif = await pool.query(
-      `SELECT 1 FROM notifications WHERE related_id = $1 AND notification_type = 'new_booking' LIMIT 1`,
-      [booking_id]
-    );
-    if (existingNotif.rows.length > 0) {
-      return res.json({ success: true, skipped: true, reason: 'Notification already sent for this booking' });
-    }
-
-    // Resolve therapist internal ID (users.id) from bookings table
-    const therapistExternalId = booking.therapist_id || booking.booking_host_user_id?.toString();
-    let therapistInternalId = null;
-
-    if (therapistExternalId) {
-      const userRes = await pool.query(
-        'SELECT id FROM users WHERE therapist_id = $1 OR CAST(id AS TEXT) = $1',
-        [therapistExternalId]
-      );
-      if (userRes.rows.length > 0) {
-        therapistInternalId = userRes.rows[0].id;
-      }
-    }
-    
-    // Store public booking checkin URL
-    const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://safestories-dashboard.vercel.app';
-    const publicBookingCheckinUrl = `${baseUrl}/booking-confirmation/${booking_id}`;
-    await pool.query(
-      `UPDATE bookings SET public_booking_checkin_url = $1 WHERE booking_id = $2`,
-      [publicBookingCheckinUrl, booking_id]
-    );
-
-    // Auto-populate client_doc_form with public session notes link
-    const baseUrlForSession = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://safestories-dashboard.vercel.app';
-    const publicSessionNotesUrl = `${baseUrlForSession}/session-notes/${booking_id}`;
-    await pool.query(`
-      INSERT INTO client_doc_form (booking_id, status, custom_form_link)
-      VALUES ($1, 'pending', $2)
-      ON CONFLICT (booking_id) DO UPDATE SET
-        custom_form_link = EXCLUDED.custom_form_link
-      WHERE (client_doc_form.custom_form_link IS NULL OR client_doc_form.custom_form_link = '')
-    `, [booking_id, publicSessionNotesUrl]);
-
-
-    try {
-      const inviteePhone = booking.invitee_phone ? booking.invitee_phone.replace(/[\s\-\(\)\+]/g, '') : '';
-      const inviteeEmail = booking.invitee_email ? booking.invitee_email.toLowerCase().trim() : '';
-
-        if (inviteePhone || inviteeEmail) {
-          // Determine if it's a Free Consultation
-          const isFreeConsultation = (booking.booking_resource_name || '').toLowerCase().includes('free consultation') || 
-                                     (booking.booking_resource_name || '').toLowerCase().includes('pre-therapy') ||
-                                     parseFloat(booking.invitee_payment_amount || '0') === 0;
-
-          // Find matching lead - normalizing phone for comparison
-          const leadResult = await pool.query(
-            `SELECT id, name, pipeline_stage FROM leads 
-             WHERE (RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '(', ''), ')', ''), '+', ''), 10) = RIGHT($1, 10) 
-                OR LOWER(TRIM(email)) = $2)
-             ORDER BY created_at DESC LIMIT 1`,
-            [inviteePhone, inviteeEmail]
-          );
-
-          if (leadResult.rows.length > 0) {
-            const lead = leadResult.rows[0];
-            const currentStage = lead.pipeline_stage;
-            
-            let targetStage = null;
-            let timestampColumn = null;
-
-            if (isFreeConsultation) {
-              // Move to pretherapy-call if in an earlier stage
-              const earlyStages = ['lead-inquire', 'contacted', 'followup-1', 'followup-2', 'followup-3'];
-              if (earlyStages.includes(currentStage)) {
-                targetStage = 'pretherapy-call';
-                timestampColumn = 'stage_pretherapy_call_at';
-              }
-            } else {
-              // Paid session: Move to booked-first-session if in an earlier stage
-              // Inclusive of: lead-inquire, contacted, pretherapy-call, and all follow-up stages
-              const convertStages = ['lead-inquire', 'contacted', 'pretherapy-call', 'followup-1', 'followup-2', 'followup-3', 'dropouts', 'leaks'];
-              if (convertStages.includes(currentStage)) {
-                targetStage = 'booked-first-session';
-                timestampColumn = 'stage_booked_first_session_at';
-              }
-            }
-
-            if (targetStage && currentStage !== targetStage) {
-              const dateStr = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
-              const remark = `\n[System ${dateStr}]: Auto-moved to ${targetStage} due to booking ${booking_id} (${isFreeConsultation ? 'Free' : 'Paid'})`;
-              
-              // Assign therapist from booking (using resolved internal ID)
-              const therapistId = therapistInternalId || null;
-
-              await pool.query(
-                `UPDATE leads 
-                 SET pipeline_stage = $1, 
-                     ${timestampColumn} = CURRENT_TIMESTAMP,
-                     remark_lead_manager = COALESCE(remark_lead_manager, '') || $2,
-                     therapist_id = COALESCE($4, therapist_id),
-                     updated_at = CURRENT_TIMESTAMP
-                 WHERE id = $3`,
-                [targetStage, remark, lead.id, therapistId]
-              );
-              console.log(`✨ [Auto-Move] Lead "${lead.name}" (${lead.id}) moved: ${currentStage} → ${targetStage} (Therapist: ${therapistId || 'N/A'})`);
-            }
-          } else {
-          // --- AUTO-CREATE LEAD ---
-          // If it's a Free Consultation and we have a phone, create a new lead automatically
-      if (isFreeConsultation && inviteePhone) {
-            // Find default lead manager (admin user) to assign
-            const defaultManager = await pool.query(
-              `SELECT id FROM users WHERE role IN ('admin', 'sales') ORDER BY id LIMIT 1`
-            );
-            const salesAgentId = defaultManager.rows[0]?.id || null;
-
-            await pool.query(
-              `INSERT INTO leads (name, phone, email, source, sales_agent_id, status, pipeline_stage, stage_pretherapy_call_at, remark_lead_manager)
-               VALUES (// If it's a Free Consultation and we have a phone, create a new lead automatically
-      , return res.status(400).json({ error: 'Missing required fields: clientName is required' });, $3, $4, $5, 'New', 'pretherapy-call', CURRENT_TIMESTAMP, $6)`,
-              [
-                booking.invitee_name,
-                booking.invitee_phone,
-                booking.invitee_email || null,
-                'Free Consultation',
-                salesAgentId,
-                `Auto-created from Free Consultation booking ID: ${booking_id}`
-              ]
-            );
-            console.log(`✅ [Auto-Create] Lead for free consultation: "${booking.invitee_name}" (${booking.invitee_phone})`);
-          }
-        }
-      }
-    } catch (moveErr) {
-      console.error('❌ [Auto-Move] Error processing lead movement:', moveErr);
-    }
-    
-    // Notifications disabled by user request.
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Error notifying new booking:', error);
-    res.status(500).json({ error: 'Failed to notify new booking' });
   }
 });
 
@@ -6812,16 +6651,20 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
     client.release();
   }
 
-  // 9. Internal new-booking webhook for CRM pipeline movement (outside transaction, best-effort)
+  // 9. New-booking webhook for CRM pipeline movement (outside transaction, best-effort).
+  // The handler lives on the CRM backend (port 3003), not this process.
   try {
-    const port = process.env.PORT || 3002;
-    await fetch(`http://localhost:${port}/api/webhooks/new-booking`, {
+    const crmBase = process.env.CRM_WEBHOOK_URL || 'http://localhost:3003';
+    const whRes = await fetch(`${crmBase}/api/webhooks/new-booking`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ booking_id: bookingId })
     });
+    if (!whRes.ok) {
+      console.error(`[verify-payment] CRM new-booking webhook returned ${whRes.status} for booking ${bookingId}`);
+    }
   } catch (e) {
-    console.error('[verify-payment] Internal webhook failed:', e);
+    console.error('[verify-payment] CRM new-booking webhook failed:', e);
   }
 
   console.log(`[verify-payment] ✅ Booking ${bookingId} confirmed. Payment: ${razorpayPaymentId}`);
@@ -7521,14 +7364,18 @@ app.post('/api/create-booking', async (req, res) => {
     }
 
     try {
-      const port = process.env.PORT || 3002;
-      await fetch(`http://localhost:${port}/api/webhooks/new-booking`, {
+      // The new-booking handler lives on the CRM backend (port 3003), not this process.
+      const crmBase = process.env.CRM_WEBHOOK_URL || 'http://localhost:3003';
+      const whRes = await fetch(`${crmBase}/api/webhooks/new-booking`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ booking_id })
       });
+      if (!whRes.ok) {
+        console.error(`[Create Booking] CRM new-booking webhook returned ${whRes.status} for booking ${booking_id}`);
+      }
     } catch (e) {
-      console.error('Failed to call internal webhook:', e);
+      console.error('[Create Booking] CRM new-booking webhook failed:', e);
     }
 
     res.status(200).json({ success: true, booking_id, id: booking_id });
