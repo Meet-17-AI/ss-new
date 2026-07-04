@@ -84,6 +84,7 @@ services:
       - traefik.http.middlewares.panel-backend.headers.STSPreload=true
       - traefik.http.routers.panel-backend.middlewares=panel-backend@docker
       - traefik.http.services.panel-backend.loadbalancer.server.port=3002
+      - traefik.docker.network=root_default
 
     environment:
       - NODE_ENV=production
@@ -104,6 +105,9 @@ services:
     restart: always
     ports:
       - 127.0.0.1:3002:3002
+    networks:
+      - default
+      - root_default
     volumes:
       - panel_backend_data:/app/logs
     extra_hosts:
@@ -115,4 +119,8 @@ volumes:
   n8n_data:
     external: true
   panel_backend_data:
+    external: true
+
+networks:
+  root_default:
     external: true
