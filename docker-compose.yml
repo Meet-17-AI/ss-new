@@ -63,7 +63,7 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3002/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -103,7 +103,7 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
     restart: always
     ports:
-      - 3002:3002
+      - 127.0.0.1:3002:3002
     volumes:
       - panel_backend_data:/app/logs
     extra_hosts:
