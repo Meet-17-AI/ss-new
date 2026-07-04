@@ -83,32 +83,13 @@ jobs:
           script: |
             echo "🔍 Verifying health endpoint..."
             sleep 3
-            curl -s -I https://api.${{ secrets.DOMAIN_NAME }}/health | head -1 || echo "⚠️  Health check not available yet"
+            DOMAIN=$(hostname -f)
+            curl -s -I https://api.$DOMAIN/health | head -1 || echo "⚠️  Health check not available yet"
 
-      - name: Notify success
+      - name: Deployment Status
         if: success()
-        uses: actions/github-script@v6
-        with:
-          script: |
-            github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: 'success',
-              description: '✅ Backend deployed successfully to VPS',
-              context: 'deployment'
-            })
+        run: echo "✅ Backend deployed successfully to VPS!"
 
-      - name: Notify failure
+      - name: Deployment Failed
         if: failure()
-        uses: actions/github-script@v6
-        with:
-          script: |
-            github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: 'failure',
-              description: '❌ Backend deployment failed',
-              context: 'deployment'
-            })
+        run: echo "❌ Backend deployment failed - check logs above"
