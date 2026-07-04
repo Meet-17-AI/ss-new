@@ -1,7 +1,7 @@
 {
   "rewrites": [
     { "source": "/api/sos-documentation", "destination": "/api/sos-documentation" },
-    { "source": "/api/:path*", "destination": "https://safestories-panel.onrender.com/api/:path*" },
+    { "source": "/api/:path*", "destination": "https://api.srv1169280.hstgr.cloud/api/:path*" },
     { "source": "/sos-view/:token", "destination": "/index.html" },
     { "source": "/((?!api).*)", "destination": "/index.html" }
   ],
