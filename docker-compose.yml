@@ -77,6 +77,8 @@ services:
       - traefik.http.middlewares.panel-backend.headers.STSIncludeSubdomains=true
       - traefik.http.middlewares.panel-backend.headers.STSPreload=true
       - traefik.http.routers.panel-backend.middlewares=panel-backend@docker
+      - traefik.http.services.panel-backend.loadbalancer.server.port=3002
+
     environment:
       - NODE_ENV=production
       - PGHOST=${PGHOST}
@@ -95,7 +97,7 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
     restart: always
     ports:
-      - 127.0.0.1:5000:5000
+      - 127.0.0.1:3002:3002
     volumes:
       - panel_backend_data:/app/logs
     extra_hosts:
