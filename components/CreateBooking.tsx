@@ -524,7 +524,8 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
         time: selectedSlot,
         serviceType: selectedTherapy,
         amount: Number(customAmount) || sessionCharges,
-        clientType
+        clientType,
+        isAdmin: true
       };
 
       try {

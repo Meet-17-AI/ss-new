@@ -7221,7 +7221,7 @@ app.post('/api/create-booking', async (req, res) => {
     const therapistConflict = await checkExistingTherapistConflict(
       payload.clientEmail, payload.clientWhatsApp, therapistId, therapistName
     );
-    if (therapistConflict) {
+    if (therapistConflict && !payload.isAdmin) {
       return res.status(409).json({
         error: `This client is already working with ${therapistConflict.existingTherapistName}. To change therapists, please use the Transfer Client option.`,
         conflict: 'therapist',
@@ -9218,7 +9218,7 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
     const therapistConflict = await checkExistingTherapistConflict(
       clientEmail, clientPhone, resolvedTherapistId, therapistName
     );
-    if (therapistConflict) {
+    if (therapistConflict && !req.body.isAdmin) {
       return res.status(409).json({
         error: `This client is already working with ${therapistConflict.existingTherapistName}. To change therapists, please use the Transfer Client option.`,
         conflict: 'therapist',
