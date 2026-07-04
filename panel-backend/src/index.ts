@@ -105,6 +105,12 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization']
 };
 app.use(cors(corsOptions));
+
+// Health check endpoint for zero-downtime deployment
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
 app.use(express.json({
   verify: (req: any, res, buf) => {
     req.rawBody = buf;

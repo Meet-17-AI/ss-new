@@ -28,6 +28,7 @@ jobs:
           timeout: 10m
           command_timeout: 10m
           script: |
+            set -e
             echo "📦 Pulling latest code..."
             cd /opt/safestories
             git pull origin main
@@ -59,13 +60,25 @@ jobs:
 
             echo "🐳 Building Docker image..."
             export DOMAIN_NAME=$DOMAIN_NAME
-            docker compose build panel-backend
+            
+            # Save current commit hash for potential rollback
+            PREVIOUS_COMMIT=$(git rev-parse HEAD@{1} 2>/dev/null || git rev-parse HEAD)
+            
+            if ! docker compose build panel-backend; then
+              echo "❌ Build failed! Rolling back to previous commit..."
+              git reset --hard $PREVIOUS_COMMIT
+              exit 1
+            fi
 
-            echo "🚀 Restarting backend service..."
-            docker compose up -d panel-backend
-
-            echo "⏳ Waiting for service to start..."
-            sleep 5
+            echo "🚀 Starting backend service and waiting for healthcheck..."
+            if ! docker compose up -d --wait panel-backend; then
+              echo "❌ Deployment failed health check! Rolling back..."
+              docker compose logs --tail 50 panel-backend
+              git reset --hard $PREVIOUS_COMMIT
+              docker compose build panel-backend
+              docker compose up -d panel-backend
+              exit 1
+            fi
 
             echo "✅ Checking service status..."
             docker compose ps panel-backend
