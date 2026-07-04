@@ -4650,6 +4650,7 @@ app.get('/api/therapist-clients', async (req, res) => {
         booking_mode
       FROM bookings
       WHERE booking_host_name ILIKE $1
+        AND booking_status NOT IN ('payment_pending', 'waiting_for_payment', 'payment_failed', 'pending')
       ORDER BY booking_start_at DESC
     `, [`%${therapistFirstName}%`]);
 
