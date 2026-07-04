@@ -97,7 +97,7 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
     restart: always
     ports:
-      - 127.0.0.1:3002:3002
+      - 3002:3002
     volumes:
       - panel_backend_data:/app/logs
     extra_hosts:
