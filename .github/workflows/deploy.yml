@@ -1,0 +1,114 @@
+name: Deploy Backend to VPS
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'panel-backend/**'
+      - 'Dockerfile.backend'
+      - 'docker-compose.yml'
+      - '.github/workflows/deploy.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 10m
+          command_timeout: 10m
+          script: |
+            echo "📦 Pulling latest code..."
+            cd /opt/safestories
+            git pull origin main
+
+            echo "🔍 Auto-fetching VPS hostname..."
+            DOMAIN_NAME=$(hostname -f)
+            echo "✅ Hostname: $DOMAIN_NAME"
+
+            echo "🔐 Creating .env.production file..."
+            cat > .env.production << EOF
+            NODE_ENV=production
+            PGHOST=${{ secrets.PGHOST }}
+            PGPORT=${{ secrets.PGPORT }}
+            PGDATABASE=${{ secrets.PGDATABASE }}
+            PGUSER=${{ secrets.PGUSER }}
+            PGPASSWORD=${{ secrets.PGPASSWORD }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            RAZORPAY_KEY_ID=${{ secrets.RAZORPAY_KEY_ID }}
+            RAZORPAY_KEY_SECRET=${{ secrets.RAZORPAY_KEY_SECRET }}
+            MINIO_ENDPOINT=${{ secrets.MINIO_ENDPOINT }}
+            MINIO_PORT=${{ secrets.MINIO_PORT }}
+            MINIO_ACCESS_KEY=${{ secrets.MINIO_ACCESS_KEY }}
+            MINIO_SECRET_KEY=${{ secrets.MINIO_SECRET_KEY }}
+            FRONTEND_URL=${{ secrets.FRONTEND_URL }}
+            ALLOWED_ORIGINS=${{ secrets.ALLOWED_ORIGINS }}
+            SSL_EMAIL=${{ secrets.SSL_EMAIL }}
+            DOMAIN_NAME=$DOMAIN_NAME
+            EOF
+
+            echo "🐳 Building Docker image..."
+            export DOMAIN_NAME=$DOMAIN_NAME
+            docker-compose build panel-backend
+
+            echo "🚀 Restarting backend service..."
+            docker-compose up -d panel-backend
+
+            echo "⏳ Waiting for service to start..."
+            sleep 5
+
+            echo "✅ Checking service status..."
+            docker-compose ps panel-backend
+
+            echo "📊 Service logs..."
+            docker-compose logs --tail 20 panel-backend
+
+      - name: Verify deployment
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          script: |
+            echo "🔍 Verifying health endpoint..."
+            sleep 3
+            curl -s -I https://api.${{ secrets.DOMAIN_NAME }}/health | head -1 || echo "⚠️  Health check not available yet"
+
+      - name: Notify success
+        if: success()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              description: '✅ Backend deployed successfully to VPS',
+              context: 'deployment'
+            })
+
+      - name: Notify failure
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'failure',
+              description: '❌ Backend deployment failed',
+              context: 'deployment'
+            })
