@@ -2715,12 +2715,12 @@ app.get('/api/dashboard/bookings', async (req, res) => {
             booking_invitee_time,
             booking_id
           FROM bookings
-          WHERE booking_status NOT IN ($1, $2)
+          WHERE booking_status IN ('confirmed', 'scheduled')
             AND LOWER(TRIM(booking_host_name)) != 'safestories'
-            AND booking_start_at BETWEEN $3 AND $4
+            AND booking_start_at BETWEEN $1 AND $2
           ORDER BY booking_start_at ASC
-          LIMIT $5`,
-        ['cancelled', 'canceled', start, `${end} 23:59:59`, limitNum]
+          LIMIT $3`,
+        [start, `${end} 23:59:59`, limitNum]
       )
       : await pool.query(
         `SELECT 
@@ -2733,10 +2733,9 @@ app.get('/api/dashboard/bookings', async (req, res) => {
             booking_invitee_time,
             booking_id
           FROM bookings
-          WHERE booking_status NOT IN ($1, $2, $3, $4)
+          WHERE booking_status IN ('confirmed', 'scheduled')
             AND LOWER(TRIM(booking_host_name)) != 'safestories'
-          ORDER BY booking_start_at ASC`,
-        ['cancelled', 'canceled', 'no_show', 'no show']
+          ORDER BY booking_start_at ASC`
       );
 
     // Filter upcoming sessions based on booking_invitee_time
