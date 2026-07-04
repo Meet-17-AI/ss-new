@@ -7607,9 +7607,9 @@ app.post('/api/create-pending-booking', async (req, res) => {
         booking_status, payment_status, invitee_payment_gateway,
         razorpay_order_id, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, mask_id,
-        booking_invitee_time, booking_host_time, invitee_question,
+        booking_invitee_time, booking_host_time, invitee_question, client_type,
         invitee_created_at, booking_updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, NOW(), NOW())`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, NOW(), NOW())`,
       [
         booking_id, invitee_id, 'Direct Booking',
         payload.clientName || 'Unknown Client',
@@ -7626,7 +7626,8 @@ app.post('/api/create-pending-booking', async (req, res) => {
         payload.sessionMode === 'online' ? 'Online Video Call' : 'In Person (Pune)',
         maskId,
         '', '',
-        payload.invitee_question || payload.notes || null
+        payload.invitee_question || payload.notes || null,
+        payload.clientType || 'Indian'
       ]
     );
 
@@ -9198,7 +9199,8 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
       date, 
       time, 
       serviceType, 
-      amount 
+      amount,
+      clientType 
     } = req.body;
 
     let resolvedTherapistId = null;
@@ -9232,12 +9234,12 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
       `INSERT INTO bookings (
         booking_id, therapist_id, invitee_name, invitee_email, invitee_phone,
         booking_start_at, booking_end_at, booking_status, payment_status, invitee_payment_amount,
-        invitee_payment_currency, booking_resource_name, invitee_created_at, booking_updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, NOW(), NOW())`,
+        invitee_payment_currency, booking_resource_name, client_type, invitee_created_at, booking_updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, $12, NOW(), NOW())`,
       [
         bookingId, resolvedTherapistId, clientName, clientEmail, clientPhone,
         startObj.toISOString(), endObj.toISOString(), 'waiting_for_payment', 'Pending', amount,
-        serviceType
+        serviceType, clientType || 'Indian'
       ]
     );
 
