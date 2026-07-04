@@ -5580,6 +5580,7 @@ app.get('/api/payments', async (req, res) => {
          FROM bookings b
          LEFT JOIN payments p ON b.booking_id = p.booking_id
          WHERE (b.booking_status = 'payment_pending' OR b.payment_status = 'Pending')
+           AND b.booking_status NOT IN ('Canceled', 'cancelled', 'canceled', 'payment_failed', 'Failed')
            AND b.invitee_payment_amount IS NOT NULL AND b.invitee_payment_amount >= 0
          ORDER BY b.invitee_created_at DESC`
       );
@@ -7394,8 +7395,9 @@ app.post('/api/create-booking', async (req, res) => {
         booking_invitee_time, booking_host_time, invitee_payment_amount, invitee_payment_currency,
         booking_status, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id, google_event_id,
-        payment_id, payment_status, invitee_payment_gateway, invitee_question, client_type
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)`,
+        payment_id, payment_status, invitee_payment_gateway, invitee_question, client_type,
+        invitee_created_at, booking_updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, NOW(), NOW())`,
       [
         booking_id,
         invitee_id,
@@ -7606,8 +7608,9 @@ app.post('/api/create-pending-booking', async (req, res) => {
         booking_status, payment_status, invitee_payment_gateway,
         razorpay_order_id, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, mask_id,
-        booking_invitee_time, booking_host_time, invitee_question
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+        booking_invitee_time, booking_host_time, invitee_question,
+        invitee_created_at, booking_updated_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, NOW(), NOW())`,
       [
         booking_id, invitee_id, 'Direct Booking',
         payload.clientName || 'Unknown Client',
@@ -9788,6 +9791,14 @@ async function runStartupMigrations() {
       CREATE INDEX IF NOT EXISTS idx_webhook_api_logs_type_created
       ON webhook_api_logs(log_type, created_at DESC)
     `);
+
+    // Heal existing bookings where invitee_created_at is null so they can be processed by expiry cron
+    await pool.query(
+      `UPDATE bookings 
+       SET invitee_created_at = NOW() 
+       WHERE invitee_created_at IS NULL 
+         AND booking_status IN ('payment_pending', 'waiting_for_payment')`
+    );
     
     console.log('✅ Startup migrations complete');
   } catch (err) {
