@@ -3007,18 +3007,19 @@ app.get('/api/clients', async (req, res) => {
         }
       }
 
-      // Update session name to most recent
-      if (row.booking_resource_name) {
-        client.booking_resource_name = row.booking_resource_name;
-      }
-
-      // Update latest_booking_date only from active bookings (except for Safestories pre-therapy)
+      // Update latest_booking_date, session name, and mode from active bookings
       const isSafestories = row.booking_host_name && row.booking_host_name.toLowerCase().trim() === 'safestories';
       const isActiveBooking = row.booking_status && !['cancelled', 'canceled', 'no_show', 'no show'].includes(row.booking_status);
 
       if (isSafestories || isActiveBooking) {
         if (!client.latest_booking_date || new Date(row.latest_booking_date) > new Date(client.latest_booking_date)) {
           client.latest_booking_date = row.latest_booking_date;
+          if (row.booking_resource_name) {
+            client.booking_resource_name = row.booking_resource_name;
+          }
+          if (row.booking_mode) {
+            client.booking_mode = row.booking_mode;
+          }
         }
       }
 
