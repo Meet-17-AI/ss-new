@@ -36,8 +36,8 @@ jobs:
             DOMAIN_NAME=$(hostname -f)
             echo "✅ Hostname: $DOMAIN_NAME"
 
-            echo "🔐 Creating .env.production file..."
-            cat > .env.production << EOF
+            echo "🔐 Creating .env file..."
+            cat > .env << EOF
             NODE_ENV=production
             PGHOST=${{ secrets.PGHOST }}
             PGPORT=${{ secrets.PGPORT }}
@@ -59,19 +59,19 @@ jobs:
 
             echo "🐳 Building Docker image..."
             export DOMAIN_NAME=$DOMAIN_NAME
-            docker-compose build panel-backend
+            docker compose build panel-backend
 
             echo "🚀 Restarting backend service..."
-            docker-compose up -d panel-backend
+            docker compose up -d panel-backend
 
             echo "⏳ Waiting for service to start..."
             sleep 5
 
             echo "✅ Checking service status..."
-            docker-compose ps panel-backend
+            docker compose ps panel-backend
 
             echo "📊 Service logs..."
-            docker-compose logs --tail 20 panel-backend
+            docker compose logs --tail 20 panel-backend
 
       - name: Verify deployment
         uses: appleboy/ssh-action@v0.1.10
