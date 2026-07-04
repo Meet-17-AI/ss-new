@@ -5561,7 +5561,7 @@ app.get('/api/payments', async (req, res) => {
          FROM bookings b
          LEFT JOIN payments p ON b.booking_id = p.booking_id
          WHERE (b.booking_status = 'confirmed' OR b.payment_status = 'Paid' OR b.payment_status = 'Completed')
-           AND b.invitee_payment_amount IS NOT NULL AND b.invitee_payment_amount > 0
+           AND b.invitee_payment_amount IS NOT NULL AND b.invitee_payment_amount >= 0
          ORDER BY b.invitee_created_at DESC`
       );
       rows.push(...pRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
@@ -5574,7 +5574,7 @@ app.get('/api/payments', async (req, res) => {
          FROM bookings b
          LEFT JOIN payments p ON b.booking_id = p.booking_id
          WHERE (b.booking_status = 'payment_pending' OR b.payment_status = 'Pending')
-           AND b.invitee_payment_amount IS NOT NULL AND b.invitee_payment_amount > 0
+           AND b.invitee_payment_amount IS NOT NULL AND b.invitee_payment_amount >= 0
          ORDER BY b.invitee_created_at DESC`
       );
       rows.push(...pRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
@@ -7421,9 +7421,9 @@ app.post('/api/create-booking', async (req, res) => {
       ]
     );
 
-    // If payment was made directly (QR/Cash), record it in the payments table
-    if (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') {
-      const paymentAmount = payload.amount || payload.paymentDetails?.amount || 0;
+    // If payment was made directly (QR/Cash) or it's a Free Consultation, record it in the payments table
+    const paymentAmount = payload.amount || payload.paymentDetails?.amount || 0;
+    if (payload.paymentMode === 'qr' || payload.paymentMode === 'cash' || payload.isFreeConsultation || paymentAmount === 0) {
       await pool.query(
         `INSERT INTO payments (
           booking_id, invitee_name, invitee_email, amount, currency,
@@ -7435,7 +7435,7 @@ app.post('/api/create-booking', async (req, res) => {
           payload.clientEmail,
           paymentAmount,
           payload.currency || 'INR',
-          payload.paymentMode === 'qr' ? 'QR' : 'Cash',
+          payload.paymentMode === 'qr' ? 'QR' : (payload.paymentMode === 'cash' ? 'Cash' : 'Free'),
           payload.paymentScreenshot || null
         ]
       );
@@ -9223,14 +9223,23 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
     await pool.query(
       `INSERT INTO bookings (
         booking_id, therapist_id, invitee_name, invitee_email, invitee_phone,
-        booking_start_at, booking_end_at, booking_status, payment_status, payment_amount,
-        booking_resource_name, invitee_created_at, booking_updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())`,
+        booking_start_at, booking_end_at, booking_status, payment_status, invitee_payment_amount,
+        invitee_payment_currency, booking_resource_name, invitee_created_at, booking_updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, NOW(), NOW())`,
       [
         bookingId, resolvedTherapistId, clientName, clientEmail, clientPhone,
         startObj.toISOString(), endObj.toISOString(), 'waiting_for_payment', 'Pending', amount,
         serviceType
       ]
+    );
+
+    // Record the pending payment in payments table
+    await pool.query(
+      `INSERT INTO payments (
+        booking_id, invitee_name, invitee_email, amount, currency,
+        payment_gateway_name, payment_date
+      ) VALUES ($1, $2, $3, $4, 'INR', 'Payment Link', NOW())`,
+      [bookingId, clientName, clientEmail, amount]
     );
 
     // Keep this client's contact info up to date across their bookings (#2)
