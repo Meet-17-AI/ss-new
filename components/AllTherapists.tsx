@@ -175,7 +175,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
   const [openBookingLinksId, setOpenBookingLinksId] = useState<string | null>(null);
   const [editingClientContact, setEditingClientContact] = useState<Client | null>(null);
   const [isClientEditMode, setIsClientEditMode] = useState(false);
-  const [clientContactEdit, setClientContactEdit] = useState({ name: '', phone: '', email: '', saving: false });
+  const [clientContactEdit, setClientContactEdit] = useState({ name: '', phone: '', email: '', client_type: 'Indian', saving: false });
 
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -1127,9 +1127,14 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
               {getClientStatus(selectedClient, clientAppointments) === 'active' ? 'Active' :
                 getClientStatus(selectedClient, clientAppointments) === 'drop-out' ? 'Drop-out' : 'Inactive'}
             </span>
+            {selectedClient.client_type === 'NRI' && (
+              <span className="px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-700">
+                NRI
+              </span>
+            )}
             <button
               onClick={() => {
-                setClientContactEdit({ name: selectedClient.invitee_name, phone: selectedClient.invitee_phone || '', email: selectedClient.invitee_email || '', saving: false });
+                setClientContactEdit({ name: selectedClient.invitee_name, phone: selectedClient.invitee_phone || '', email: selectedClient.invitee_email || '', client_type: selectedClient.client_type || 'Indian', saving: false });
                 setIsClientEditMode(true);
               }}
               className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors text-teal-700 border border-teal-200 hover:bg-teal-50"
@@ -1867,6 +1872,17 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                   placeholder="Email Address"
                 />
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Client Type</label>
+                <select
+                  value={clientContactEdit.client_type}
+                  onChange={(e) => setClientContactEdit(prev => ({ ...prev, client_type: e.target.value }))}
+                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-teal-500 focus:outline-none bg-white"
+                >
+                  <option value="Indian">Indian Resident</option>
+                  <option value="NRI">NRI</option>
+                </select>
+              </div>
             </div>
 
             <div className="bg-gray-50 px-6 py-4 border-t flex justify-end gap-3">
@@ -1889,11 +1905,12 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                         new_name: clientContactEdit.name !== selectedClient.invitee_name ? clientContactEdit.name : undefined,
                         new_phone: clientContactEdit.phone !== selectedClient.invitee_phone ? clientContactEdit.phone : undefined,
                         new_email: clientContactEdit.email !== selectedClient.invitee_email ? clientContactEdit.email : undefined,
+                        new_client_type: clientContactEdit.client_type !== selectedClient.client_type ? clientContactEdit.client_type : undefined,
                         _audit_user: JSON.parse(localStorage.getItem('user') || '{}')
                       })
                     });
                     if (res.ok) {
-                      setSelectedClient(prev => prev ? { ...prev, invitee_name: clientContactEdit.name, invitee_phone: clientContactEdit.phone, invitee_email: clientContactEdit.email } : prev);
+                      setSelectedClient(prev => prev ? { ...prev, invitee_name: clientContactEdit.name, invitee_phone: clientContactEdit.phone, invitee_email: clientContactEdit.email, client_type: clientContactEdit.client_type } : prev);
                       setToast({ message: 'Client updated successfully', type: 'success' });
                       setIsClientEditMode(false);
                     } else {
