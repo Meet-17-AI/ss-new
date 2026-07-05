@@ -4855,7 +4855,10 @@ app.post('/api/webhooks/new-booking', async (req, res) => {
             `SELECT id, name, pipeline_stage FROM leads 
              WHERE ( (RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '(', ''), ')', ''), '+', ''), 10) = RIGHT($1, 10) AND $1 <> '')
                 OR (LOWER(TRIM(email)) = $2 AND $2 <> '') )
-             ORDER BY created_at DESC LIMIT 1`,
+             ORDER BY 
+               CASE WHEN source = 'booking_system' THEN 1 ELSE 0 END ASC,
+               created_at DESC 
+             LIMIT 1`,
             [inviteePhone, inviteeEmail]
           );
 
