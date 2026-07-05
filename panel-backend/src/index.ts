@@ -2848,22 +2848,43 @@ app.patch('/api/clients/update-contact', async (req: any, res: any) => {
       return res.status(400).json({ error: 'No fields to update' });
     }
 
-    let whereClause: string;
-    if (old_phone && old_email) {
-      whereClause = `(invitee_phone = $${idx} OR invitee_email = $${idx + 1})`;
-      values.push(old_phone, old_email);
-    } else if (old_phone) {
-      whereClause = `invitee_phone = $${idx}`;
+    // Match ALL of the client's bookings using normalized identifiers
+    // (last-10-digit phone + case-insensitive email). Exact string matching
+    // missed bookings stored with a different phone format, so edits — in
+    // particular client_type (Indian/NRI) — did not persist across every row
+    // and reverted on refresh.
+    const conds: string[] = [];
+    if (old_phone) {
+      conds.push(`RIGHT(regexp_replace(COALESCE(invitee_phone,''), '[^0-9]', '', 'g'), 10) = RIGHT(regexp_replace($${idx++}, '[^0-9]', '', 'g'), 10)`);
       values.push(old_phone);
-    } else {
-      whereClause = `invitee_email = $${idx}`;
+    }
+    if (old_email) {
+      conds.push(`LOWER(TRIM(invitee_email)) = LOWER(TRIM($${idx++}))`);
       values.push(old_email);
     }
+    const whereClause = conds.join(' OR ');
 
     const result = await pool.query(
       `UPDATE bookings SET ${setClauses.join(', ')} WHERE ${whereClause}`,
       values
     );
+
+    // Keep all_clients_table in sync so client_type is consistent everywhere.
+    if (new_client_type !== undefined || new_name !== undefined || new_phone !== undefined || new_email !== undefined) {
+      const actSet: string[] = [];
+      const actVals: any[] = [];
+      let a = 1;
+      if (new_name !== undefined) { actSet.push(`client_name = $${a++}`); actVals.push(new_name); }
+      if (new_phone !== undefined) { actSet.push(`phone_number = $${a++}`); actVals.push(new_phone); }
+      if (new_email !== undefined) { actSet.push(`email_id = $${a++}`); actVals.push(new_email); }
+      if (new_client_type !== undefined) { actSet.push(`client_type = $${a++}`); actVals.push(new_client_type); }
+      if (actSet.length > 0) {
+        const actConds: string[] = [];
+        if (old_phone) { actConds.push(`RIGHT(regexp_replace(COALESCE(phone_number,''), '[^0-9]', '', 'g'), 10) = RIGHT(regexp_replace($${a++}, '[^0-9]', '', 'g'), 10)`); actVals.push(old_phone); }
+        if (old_email) { actConds.push(`LOWER(TRIM(email_id)) = LOWER(TRIM($${a++}))`); actVals.push(old_email); }
+        await pool.query(`UPDATE all_clients_table SET ${actSet.join(', ')} WHERE ${actConds.join(' OR ')}`, actVals).catch((e: any) => console.error('all_clients_table sync failed:', e.message));
+      }
+    }
 
     // Audit log - wrapped in try/catch so it doesn't fail the main update
     try {
@@ -5550,7 +5571,10 @@ app.get('/api/payments', async (req, res) => {
         created_at: row.created_at || row.invitee_created_at,
         booking_updated_at: row.booking_updated_at || null,
         booking_joining_link: row.booking_joining_link || null,
-        payment_mode: row.payment_mode || null,
+        // Cash/QR bookings record their mode on bookings.invitee_payment_gateway
+        // (the payments table is only populated for Razorpay/UPI). Fall back to it
+        // so the payment-detail modal shows the mode for cash and QR too.
+        payment_mode: row.payment_mode || row.invitee_payment_gateway || null,
         utr: row.utr || null,
         failure_reason: row.failure_reason || null,
         customer_details: row.customer_details || null,

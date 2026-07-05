@@ -201,9 +201,12 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
     const clientIdParam = searchParams.get('clientId');
     if (clientIdParam && !selectedClient) {
       const isEmail = clientIdParam.includes('@');
-      const dummyClient = isEmail 
-        ? { invitee_email: clientIdParam, invitee_name: 'Loading...', invitee_phone: '' }
-        : { invitee_phone: clientIdParam, invitee_name: 'Loading...', invitee_email: '' };
+      // Seed client_type from the URL so the profile shows the correct
+      // Indian/NRI badge immediately, without waiting on enrichment.
+      const clientTypeParam = searchParams.get('client_type') || undefined;
+      const dummyClient = isEmail
+        ? { invitee_email: clientIdParam, invitee_name: 'Loading...', invitee_phone: '', client_type: clientTypeParam }
+        : { invitee_phone: clientIdParam, invitee_name: 'Loading...', invitee_email: '', client_type: clientTypeParam };
       openClientDetails(dummyClient);
     }
   }, [searchParams, selectedClient]);
@@ -657,7 +660,8 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
     const normalizedClient = {
       invitee_name: client.invitee_name || client.client_name || 'Unknown',
       invitee_email: client.invitee_email || '',
-      invitee_phone: client.invitee_phone || ''
+      invitee_phone: client.invitee_phone || '',
+      client_type: client.client_type || undefined
     };
 
     setSelectedClient(normalizedClient);
@@ -817,7 +821,11 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
           invitee_occupation: aptWithEmergency.invitee_occupation,
           invitee_marital_status: aptWithEmergency.invitee_marital_status,
           clinical_profile: aptWithEmergency.clinical_profile,
-          client_type: data.appointments.find((apt: any) => apt.client_type)?.client_type || prev.client_type || 'Indian',
+          // A client is NRI if ANY of their bookings is marked NRI; otherwise
+          // fall back to the value seeded from the list/URL, then Indian.
+          client_type: data.appointments.some((apt: any) => apt.client_type === 'NRI')
+            ? 'NRI'
+            : (prev.client_type || data.appointments.find((apt: any) => apt.client_type)?.client_type || 'Indian'),
           remarks: aptWithRemarks.invitee_question
         }));
       }

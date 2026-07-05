@@ -726,6 +726,7 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
                                           invitee_name: client.invitee_name,
                                           invitee_email: client.invitee_email,
                                           invitee_phone: client.invitee_phone,
+                                          client_type: client.client_type,
                                           tab: activeTab
                                         });
                                       }

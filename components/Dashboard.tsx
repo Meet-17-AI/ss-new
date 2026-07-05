@@ -595,7 +595,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           <Route path="clients" element={
             <AllClients onClientClick={(client) => {
               const tabParam = client.tab === 'nri' ? '&tab=nri' : '';
-              navigate('/admin/therapists?clientId=' + encodeURIComponent(client.invitee_email || client.invitee_phone) + '&source=clients' + tabParam);
+              const typeParam = client.client_type ? '&client_type=' + encodeURIComponent(client.client_type) : '';
+              navigate('/admin/therapists?clientId=' + encodeURIComponent(client.invitee_email || client.invitee_phone) + '&source=clients' + tabParam + typeParam);
             }} onCreateBooking={() => navigate('/admin/createBooking')} />
           } />
           <Route path="therapists" element={
