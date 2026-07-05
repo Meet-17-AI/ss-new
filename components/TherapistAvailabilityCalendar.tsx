@@ -400,7 +400,7 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
               <div className="day-status-badge off">Off</div>
             ) : null}
             {isAvailable && info?.times && info.times.length > 2 && (
-              <div className="day-slot-pill" style={{ background: '#e2e8f0', color: '#475569' }}>
+              <div className="day-slot-pill" style={{ background: '#f3f4f6', color: '#4b5563' }}>
                 +{info.times.length - 2} more
               </div>
             )}
@@ -428,7 +428,7 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
                 className="therapist-selector-btn"
                 onClick={() => setShowTherapistDropdown(!showTherapistDropdown)}
               >
-                <div className="avatar-circle" style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
+                <div className="avatar-circle" style={{ width: 24, height: 24, borderRadius: '50%', background: '#0f766e', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>
                   {(selectedTherapist?.name || '?')[0].toUpperCase()}
                 </div>
                 <span>{selectedTherapist?.name || 'Select Therapist'}</span>
@@ -478,12 +478,12 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
         {loading ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 0', gap: 12 }}>
             <Loader2 size={32} className="spinner" style={{ animation: 'spin 0.8s linear infinite', color: '#0f766e' }} />
-            <p style={{ color: '#64748b', fontSize: 14 }}>Loading availability...</p>
+            <p style={{ color: '#6b7280', fontSize: 14 }}>Loading availability...</p>
           </div>
         ) : !scheduleId ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 0', gap: 12 }}>
-            <Calendar size={48} style={{ color: '#cbd5e1' }} />
-            <p style={{ color: '#64748b', fontSize: 14, textAlign: 'center' }}>
+            <Calendar size={48} style={{ color: '#d1d5db' }} />
+            <p style={{ color: '#6b7280', fontSize: 14, textAlign: 'center' }}>
               No schedule configured for this therapist.<br />
               Please ensure a service is created and the therapist's Google Calendar is connected.
             </p>
