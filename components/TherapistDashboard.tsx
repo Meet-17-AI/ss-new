@@ -27,6 +27,7 @@ import { NotificationBell } from './NotificationBell';
 
 import { Routes, Route, useNavigate, useLocation, Navigate, useSearchParams } from 'react-router-dom';
 import { useSocket } from '../context/SocketContext';
+import { useAuth } from '../context/AuthContext';
 import { SOSDocumentationView } from './SOSDocumentationView';
 import TherapistAvailabilityCalendar from './TherapistAvailabilityCalendar';
 
@@ -36,9 +37,11 @@ interface TherapistDashboardProps {
 }
 
 export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) {
+  const { login } = useAuth();
   const { socket } = useSocket();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const activeView = location.pathname.split('/')[2] || 'dashboard';
   const setActiveView = (view: string) => navigate(`/therapist/${view}`);
   const [activeTab, setActiveTab] = useState<'all' | 'nri'>('all');
