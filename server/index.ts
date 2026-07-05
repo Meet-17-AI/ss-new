@@ -4848,13 +4848,13 @@ app.post('/api/webhooks/new-booking', async (req, res) => {
           // Determine if it's a Free Consultation
           const isFreeConsultation = (booking.booking_resource_name || '').toLowerCase().includes('free consultation') || 
                                      (booking.booking_resource_name || '').toLowerCase().includes('pre-therapy') ||
-                                     parseFloat(booking.invitee_payment_amount || '0') === 0;
+                                     (booking.booking_resource_name || '').toLowerCase().includes('pre therapy');
 
           // Find matching lead - normalizing phone for comparison
           const leadResult = await pool.query(
             `SELECT id, name, pipeline_stage FROM leads 
-             WHERE (RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '(', ''), ')', ''), '+', ''), 10) = RIGHT($1, 10) 
-                OR LOWER(TRIM(email)) = $2)
+             WHERE ( (RIGHT(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '(', ''), ')', ''), '+', ''), 10) = RIGHT($1, 10) AND $1 <> '')
+                OR (LOWER(TRIM(email)) = $2 AND $2 <> '') )
              ORDER BY created_at DESC LIMIT 1`,
             [inviteePhone, inviteeEmail]
           );
