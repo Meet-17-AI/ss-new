@@ -28,6 +28,7 @@ import { NotificationBell } from './NotificationBell';
 import { Routes, Route, useNavigate, useLocation, Navigate, useSearchParams } from 'react-router-dom';
 import { useSocket } from '../context/SocketContext';
 import { SOSDocumentationView } from './SOSDocumentationView';
+import TherapistAvailabilityCalendar from './TherapistAvailabilityCalendar';
 
 interface TherapistDashboardProps {
   onLogout: () => void;
@@ -3133,49 +3134,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
             }}
           />
         ) : activeView === 'resources' ? (
-          <div className="flex flex-col h-full overflow-hidden relative">
-            <div className="flex justify-between items-center p-4 bg-teal-50 border-b border-teal-100 flex-shrink-0">
-              <div>
-                <h3 className="font-bold text-teal-800">Google Calendar Connection</h3>
-                <p className="text-sm text-teal-700">
-                  {user.google_calendar_connected 
-                    ? 'Your Google Calendar is connected. Availabilities will be synced.' 
-                    : 'Your Google Calendar is not connected. Please connect to sync availabilities.'}
-                </p>
-              </div>
-              <a
-                href={user.google_calendar_connected ? undefined : `/api/auth/google?therapistId=${user.therapist_id}`}
-                className={`px-4 py-2 rounded-lg text-sm font-medium ${
-                  user.google_calendar_connected 
-                    ? 'bg-gray-100 text-gray-500 cursor-default' 
-                    : 'bg-teal-600 text-white hover:bg-teal-700'
-                }`}
-              >
-                {user.google_calendar_connected ? 'Connected' : 'Connect Calendar'}
-              </a>
-            </div>
-            <div className="flex-1 overflow-auto">
-              {selectedEditEvent ? (
-                <EditEvent
-                  event={selectedEditEvent}
-                  therapistId={user.therapist_id}
-                  services={dbServices.length > 0 ? dbServices : (therapistData[user.full_name]?.services || [])}
-                  onBack={() => {
-                    setSelectedEditEvent(null);
-                    setActiveView('dashboard');
-                  }}
-                  onSave={(updated) => {
-                    console.log('Event Saved:', updated);
-                    setSelectedEditEvent(null);
-                    setActiveView('dashboard');
-                    setToast({ message: 'Event settings updated successfully!', type: 'success' });
-                  }}
-                />
-              ) : (
-                <div className="p-8 text-center text-gray-500">No availability configured for this account.</div>
-              )}
-            </div>
-          </div>
+          <TherapistAvailabilityCalendar user={user} />
         ) : activeView === 'notifications' ? (
           <Notifications userRole="therapist" userId={user.id} />
         ) : activeView === 'settings' ? (

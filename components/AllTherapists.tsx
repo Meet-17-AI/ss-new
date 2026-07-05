@@ -14,6 +14,7 @@ import { ViewTherapistModal } from './ViewTherapistModal';
 import { EditTherapistForm } from './EditTherapistForm';
 import { ConfirmModal } from './ConfirmModal';
 import EditEvent from './EditEvent';
+import TherapistAvailabilityCalendar from './TherapistAvailabilityCalendar';
 
 interface Client {
   invitee_name: string;
@@ -2747,181 +2748,17 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
             sessionTypeFilter={selectedSessionTypeFilter}
           />
         ) : viewMode === 'availabilities' ? (
-          selectedEditEvent ? (
-            <div className="h-full overflow-y-auto">
-              <EditEvent
-                event={selectedEditEvent}
-                therapistId={therapists.find(t => t.name === selectedEditEvent.owner)?.therapist_id}
-                services={dbServices
-                  .filter((s: any) => s.therapist_name === selectedEditEvent.owner)
-                  .map((s: any) => ({
-                    ...s,
-                    scheduleId: s.schedule_id,
-                    detailedDescription: s.detailed_description,
-                    editViewDescription: s.edit_view_description
-                  }))}
-                isAdminView={true}
-                onBack={() => {
-                  setSelectedEditEvent(null);
-                }}
-                onSave={(updated) => {
-                  console.log('Event Saved:', updated);
-                  setSelectedEditEvent(null);
-                  setToast({ message: 'Availabilities updated successfully!', type: 'success' });
-                }}
-              />
-            </div>
-          ) : (
-            <div className="p-6 h-full overflow-y-auto bg-gray-50 rounded-lg border">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {therapists.map((therapist) => {
-                  let services = dbServices
-                    .filter((s: any) => s.therapist_id === therapist.therapist_id || s.therapist_name === therapist.name)
-                    .map((s: any) => ({
-                      ...s,
-                      scheduleId: s.schedule_id,
-                      detailedDescription: s.detailed_description,
-                      editViewDescription: s.edit_view_description
-                    }));
-                  
-                  if (services.length === 0 && therapistData[therapist.name]) {
-                    services = therapistData[therapist.name].services;
-                  }
-                  
-                  if (services.length === 0) {
-                    const defaultSlug = `/${therapist.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-                    services = [{
-                      title: `Therapy Session with ${therapist.name}`,
-                      slug: defaultSlug,
-                      charges: 'TBD',
-                      type: 'one_on_one',
-                      label: 'Session',
-                      description: 'Therapy Session',
-                      detailedDescription: ''
-                    }];
-                  }
-
-                  const hasSchedule = !!therapist.scheduleId || !!therapist.therapist_id;
-                  const canManage = true;
-
-                  return (
-                    <div
-                      key={therapist.therapist_id}
-                      className={`relative bg-white rounded-xl border p-6 flex flex-col items-center text-center transition-all ${canManage ? 'hover:shadow-md cursor-pointer hover:border-teal-500' : 'opacity-70 bg-gray-50'
-                        }`}
-                      onClick={() => {
-                        const scheduleId = therapist.scheduleId || (services.length > 0 ? services[0].scheduleId : null) || therapist.therapist_id;
-
-                        // We can open the edit event if we have either a scheduleId or services
-                        if (scheduleId || services.length > 0) {
-                          const baseService = services.length > 0 ? services[0] : {
-                            slug: '/',
-                            label: 'Session',
-                            charges: 'TBD',
-                            description: 'Therapy Session',
-                            detailedDescription: '',
-                            type: 'one_on_one' as const,
-                            title: 'Individual Therapy',
-                            scheduleId
-                          };
-
-                          setSelectedEditEvent({
-                            ...baseService,
-                            scheduleId: scheduleId,
-                            owner: therapist.name,
-                            initialTab: 'Schedule'
-                          });
-                        }
-                      }}
-                    >
-                      {!canManage && (
-                        <div className="absolute top-3 right-3 bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border border-amber-200">
-                          Coming Soon
-                        </div>
-                      )}
-                      <div className="w-16 h-16 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 text-xl font-bold mb-4">
-                        {therapist.name.charAt(0)}
-                      </div>
-                      <h3 className="text-lg font-semibold text-gray-900 mb-1">{displayTherapistName(therapist.name, therapist.therapist_id)}</h3>
-                      {therapist.google_calendar_connected ? (
-                        <p className="text-sm text-gray-500 mb-4 truncate w-full">{therapist.contact_info}</p>
-                      ) : (
-                        <div className="mb-4 h-5"></div>
-                      )}
-                      <div className="mt-auto pt-4 border-t border-gray-100 w-full flex flex-col gap-3">
-                        {canManage ? (
-                          <>
-                            <div className="flex items-center justify-center gap-2 text-teal-700 text-sm font-medium">
-                              <CalendarIcon size={16} /> Manage Schedule
-                            </div>
-
-                            {/* Booking Links Dropdown */}
-                            <div className="w-full relative booking-links-dropdown-container" onClick={e => e.stopPropagation()}>
-                              <button
-                                className="w-full flex items-center justify-center gap-2 px-3 py-1.5 border border-teal-600 text-teal-700 rounded-lg hover:bg-teal-50 transition-colors text-xs font-semibold"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setOpenBookingLinksId(openBookingLinksId === therapist.therapist_id ? null : therapist.therapist_id);
-                                }}
-                              >
-                                <Link size={12} />
-                                Booking Links
-                                <ChevronDown size={12} />
-                              </button>
-
-                              {openBookingLinksId === therapist.therapist_id && (
-                                <div
-                                  className="absolute bottom-full left-0 right-0 mb-2 bg-white border border-gray-200 rounded-lg shadow-xl z-50 overflow-hidden text-left"
-                                >
-                                  <div className="px-3 py-2 bg-gray-50 border-b">
-                                    <p className="text-[10px] uppercase font-bold text-gray-500 tracking-wider">Public Booking Pages</p>
-                                  </div>
-                                  <div className="max-h-[200px] overflow-y-auto">
-                                    {services.map((service: any, sIdx: number) => (
-                                      <div key={sIdx} className="p-3 border-b last:border-0 hover:bg-gray-50 transition-colors">
-                                        <p className="text-xs font-semibold text-gray-800 mb-1 truncate">{service.title}</p>
-                                        <div className="flex gap-2">
-                                          <button
-                                            className="flex-1 flex items-center justify-center gap-1 text-[10px] py-1 border rounded hover:bg-gray-100 text-gray-600"
-                                            onMouseDown={e => e.stopPropagation()}
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              navigator.clipboard.writeText(`${window.location.origin}/book${service.slug}`);
-                                              setToast({ message: 'Booking link copied!', type: 'success' });
-                                            }}
-                                          >
-                                            <Copy size={10} /> Copy
-                                          </button>
-                                          <button
-                                            className="flex-1 flex items-center justify-center gap-1 text-[10px] py-1 bg-teal-50 text-teal-700 border border-teal-100 rounded hover:bg-teal-100"
-                                            onMouseDown={e => e.stopPropagation()}
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              window.open(`/book${service.slug}`, '_blank');
-                                            }}
-                                          >
-                                            <ExternalLink size={10} /> Open
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </>
-                        ) : (
-                          <span className="text-gray-400 text-sm font-medium flex items-center justify-center gap-2">
-                            No setup yet
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )
+          <div className="h-full overflow-hidden">
+            <TherapistAvailabilityCalendar
+              user={{}}
+              isAdmin={true}
+              therapistsList={therapists.map(t => ({
+                therapist_id: t.therapist_id,
+                name: t.name,
+                schedule_id: t.scheduleId || null,
+              }))}
+            />
+          </div>
         ) : (
           /* Therapists Table */
           loading ? (
