@@ -817,6 +817,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
           invitee_occupation: aptWithEmergency.invitee_occupation,
           invitee_marital_status: aptWithEmergency.invitee_marital_status,
           clinical_profile: aptWithEmergency.clinical_profile,
+          client_type: data.appointments.find((apt: any) => apt.client_type)?.client_type || prev.client_type || 'Indian',
           remarks: aptWithRemarks.invitee_question
         }));
       }
@@ -1099,8 +1100,10 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
           <button
             onClick={() => {
               const source = searchParams.get('source');
+              const tab = searchParams.get('tab');
               if (source) {
-                navigate(`/admin/${source}`);
+                // Preserve the originating tab (e.g. NRI Clients) on the way back
+                navigate(`/admin/${source}${tab ? `?tab=${tab}` : ''}`);
               } else if (onBack) {
                 onBack();
               } else {
@@ -1128,11 +1131,13 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
               {getClientStatus(selectedClient, clientAppointments) === 'active' ? 'Active' :
                 getClientStatus(selectedClient, clientAppointments) === 'drop-out' ? 'Drop-out' : 'Inactive'}
             </span>
-            {selectedClient.client_type === 'NRI' && (
-              <span className="px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-700">
-                NRI
-              </span>
-            )}
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+              selectedClient.client_type === 'NRI'
+                ? 'bg-purple-100 text-purple-700'
+                : 'bg-blue-100 text-blue-700'
+            }`}>
+              {selectedClient.client_type === 'NRI' ? 'NRI' : 'Indian'}
+            </span>
             <button
               onClick={() => {
                 setClientContactEdit({ name: selectedClient.invitee_name, phone: selectedClient.invitee_phone || '', email: selectedClient.invitee_email || '', client_type: selectedClient.client_type || 'Indian', saving: false });

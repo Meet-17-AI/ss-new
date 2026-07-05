@@ -594,7 +594,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           <Route path="newTherapist" element={<NewTherapist onBack={() => navigate('/admin/create')} />} />
           <Route path="clients" element={
             <AllClients onClientClick={(client) => {
-              navigate('/admin/therapists?clientId=' + encodeURIComponent(client.invitee_email || client.invitee_phone) + '&source=clients');
+              const tabParam = client.tab === 'nri' ? '&tab=nri' : '';
+              navigate('/admin/therapists?clientId=' + encodeURIComponent(client.invitee_email || client.invitee_phone) + '&source=clients' + tabParam);
             }} onCreateBooking={() => navigate('/admin/createBooking')} />
           } />
           <Route path="therapists" element={

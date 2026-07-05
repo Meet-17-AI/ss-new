@@ -4811,6 +4811,7 @@ app.get('/api/client-appointments', async (req, res) => {
           b.invitee_marital_status,
           b.clinical_profile,
           b.client_rating,
+          b.client_type,
           CASE WHEN (csn.note_id IS NOT NULL OR cpn.id IS NOT NULL OR fcn.id IS NOT NULL OR pcf.booking_id IS NOT NULL OR cch.id IS NOT NULL) THEN true ELSE false END as has_session_notes
         FROM bookings b
         LEFT JOIN client_session_notes csn ON b.booking_id = csn.booking_id
@@ -4837,6 +4838,7 @@ app.get('/api/client-appointments', async (req, res) => {
           b.invitee_marital_status,
           b.clinical_profile,
           b.client_rating,
+          b.client_type,
           CASE WHEN (csn.note_id IS NOT NULL OR cpn.id IS NOT NULL OR fcn.id IS NOT NULL OR pcf.booking_id IS NOT NULL OR cch.id IS NOT NULL) THEN true ELSE false END as has_session_notes
         FROM bookings b
         LEFT JOIN client_session_notes csn ON b.booking_id = csn.booking_id

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { MessageCircle, Search, Download, ChevronDown, ChevronRight, ArrowRightLeft, Plus, Send, Pencil, Check } from 'lucide-react';
 import * as XLSX from 'xlsx'
 import { SendBookingModal } from './SendBookingModal';
@@ -40,7 +41,10 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [activeTab, setActiveTab] = useState<'all' | 'nri'>('all');
+  // Restore the tab from the URL so returning from a client profile
+  // lands back on the tab (All / NRI) the user navigated from.
+  const [urlParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<'all' | 'nri'>(urlParams.get('tab') === 'nri' ? 'nri' : 'all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive' | 'drop-out'>('all');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [showBookingLinkConfirmModal, setShowBookingLinkConfirmModal] = useState(false);
@@ -721,7 +725,8 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
                                         onClientClick({
                                           invitee_name: client.invitee_name,
                                           invitee_email: client.invitee_email,
-                                          invitee_phone: client.invitee_phone
+                                          invitee_phone: client.invitee_phone,
+                                          tab: activeTab
                                         });
                                       }
                                     }}
@@ -730,9 +735,13 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
                                     {formatClientName(client.invitee_name)}
                                   </button>
                                 </span>
-                                {client.client_type === 'NRI' && (
+                                {client.client_type === 'NRI' ? (
                                   <span className="bg-purple-100 text-purple-700 text-xs font-semibold px-2 py-0.5 rounded border border-purple-200">
                                     NRI
+                                  </span>
+                                ) : (
+                                  <span className="bg-blue-100 text-blue-700 text-xs font-semibold px-2 py-0.5 rounded border border-blue-200">
+                                    Indian
                                   </span>
                                 )}
                               </div>
