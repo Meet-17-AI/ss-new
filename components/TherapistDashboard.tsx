@@ -27,6 +27,7 @@ import { NotificationBell } from './NotificationBell';
 
 import { Routes, Route, useNavigate, useLocation, Navigate, useSearchParams } from 'react-router-dom';
 import { useSocket } from '../context/SocketContext';
+import { useAuth } from '../context/AuthContext';
 import { SOSDocumentationView } from './SOSDocumentationView';
 import TherapistAvailabilityCalendar from './TherapistAvailabilityCalendar';
 
