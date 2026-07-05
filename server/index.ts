@@ -4899,11 +4899,25 @@ app.post('/api/webhooks/new-booking', async (req, res) => {
                      ${timestampColumn} = CURRENT_TIMESTAMP,
                      remark_lead_manager = COALESCE(remark_lead_manager, '') || $2,
                      therapist_id = COALESCE($4, therapist_id),
+                     email = COALESCE(NULLIF(email, ''), $5),
+                     phone = COALESCE(NULLIF(phone, ''), $6),
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $3`,
-                [targetStage, remark, lead.id, therapistId]
+                [targetStage, remark, lead.id, therapistId, booking.invitee_email || null, booking.invitee_phone || null]
               );
               console.log(`✨ [Auto-Move] Lead "${lead.name}" (${lead.id}) moved: ${currentStage} → ${targetStage} (Therapist: ${therapistId || 'N/A'})`);
+            } else {
+              // Lead already at or past target stage — still enrich contact details if missing
+              await pool.query(
+                `UPDATE leads 
+                 SET email = COALESCE(NULLIF(email, ''), $2),
+                     phone = CASE WHEN LENGTH(REGEXP_REPLACE(COALESCE(phone,''), '\\D', '', 'g')) < LENGTH(REGEXP_REPLACE(COALESCE($3,''), '\\D', '', 'g')) THEN $3 ELSE phone END,
+                     therapist_id = COALESCE($4, therapist_id),
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $1`,
+                [lead.id, booking.invitee_email || null, booking.invitee_phone || null, therapistInternalId || null]
+              );
+              console.log(`📝 [Enrich] Lead "${lead.name}" (${lead.id}) already at ${currentStage}, enriched contact details`);
             }
           } else {
           // --- AUTO-CREATE LEAD ---
