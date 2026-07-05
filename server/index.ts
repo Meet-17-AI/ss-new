@@ -3712,7 +3712,8 @@ app.get('/api/therapist-clients', async (req, res) => {
         invitee_phone as client_phone,
         booking_start_at,
         booking_resource_name,
-        booking_mode
+        booking_mode,
+        client_type
       FROM bookings
       WHERE booking_host_name ILIKE $1
       ORDER BY booking_start_at DESC
@@ -3725,7 +3726,7 @@ app.get('/api/therapist-clients', async (req, res) => {
 
     clientsResult.rows.forEach(row => {
       const email = row.client_email ? row.client_email.toLowerCase().trim() : null;
-      const phone = row.client_phone ? row.client_phone.replace(/[\s\-\(\)\+]/g, '') : null;
+      const phone = row.client_phone ? row.client_phone.replace(/[\\s\\-\\(\\)\\+]/g, '') : null;
 
       let key = null;
 
@@ -3756,12 +3757,18 @@ app.get('/api/therapist-clients', async (req, res) => {
           total_sessions: 0,
           latest_booking_date: row.booking_start_at,
           booking_resource_name: row.booking_resource_name,
-          booking_mode: row.booking_mode
+          booking_mode: row.booking_mode,
+          client_type: row.client_type === 'NRI' ? 'NRI' : 'Indian'
         });
       }
 
       const client = clientMap.get(key);
       client.total_sessions += 1;
+
+      // If ANY booking is NRI, the client is NRI
+      if (row.client_type === 'NRI') {
+        client.client_type = 'NRI';
+      }
 
       // Update to most recent session info
       if (new Date(row.booking_start_at) > new Date(client.latest_booking_date)) {
@@ -3775,7 +3782,7 @@ app.get('/api/therapist-clients', async (req, res) => {
       if (row.client_email && !client.client_email) {
         client.client_email = row.client_email;
         // Update emailToKey mapping
-        emailToKey.set(email!, key);
+        emailToKey.set(email, key);
       }
     });
 
@@ -3787,7 +3794,8 @@ app.get('/api/therapist-clients', async (req, res) => {
         total_sessions: client.total_sessions,
         booking_resource_name: client.booking_resource_name,
         booking_mode: client.booking_mode,
-        last_session_date: client.latest_booking_date
+        last_session_date: client.latest_booking_date,
+        client_type: client.client_type
       };
     });
 
@@ -4901,9 +4909,10 @@ app.post('/api/webhooks/new-booking', async (req, res) => {
                      therapist_id = COALESCE($4, therapist_id),
                      email = COALESCE(NULLIF(email, ''), $5),
                      phone = COALESCE(NULLIF(phone, ''), $6),
+                     name = CASE WHEN LENGTH(COALESCE($7, '')) > LENGTH(COALESCE(name, '')) THEN $7 ELSE name END,
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $3`,
-                [targetStage, remark, lead.id, therapistId, booking.invitee_email || null, booking.invitee_phone || null]
+                [targetStage, remark, lead.id, therapistId, booking.invitee_email || null, booking.invitee_phone || null, booking.invitee_name || null]
               );
               console.log(`✨ [Auto-Move] Lead "${lead.name}" (${lead.id}) moved: ${currentStage} → ${targetStage} (Therapist: ${therapistId || 'N/A'})`);
             } else {
@@ -4912,10 +4921,11 @@ app.post('/api/webhooks/new-booking', async (req, res) => {
                 `UPDATE leads 
                  SET email = COALESCE(NULLIF(email, ''), $2),
                      phone = CASE WHEN LENGTH(REGEXP_REPLACE(COALESCE(phone,''), '\\D', '', 'g')) < LENGTH(REGEXP_REPLACE(COALESCE($3,''), '\\D', '', 'g')) THEN $3 ELSE phone END,
+                     name = CASE WHEN LENGTH(COALESCE($5, '')) > LENGTH(COALESCE(name, '')) THEN $5 ELSE name END,
                      therapist_id = COALESCE($4, therapist_id),
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $1`,
-                [lead.id, booking.invitee_email || null, booking.invitee_phone || null, therapistInternalId || null]
+                [lead.id, booking.invitee_email || null, booking.invitee_phone || null, therapistInternalId || null, booking.invitee_name || null]
               );
               console.log(`📝 [Enrich] Lead "${lead.name}" (${lead.id}) already at ${currentStage}, enriched contact details`);
             }
