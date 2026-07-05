@@ -4673,7 +4673,8 @@ app.get('/api/therapist-clients', async (req, res) => {
         invitee_phone as client_phone,
         booking_start_at,
         booking_resource_name,
-        booking_mode
+        booking_mode,
+        client_type
       FROM bookings
       WHERE booking_host_name ILIKE $1
         AND booking_status NOT IN ('payment_pending', 'waiting_for_payment', 'payment_failed', 'pending')
@@ -4718,12 +4719,18 @@ app.get('/api/therapist-clients', async (req, res) => {
           total_sessions: 0,
           latest_booking_date: row.booking_start_at,
           booking_resource_name: row.booking_resource_name,
-          booking_mode: row.booking_mode
+          booking_mode: row.booking_mode,
+          client_type: row.client_type === 'NRI' ? 'NRI' : 'Indian'
         });
       }
 
       const client = clientMap.get(key);
       client.total_sessions += 1;
+
+      // If ANY booking is NRI, the client is NRI
+      if (row.client_type === 'NRI') {
+        client.client_type = 'NRI';
+      }
 
       // Update to most recent session info
       if (new Date(row.booking_start_at) > new Date(client.latest_booking_date)) {
@@ -4749,7 +4756,8 @@ app.get('/api/therapist-clients', async (req, res) => {
         total_sessions: client.total_sessions,
         booking_resource_name: client.booking_resource_name,
         booking_mode: client.booking_mode,
-        last_session_date: client.latest_booking_date
+        last_session_date: client.latest_booking_date,
+        client_type: client.client_type
       };
     });
 
