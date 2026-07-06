@@ -1,50 +1,97 @@
 import { Resend } from 'resend';
+import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import { logWebhookApi } from './webhookApiLogger.js';
 
 // Load environment variables
 dotenv.config({ path: '.env.local' });
 
+// Email service configuration
+const useGmailSmtp = process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD;
 const resendApiKey = process.env.RESEND_API_KEY || 'missing_api_key';
 const resend = new Resend(resendApiKey);
 
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
 
+// Initialize Gmail SMTP transporter
+let gmailTransporter: any = null;
+if (useGmailSmtp) {
+  gmailTransporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.GMAIL_USER,
+      pass: process.env.GMAIL_APP_PASSWORD,
+    },
+  });
+
+  console.log(`✅ Gmail SMTP configured: ${process.env.GMAIL_USER}`);
+}
+
 async function sendEmailWithLogging(mailOptions: any, emailType: string): Promise<any> {
   try {
-    const { data, error } = await resend.emails.send(mailOptions);
-    if (error) {
-      console.error(`❌ Resend API Error [${emailType}]:`, error);
+    if (useGmailSmtp && gmailTransporter) {
+      // Send via Gmail SMTP
+      const fromEmail = process.env.GMAIL_USER || 'noreply@safestories.com';
+
+      const result = await gmailTransporter.sendMail({
+        from: fromEmail,
+        to: mailOptions.to,
+        subject: mailOptions.subject,
+        html: mailOptions.html,
+        text: mailOptions.text,
+      });
+
+      console.log(`✅ Email sent via Gmail SMTP [${emailType}]:`, result.messageId);
+      await logWebhookApi({
+        log_type: 'api_outgoing',
+        name: `Gmail SMTP (${emailType})`,
+        endpoint: 'smtp.gmail.com:587',
+        method: 'SMTP',
+        status: 'success',
+        request_payload: { to: mailOptions.to, subject: mailOptions.subject },
+        response_data: { messageId: result.messageId }
+      });
+
+      return { data: { id: result.messageId }, error: null };
+    } else {
+      // Fallback to Resend
+      const { data, error } = await resend.emails.send(mailOptions);
+      if (error) {
+        console.error(`❌ Resend API Error [${emailType}]:`, error);
+        await logWebhookApi({
+          log_type: 'api_outgoing',
+          name: `Resend Email API (${emailType})`,
+          endpoint: RESEND_ENDPOINT,
+          method: 'POST',
+          status: 'failed',
+          request_payload: mailOptions,
+          error_message: JSON.stringify(error),
+          response_data: error
+        });
+        throw error;
+      }
+      console.log(`✅ Email sent via Resend [${emailType}]:`, data?.id);
       await logWebhookApi({
         log_type: 'api_outgoing',
         name: `Resend Email API (${emailType})`,
         endpoint: RESEND_ENDPOINT,
         method: 'POST',
-        status: 'failed',
+        status: 'success',
         request_payload: mailOptions,
-        error_message: JSON.stringify(error),
-        response_data: error
+        response_data: data
       });
-      throw error;
+      return { data, error };
     }
-    console.log(`✅ Email sent successfully [${emailType}]:`, data?.id);
-    await logWebhookApi({
-      log_type: 'api_outgoing',
-      name: `Resend Email API (${emailType})`,
-      endpoint: RESEND_ENDPOINT,
-      method: 'POST',
-      status: 'success',
-      request_payload: mailOptions,
-      response_data: data
-    });
-    return { data, error };
   } catch (err: any) {
     console.error(`❌ Exception sending email [${emailType}]:`, err);
+    const endpoint = useGmailSmtp ? 'smtp.gmail.com:587' : RESEND_ENDPOINT;
+    const method = useGmailSmtp ? 'SMTP' : 'POST';
+
     await logWebhookApi({
       log_type: 'api_outgoing',
-      name: `Resend Email API (${emailType})`,
-      endpoint: RESEND_ENDPOINT,
-      method: 'POST',
+      name: `Email Service (${emailType})`,
+      endpoint: endpoint,
+      method: method,
       status: 'failed',
       request_payload: mailOptions,
       error_message: err.message || String(err)
