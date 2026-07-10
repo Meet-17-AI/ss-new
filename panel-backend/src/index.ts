@@ -3869,7 +3869,7 @@ app.get('/api/appointments', async (req, res) => {
         b.booking_status,
         b.client_rating,
         CASE WHEN (csn.note_id IS NOT NULL OR cpn.id IS NOT NULL OR fcn.id IS NOT NULL OR pcf.booking_id IS NOT NULL OR cch.id IS NOT NULL) THEN true ELSE false END as has_session_notes,
-        (b.booking_start_at < NOW()) as is_past
+        (b.booking_end_at < NOW() + INTERVAL '5 hours 30 minutes') as is_past
       FROM bookings b
       LEFT JOIN client_session_notes csn ON b.booking_id = csn.booking_id
       LEFT JOIN client_progress_notes cpn ON b.booking_id = cpn.booking_id
