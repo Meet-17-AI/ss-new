@@ -260,7 +260,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
         if (baseUrl.includes('safestories-dashboard')) baseUrl = 'https://panel.safestories.in';
         if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
         
-        if (adminRedirect || therapistId === 'SafeStories') {
+        if (adminRedirect) {
           return res.redirect(`${baseUrl}/admin?googleAuth=error&reason=already_linked`);
         } else {
           return res.redirect(`${baseUrl}/therapist?googleAuth=error&reason=already_linked`);
@@ -297,7 +297,11 @@ app.get('/api/auth/google/callback', async (req, res) => {
     if (baseUrl.includes('safestories-dashboard')) baseUrl = 'https://panel.safestories.in';
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
 
-    if (adminRedirect || therapistId === 'SafeStories') {
+    // Route back to whoever initiated: admin flows send adminRedirect=true
+    // explicitly. Therapists (adminRedirect=false) must always return to the
+    // therapist dashboard — do NOT infer admin from therapistId==='SafeStories',
+    // since that value is also the fallback default and would misroute them.
+    if (adminRedirect) {
       res.redirect(`${baseUrl}/admin?googleAuth=success`);
     } else {
       res.redirect(`${baseUrl}/therapist?googleAuth=success`);
