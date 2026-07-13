@@ -256,8 +256,8 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
       if (existingCheck.rows.length > 0) {
         console.error(`❌ Google Calendar ${userEmail} is already linked to therapist ${existingCheck.rows[0].name}`);
-        let baseUrl = process.env.FRONTEND_URL || 'https://safestories-panel.vercel.app';
-        if (baseUrl.includes('safestories-dashboard')) baseUrl = 'https://safestories-panel.vercel.app';
+        let baseUrl = process.env.FRONTEND_URL || 'https://panel.safestories.in';
+        if (baseUrl.includes('safestories-dashboard')) baseUrl = 'https://panel.safestories.in';
         if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
         
         if (adminRedirect || therapistId === 'SafeStories') {
@@ -293,8 +293,8 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
     console.log(`✓ Connected Google Calendar successfully for therapist: ${therapistId} (${userEmail})`);
 
-    let baseUrl = process.env.FRONTEND_URL || 'https://safestories-panel.vercel.app';
-    if (baseUrl.includes('safestories-dashboard')) baseUrl = 'https://safestories-panel.vercel.app';
+    let baseUrl = process.env.FRONTEND_URL || 'https://panel.safestories.in';
+    if (baseUrl.includes('safestories-dashboard')) baseUrl = 'https://panel.safestories.in';
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
 
     if (adminRedirect || therapistId === 'SafeStories') {
@@ -3588,7 +3588,7 @@ app.post('/api/reschedule-booking', async (req, res) => {
     if (notify !== false) {
       try {
         const { sendBookingRescheduledClient, sendBookingRescheduledTherapist } = await import('./automations/index.js');
-        const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://safestories-dashboard.vercel.app';
+        const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://panel.safestories.in';
         const shortLink = bookingDetails.public_booking_checkin_url || `${baseUrl}/booking-confirmation/${booking_id}`;
 
         try {
@@ -5353,7 +5353,7 @@ app.get('/api/session-notes-info', async (req, res) => {
     // Auto-populate custom_form_link in DB for consultations if empty
     if (isConsultation) {
       const host = req.headers.host || '';
-      const baseUrl = host.includes('localhost') ? 'http://localhost:3004' : (process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://safestories-dashboard.vercel.app');
+      const baseUrl = host.includes('localhost') ? 'http://localhost:3004' : (process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://panel.safestories.in');
       const publicLink = `${baseUrl}/session-notes/${row.booking_id}`;
       
       // Upsert into client_doc_form
@@ -9140,7 +9140,7 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
     // Keep this client's contact info up to date across their bookings (#2)
     await reconcileClientContact(clientEmail, clientPhone);
 
-    let baseUrl = process.env.FRONTEND_URL || 'https://safestories-panel.vercel.app';
+    let baseUrl = process.env.FRONTEND_URL || 'https://panel.safestories.in';
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
     
     const paymentLink = `${baseUrl}/pay/${bookingId}`;

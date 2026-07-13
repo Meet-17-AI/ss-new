@@ -30,7 +30,7 @@ async function createTestBooking() {
     ]);
 
     // 3. Create doc form entry with public link
-    const publicLink = `https://safestories-dashboard.vercel.app/session-notes/${bookingId}`;
+    const publicLink = `https://panel.safestories.in/session-notes/${bookingId}`;
     await pool.query(`
       INSERT INTO client_doc_form (
         booking_id, status, custom_form_link

@@ -171,7 +171,7 @@ async function checkPostSessionForms() {
         console.log(`[Cron] Found ${rows.length} sessions for post-session therapist form.`);
     }
 
-    const frontendUrl = process.env.FRONTEND_URL || 'https://safestories-dashboard.vercel.app';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://panel.safestories.in';
 
     for (const booking of rows) {
         try {

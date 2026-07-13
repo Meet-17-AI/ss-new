@@ -89,7 +89,7 @@ export async function sendOTPEmail(
               <table width="100%" cellpadding="0" cellspacing="0" style="margin: 0 0 30px 0;">
                 <tr>
                   <td align="center">
-                    <a href="${process.env.FRONTEND_URL || "https://safestories-dashboard.vercel.app/"}" style="display: inline-block; background-color: #21615D; color: #ffffff; text-decoration: none; padding: 16px 40px; border-radius: 8px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                    <a href="${process.env.FRONTEND_URL || "https://panel.safestories.in/"}" style="display: inline-block; background-color: #21615D; color: #ffffff; text-decoration: none; padding: 16px 40px; border-radius: 8px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                       🔐 Login to Complete Your Profile
                     </a>
                   </td>
@@ -159,7 +159,7 @@ Welcome to SafeStories! Your One-Time Password (OTP) for profile setup is: ${otp
 
 This OTP will expire on ${expiryTime}.
 
-🔐 LOGIN LINK: ${process.env.FRONTEND_URL || "https://safestories-dashboard.vercel.app/"}
+🔐 LOGIN LINK: ${process.env.FRONTEND_URL || "https://panel.safestories.in/"}
 
 Next Steps:
 1. Click the login link above or go to the SafeStories dashboard

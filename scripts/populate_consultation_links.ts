@@ -8,7 +8,7 @@ async function populateConsultationLinks() {
     
     // Determine Base URL (can be overridden by arg or env)
     const isVercel = process.env.VERCEL === '1' || process.env.NODE_ENV === 'production';
-    const baseUrl = isVercel ? 'https://safestories-dashboard.vercel.app' : 'http://localhost:3004';
+    const baseUrl = isVercel ? 'https://panel.safestories.in' : 'http://localhost:3004';
     
     console.log(`📍 Using Base URL: ${baseUrl}`);
 
