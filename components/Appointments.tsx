@@ -411,6 +411,13 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
     return 'scheduled';
   };
 
+  // The platform placeholder host "SafeStories" is used for unassigned free
+  // consultations. The Dashboard's "Upcoming Sessions" list excludes it
+  // (LOWER(TRIM(booking_host_name)) <> 'safestories'); the Upcoming tab here
+  // must do the same so the two views match.
+  const isPlatformHost = (apt: Appointment) =>
+    (apt.booking_host_name || '').trim().toLowerCase() === 'safestories';
+
   const filteredAppointments = appointments.filter(apt => {
 
     const query = searchQuery.toLowerCase();
@@ -445,6 +452,8 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
     if (activeTab === 'free_consultation') return apt.is_free === true;
     const status = getAppointmentStatus(apt);
     if (activeTab === 'completed_sessions') return status === 'completed' || status === 'pending_notes';
+    // Upcoming tab mirrors the Dashboard: exclude the SafeStories placeholder host.
+    if (activeTab === 'scheduled') return status === 'scheduled' && !isPlatformHost(apt);
     return status === activeTab;
   }).sort((a, b) => {
     // Sort appointments by date - for upcoming appointments, show soonest first
@@ -545,6 +554,8 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
             if (tab.id === 'free_consultation') return apt.is_free === true;
             const status = getAppointmentStatus(apt);
             if (tab.id === 'completed_sessions') return status === 'completed' || status === 'pending_notes';
+            // Upcoming tab mirrors the Dashboard: exclude the SafeStories placeholder host.
+            if (tab.id === 'scheduled') return status === 'scheduled' && !isPlatformHost(apt);
             return status === tab.id;
           }).length;
 
