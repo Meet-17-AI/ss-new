@@ -24,7 +24,7 @@ const Sidebar = ({ currentPage, setCurrentPage, currentUser, onLogout }: Sidebar
           if (contentType && contentType.includes('application/json')) {
             const profileData = await profileRes.json();
             if (profileData.success && profileData.data.profile_picture_url) {
-              setProfilePictureUrl(profileData.data.profile_picture_url);
+              setProfilePictureUrl(profileData.data.profile_picture_url.replace('s3.fluidjobs.ai:9002', 's3.srv1169280.hstgr.cloud:443').replace('s3.fluidjobs.ai', 's3.srv1169280.hstgr.cloud'));
             }
           }
         }

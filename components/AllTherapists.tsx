@@ -1032,7 +1032,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
     setShowConfirmModal(false);
 
     try {
-      let profilePictureUrl = editedTherapist.profile_picture_url;
+      let profilePictureUrl = editedTherapist.profile_picture_url?.replace('s3.fluidjobs.ai:9002', 's3.srv1169280.hstgr.cloud:443').replace('s3.fluidjobs.ai', 's3.srv1169280.hstgr.cloud');
 
       // Upload profile picture if changed
       if (editProfilePicture) {
