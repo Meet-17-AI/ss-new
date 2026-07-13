@@ -184,7 +184,7 @@ dotenv.config({ path: '.env.local' });
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '168173993649-2v0jpmi1c4mdkjg70agbret556r7uarm.apps.googleusercontent.com';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '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';
-const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'https://safestories-panel.onrender.com/api/auth/google/callback';
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'https://panel.safestories.in/api/auth/google/callback';
 
 const getOAuth2Client = () => {
   return new google.auth.OAuth2(
