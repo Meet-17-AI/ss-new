@@ -257,7 +257,9 @@ app.get('/api/auth/google/callback', async (req, res) => {
       if (existingCheck.rows.length > 0) {
         console.error(`❌ Google Calendar ${userEmail} is already linked to therapist ${existingCheck.rows[0].name}`);
         let baseUrl = process.env.FRONTEND_URL || 'https://panel.safestories.in';
-        if (baseUrl.includes('safestories-dashboard')) baseUrl = 'https://panel.safestories.in';
+        if (baseUrl.includes('safestories-dashboard') || baseUrl.includes('safestories-panel.vercel.app')) {
+          baseUrl = 'https://panel.safestories.in';
+        }
         if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
         
         if (adminRedirect) {
@@ -294,7 +296,9 @@ app.get('/api/auth/google/callback', async (req, res) => {
     console.log(`✓ Connected Google Calendar successfully for therapist: ${therapistId} (${userEmail})`);
 
     let baseUrl = process.env.FRONTEND_URL || 'https://panel.safestories.in';
-    if (baseUrl.includes('safestories-dashboard')) baseUrl = 'https://panel.safestories.in';
+    if (baseUrl.includes('safestories-dashboard') || baseUrl.includes('safestories-panel.vercel.app')) {
+      baseUrl = 'https://panel.safestories.in';
+    }
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
 
     // Route back to whoever initiated: admin flows send adminRedirect=true
