@@ -54,7 +54,7 @@ RAZORPAY_KEY_ID=your-key-id
 RAZORPAY_KEY_SECRET=your-key-secret
 
 # MinIO
-MINIO_ENDPOINT=s3.fluidjobs.ai
+MINIO_ENDPOINT=s3.srv1169280.hstgr.cloud
 MINIO_PORT=443
 MINIO_ACCESS_KEY=your-access-key
 MINIO_SECRET_KEY=your-secret-key

@@ -69,16 +69,16 @@
 
 #### File URL Format:
 ```
-https://s3.fluidjobs.ai:9002/safestories-panel/profile-pictures/1234567890-filename.jpg
-https://s3.fluidjobs.ai:9002/safestories-panel/qualification-pdfs/1234567890-certificate.pdf
+https://s3.srv1169280.hstgr.cloud:443/safestories-panel/profile-pictures/1234567890-filename.jpg
+https://s3.srv1169280.hstgr.cloud:443/safestories-panel/qualification-pdfs/1234567890-certificate.pdf
 ```
 
 ### 5. Environment Variables:
 
 Added to `.env.local`:
 ```env
-MINIO_ENDPOINT=s3.fluidjobs.ai
-MINIO_PORT=9002
+MINIO_ENDPOINT=s3.srv1169280.hstgr.cloud
+$1443
 MINIO_ACCESS_KEY=admin
 MINIO_SECRET_KEY=Fluid@bucket2026
 MINIO_USE_SSL=true

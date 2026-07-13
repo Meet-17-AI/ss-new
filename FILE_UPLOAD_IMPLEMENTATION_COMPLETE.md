@@ -26,7 +26,7 @@
 
 ### 4. MinIO Configuration (lib/minio.ts)
 - ✅ Properly configured with credentials from .env.local
-- ✅ Endpoint: s3.fluidjobs.ai:9002
+- ✅ Endpoint: s3.srv1169280.hstgr.cloud:443
 - ✅ Bucket: safestories-panel
 - ✅ SSL enabled
 
@@ -49,8 +49,8 @@
 
 ## File URL Format:
 ```
-https://s3.fluidjobs.ai:9002/safestories-panel/profile-pictures/1708689071234-filename.jpg
-https://s3.fluidjobs.ai:9002/safestories-panel/qualification-pdfs/1708689071234-document.pdf
+https://s3.srv1169280.hstgr.cloud:443/safestories-panel/profile-pictures/1708689071234-filename.jpg
+https://s3.srv1169280.hstgr.cloud:443/safestories-panel/qualification-pdfs/1708689071234-document.pdf
 ```
 
 ## Error Handling:

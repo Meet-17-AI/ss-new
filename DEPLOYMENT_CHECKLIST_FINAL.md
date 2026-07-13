@@ -166,7 +166,7 @@ git push origin main
 ### 1. File Upload System (MinIO)
 - Profile pictures upload to: `safestories-panel/profile-pictures/`
 - Qualification PDFs upload to: `safestories-panel/qualification-pdfs/`
-- URLs stored in database: `https://s3.fluidjobs.ai:9002/safestories-panel/...`
+- URLs stored in database: `https://s3.srv1169280.hstgr.cloud:443/safestories-panel/...`
 
 ### 2. Webhook Integration
 - Sends therapist data to n8n on profile completion
@@ -187,8 +187,8 @@ git push origin main
 ## ⚠️ IMPORTANT NOTES
 
 1. **Environment Variables Required:**
-   - MINIO_ENDPOINT=s3.fluidjobs.ai
-   - MINIO_PORT=9002
+   - MINIO_ENDPOINT=s3.srv1169280.hstgr.cloud
+   - $1443
    - MINIO_ACCESS_KEY=admin
    - MINIO_SECRET_KEY=Fluid@bucket2026
    - MINIO_USE_SSL=true

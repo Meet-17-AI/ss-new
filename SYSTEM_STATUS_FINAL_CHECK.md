@@ -10,8 +10,8 @@ PGDATABASE=safestories_db
 PGUSER=fluidadmin
 PGPASSWORD=admin123
 
-MINIO_ENDPOINT=s3.fluidjobs.ai
-MINIO_PORT=9002
+MINIO_ENDPOINT=s3.srv1169280.hstgr.cloud
+$1443
 MINIO_ACCESS_KEY=admin
 MINIO_SECRET_KEY=Fluid@bucket2026
 MINIO_USE_SSL=true

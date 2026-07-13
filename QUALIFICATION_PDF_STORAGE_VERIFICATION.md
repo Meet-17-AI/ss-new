@@ -29,7 +29,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending_review')
 
 **Example**:
 ```javascript
-qualificationPdfUrl = "https://s3.fluidjobs.ai:9002/safestories-panel/qualification-pdfs/abc123.pdf"
+qualificationPdfUrl = "https://s3.srv1169280.hstgr.cloud:443/safestories-panel/qualification-pdfs/abc123.pdf"
 // Stored in: therapist_details.qualification_pdf_url
 ```
 
@@ -56,7 +56,7 @@ WHERE therapist_id = $7
 
 **Example**:
 ```javascript
-qualificationPdfUrl = "https://s3.fluidjobs.ai:9002/safestories-panel/qualification-pdfs/xyz789.pdf"
+qualificationPdfUrl = "https://s3.srv1169280.hstgr.cloud:443/safestories-panel/qualification-pdfs/xyz789.pdf"
 // Stored in: therapists.qualification_pdf_url
 ```
 
@@ -70,7 +70,7 @@ CompleteProfileModal
   ↓
 Upload to MinIO: qualification-pdfs/abc123.pdf
   ↓
-Get URL: https://s3.fluidjobs.ai:9002/safestories-panel/qualification-pdfs/abc123.pdf
+Get URL: https://s3.srv1169280.hstgr.cloud:443/safestories-panel/qualification-pdfs/abc123.pdf
   ↓
 Store in: therapist_details.qualification_pdf_url ✅
   ↓
@@ -83,7 +83,7 @@ EditProfile
   ↓
 Upload to MinIO: qualification-pdfs/xyz789.pdf
   ↓
-Get URL: https://s3.fluidjobs.ai:9002/safestories-panel/qualification-pdfs/xyz789.pdf
+Get URL: https://s3.srv1169280.hstgr.cloud:443/safestories-panel/qualification-pdfs/xyz789.pdf
   ↓
 Update: therapists.qualification_pdf_url ✅
   ↓

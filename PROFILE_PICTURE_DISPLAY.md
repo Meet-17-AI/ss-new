@@ -11,7 +11,7 @@ Frontend sends to /api/upload-file
        ↓
 Backend uploads to MinIO
        ↓
-MinIO returns URL: https://s3.fluidjobs.ai:9002/safestories-panel/profile-pictures/1707567890-profile.jpg
+MinIO returns URL: https://s3.srv1169280.hstgr.cloud:443/safestories-panel/profile-pictures/1707567890-profile.jpg
        ↓
 URL saved in database (therapists.profile_picture_url column)
        ↓
@@ -24,7 +24,7 @@ Display image using <img src={url} />
 
 **Table**: `therapists`
 **Column**: `profile_picture_url` (TEXT)
-**Example Value**: `https://s3.fluidjobs.ai:9002/safestories-panel/profile-pictures/1707567890-profile.jpg`
+**Example Value**: `https://s3.srv1169280.hstgr.cloud:443/safestories-panel/profile-pictures/1707567890-profile.jpg`
 
 **Note**: We store the URL, NOT the actual image file. The image file is stored in MinIO.
 

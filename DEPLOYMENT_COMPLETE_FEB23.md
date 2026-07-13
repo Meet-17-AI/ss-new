@@ -16,7 +16,7 @@
 1. **MinIO File Upload System**
    - Profile pictures upload to: `safestories-panel/profile-pictures/`
    - Qualification PDFs upload to: `safestories-panel/qualification-pdfs/`
-   - URLs: `https://s3.fluidjobs.ai:9002/safestories-panel/...`
+   - URLs: `https://s3.srv1169280.hstgr.cloud:443/safestories-panel/...`
    - Upload progress messages shown to users
 
 2. **n8n Webhook Integration**
@@ -114,8 +114,8 @@
 Ensure these are set in Vercel:
 
 ```
-MINIO_ENDPOINT=s3.fluidjobs.ai
-MINIO_PORT=9002
+MINIO_ENDPOINT=s3.srv1169280.hstgr.cloud
+$1443
 MINIO_ACCESS_KEY=admin
 MINIO_SECRET_KEY=Fluid@bucket2026
 MINIO_USE_SSL=true

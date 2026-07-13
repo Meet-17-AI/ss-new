@@ -9,8 +9,8 @@ This project uses MinIO (S3-compatible object storage) for storing therapist pro
 The following variables are configured in `.env.local`:
 
 ```env
-MINIO_ENDPOINT=s3.fluidjobs.ai
-MINIO_PORT=9002
+MINIO_ENDPOINT=s3.srv1169280.hstgr.cloud
+$1443
 MINIO_ACCESS_KEY=admin
 MINIO_SECRET_KEY=Fluid@bucket2026
 MINIO_USE_SSL=true
@@ -55,7 +55,7 @@ After running the setup script, you should see:
 
 🔗 Access URLs:
    Console: https://console.fluidjobs.ai:9003
-   API Endpoint: https://s3.fluidjobs.ai:9002
+   API Endpoint: https://s3.srv1169280.hstgr.cloud:443
 ```
 
 ## Manual Verification
@@ -89,7 +89,7 @@ const url = await uploadFile(
 ```typescript
 import { deleteFile } from './lib/minio';
 
-await deleteFile('https://s3.fluidjobs.ai:9002/safestories-panel/profile-pictures/therapist-123.jpg');
+await deleteFile('https://s3.srv1169280.hstgr.cloud:443/safestories-panel/profile-pictures/therapist-123.jpg');
 ```
 
 ### Get Presigned URL (Temporary Access)
@@ -118,7 +118,7 @@ The following API endpoints handle file uploads:
 ### Connection Issues
 If you get connection errors:
 1. Verify the MinIO server is running
-2. Check firewall rules allow access to port 9002
+2. Check firewall rules allow access to port 443
 3. Verify SSL certificate is valid
 
 ### Permission Issues
