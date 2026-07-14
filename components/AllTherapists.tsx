@@ -253,7 +253,9 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
         }
       } catch (e) { console.error('Failed to parse services:', e); }
 
-      const therapistsWithStatus = therapistsData.map((t: any) => {
+      const therapistsWithStatus = therapistsData
+        .filter((t: any) => t.name?.toLowerCase().trim() !== 'muskan 2')
+        .map((t: any) => {
         const firstName = t.name ? t.name.split(' ')[0] : '';
         return {
           ...t,
@@ -334,7 +336,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
         setTherapists(prev => prev.map(t => 
           t.therapist_id === therapist.therapist_id ? { ...t, is_active: newStatus } : t
         ));
-        setToast({ message: `Therapist marked as ${newStatus ? 'Active' : 'Inactive'}`, type: 'success' });
+        setToast({ message: `Therapist marked as ${newStatus ? 'Active' : 'Deactivated'}`, type: 'success' });
       } else {
         setToast({ message: 'Failed to update therapist status', type: 'error' });
       }
@@ -2808,12 +2810,19 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                             onClick={() => setSelectedExpandedTherapistIndex(selectedExpandedTherapistIndex === index ? null : index)}
                           >
                             <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                onClick={() => openTherapistDetails(therapist)}
-                                className="text-teal-700 hover:underline font-medium text-left"
-                              >
-                                {displayTherapistName(therapist.name, therapist.therapist_id)}
-                              </button>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => openTherapistDetails(therapist)}
+                                  className="text-teal-700 hover:underline font-medium text-left"
+                                >
+                                  {displayTherapistName(therapist.name, therapist.therapist_id)}
+                                </button>
+                                {!therapist.is_active && (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700 whitespace-nowrap">
+                                    Deactivated
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-6 py-4">
                               <div className="flex flex-wrap gap-2">
@@ -2840,7 +2849,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                             <td className="px-6 py-4">{therapist.sessions_this_month}</td>
                             <td className="px-6 py-4">
                               <span className={`px-2 py-1 rounded-full text-xs font-medium text-center ${therapist.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                {therapist.is_active ? 'Active' : 'Inactive'}
+                                {therapist.is_active ? 'Active' : 'Deactivated'}
                               </span>
                             </td>
                             <td className="px-6 py-4">
