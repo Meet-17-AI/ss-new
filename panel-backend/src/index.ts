@@ -3594,11 +3594,11 @@ app.post('/api/reschedule-booking', async (req, res) => {
 
     // 2.5 Update Google Calendar event if it exists
     const googleEventId = bookingDetails.google_event_id;
-    const rescheduleHostId = bookingDetails.booking_host_calendar_id || bookingDetails.therapist_id;
+    const googleCalendarHostId = bookingDetails.booking_host_calendar_id || bookingDetails.therapist_id;
     
-    if (googleEventId && rescheduleHostId) {
+    if (googleEventId && googleCalendarHostId) {
       try {
-        const tokenRes = await pool.query('SELECT google_calendar_tokens FROM users WHERE therapist_id = $1 OR CAST(id AS TEXT) = $1', [rescheduleHostId]);
+        const tokenRes = await pool.query('SELECT google_calendar_tokens FROM users WHERE therapist_id = $1 OR CAST(id AS TEXT) = $1', [googleCalendarHostId]);
         if (tokenRes.rows.length > 0 && tokenRes.rows[0].google_calendar_tokens) {
           const tokens = typeof tokenRes.rows[0].google_calendar_tokens === 'string' 
             ? JSON.parse(tokenRes.rows[0].google_calendar_tokens) 
