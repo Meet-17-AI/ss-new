@@ -3592,6 +3592,42 @@ app.post('/api/reschedule-booking', async (req, res) => {
       [startAtDate.toISOString(), endAtDate.toISOString(), duration || 50, bookingInviteeTime, bookingDetails.booking_start_at, booking_id]
     );
 
+    // 2.5 Update Google Calendar event if it exists
+    const googleEventId = bookingDetails.google_event_id;
+    const rescheduleHostId = bookingDetails.booking_host_calendar_id || bookingDetails.therapist_id;
+    
+    if (googleEventId && rescheduleHostId) {
+      try {
+        const tokenRes = await pool.query('SELECT google_calendar_tokens FROM users WHERE therapist_id = $1 OR CAST(id AS TEXT) = $1', [rescheduleHostId]);
+        if (tokenRes.rows.length > 0 && tokenRes.rows[0].google_calendar_tokens) {
+          const tokens = typeof tokenRes.rows[0].google_calendar_tokens === 'string' 
+            ? JSON.parse(tokenRes.rows[0].google_calendar_tokens) 
+            : tokenRes.rows[0].google_calendar_tokens;
+            
+          const { google } = require('googleapis');
+          const oauth2Client = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+          );
+          oauth2Client.setCredentials(tokens);
+          const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+          
+          await calendar.events.patch({
+            calendarId: 'primary',
+            eventId: googleEventId,
+            requestBody: {
+              start: { dateTime: startAtDate.toISOString(), timeZone: 'Asia/Kolkata' },
+              end: { dateTime: endAtDate.toISOString(), timeZone: 'Asia/Kolkata' }
+            }
+          });
+          console.log(`[Reschedule Booking] Successfully updated Google Calendar event ${googleEventId}`);
+        }
+      } catch (calErr) {
+        console.error('[Reschedule Booking] Failed to update Google Calendar event:', calErr);
+      }
+    }
+
     // 3. Send WhatsApp via AiSensy
     if (notify !== false) {
       try {
