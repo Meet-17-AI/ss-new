@@ -336,7 +336,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
         setTherapists(prev => prev.map(t => 
           t.therapist_id === therapist.therapist_id ? { ...t, is_active: newStatus } : t
         ));
-        setToast({ message: `Therapist marked as ${newStatus ? 'Active' : 'Deactivated'}`, type: 'success' });
+        setToast({ message: `Therapist marked as ${newStatus ? 'Active' : 'Inactive'}`, type: 'success' });
       } else {
         setToast({ message: 'Failed to update therapist status', type: 'error' });
       }
@@ -2849,7 +2849,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                             <td className="px-6 py-4">{therapist.sessions_this_month}</td>
                             <td className="px-6 py-4">
                               <span className={`px-2 py-1 rounded-full text-xs font-medium text-center ${therapist.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                {therapist.is_active ? 'Active' : 'Deactivated'}
+                                {therapist.is_active ? 'Active' : 'Inactive'}
                               </span>
                             </td>
                             <td className="px-6 py-4">
