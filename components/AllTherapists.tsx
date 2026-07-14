@@ -257,8 +257,16 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
         .filter((t: any) => t.name?.toLowerCase().trim() !== 'muskan 2')
         .map((t: any) => {
         const firstName = t.name ? t.name.split(' ')[0] : '';
+        
+        // Force Ishika Mahajan to be inactive in the frontend
+        let isActive = t.is_active;
+        if (t.name?.toLowerCase().trim() === 'ishika mahajan') {
+          isActive = false;
+        }
+
         return {
           ...t,
+          is_active: isActive,
           isLive: liveStatusData[firstName] || liveStatusData[t.name] || false
         };
       });
