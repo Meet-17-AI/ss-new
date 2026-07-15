@@ -101,19 +101,8 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   const [showTzDropdown, setShowTzDropdown] = useState(false);
 
   useEffect(() => {
-    // Auto-fetch timezone from browser IP
-    fetch('https://ipapi.co/timezone')
-      .then(res => {
-        if (!res.ok) throw new Error('IP timezone fetch failed');
-        return res.text();
-      })
-      .then(tz => {
-        const fetchedTz = tz.trim();
-        if (fetchedTz && fetchedTz.includes('/')) {
-          setClientTimezone(fetchedTz === 'Asia/Calcutta' ? 'Asia/Kolkata' : fetchedTz);
-        }
-      })
-      .catch(err => console.error('Error fetching timezone from IP, using system default:', err));
+    // We already initialize clientTimezone using Intl.DateTimeFormat().resolvedOptions().timeZone
+    // which is standard and doesn't require an external API call, avoiding CORS/429 errors.
   }, []);
 
   useEffect(() => {
@@ -424,7 +413,13 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
           if (rawSlots.length > 0) {
             const formattedSlots = rawSlots.map((slot: string) => {
               const d = new Date(slot);
-              return moment(d).format('HH:mm');
+              // Force the time string to be extracted strictly in IST
+              return d.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hourCycle: 'h23', // Use 24-hour format like moment('HH:mm')
+                timeZone: 'Asia/Kolkata'
+              });
             });
             setAvailableSlots(formattedSlots);
           }

@@ -238,7 +238,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
       checkinUrl: selectedBooking.booking_checkin_url || ''
     };
     try {
-      const response = await fetch('https://n8n.srv1169280.hstgr.cloud/webhook/0d1db363-bf04-41e5-a667-a9fe1b5ffc83', {
+      const response = await fetch('/api/send-whatsapp-reminder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(webhookData)

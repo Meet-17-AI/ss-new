@@ -97,6 +97,7 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [googleBlocks, setGoogleBlocks] = useState<any[]>([]);
 
   // Therapist selector (admin)
   const [selectedTherapist, setSelectedTherapist] = useState<TherapistOption | null>(null);
@@ -167,6 +168,22 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
       setLoading(false);
     }
   }, []);
+
+  // ── Fetch Google Calendar blocks ───────────────────────
+  useEffect(() => {
+    if (!therapistId) return;
+    
+    // Create local dates for the first and last day of the month
+    const startDate = new Date(calYear, calMonth, 1);
+    const endDate = new Date(calYear, calMonth + 1, 0, 23, 59, 59);
+    
+    fetch(`/api/therapist/calendar-blocks?therapist_id=${therapistId}&timeMin=${startDate.toISOString()}&timeMax=${endDate.toISOString()}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.blocks) setGoogleBlocks(data.blocks);
+      })
+      .catch(err => console.error('Failed to fetch calendar blocks:', err));
+  }, [therapistId, calMonth, calYear]);
 
   // ── Close dropdown on outside click ─────────────────
   useEffect(() => {
@@ -374,11 +391,26 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
       const isAvailable = info?.is_available ?? false;
       const isOverride = info?.isOverride ?? false;
 
+      // Find google blocks for this day
+      const dayStart = new Date(calYear, calMonth, day, 0, 0, 0);
+      const dayEnd = new Date(calYear, calMonth, day, 23, 59, 59);
+      const blocksForDay = googleBlocks.filter(b => {
+        const bStart = new Date(b.start);
+        const bEnd = new Date(b.end);
+        return bStart < dayEnd && bEnd > dayStart;
+      });
+
+      const hasGoogleBlocks = blocksForDay.length > 0;
+      
+      // If user wants blocked days to use existing style, and there is a block:
+      // A Google block counts as "unavailable" for visual purposes
+      const visuallyUnavailable = !isAvailable || hasGoogleBlocks;
+
       const classes = [
         'avail-day-cell',
         isToday && 'today',
         isPast && 'past',
-        isAvailable ? 'available' : 'unavailable',
+        visuallyUnavailable ? 'unavailable' : 'available',
         isOverride && 'has-override',
       ].filter(Boolean).join(' ');
 
@@ -390,16 +422,18 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
         >
           <div className="day-number">{day}</div>
           <div className="day-slots">
-            {isAvailable && info?.times && info.times.length > 0 ? (
+            {isAvailable && info?.times && info.times.length > 0 && !hasGoogleBlocks ? (
               info.times.slice(0, 2).map((t: any, idx: number) => (
                 <div key={idx} className={`day-slot-pill${isOverride ? ' override' : ''}`}>
                   {formatTime12(t.start)} – {formatTime12(t.end)}
                 </div>
               ))
-            ) : !isAvailable ? (
-              <div className="day-status-badge off">Off</div>
+            ) : visuallyUnavailable ? (
+              <div className="day-status-badge off" title={hasGoogleBlocks ? "Blocked on Google Calendar" : "Unavailable"}>
+                {hasGoogleBlocks ? "Blocked" : "Off"}
+              </div>
             ) : null}
-            {isAvailable && info?.times && info.times.length > 2 && (
+            {isAvailable && info?.times && info.times.length > 2 && !hasGoogleBlocks && (
               <div className="day-slot-pill" style={{ background: '#f3f4f6', color: '#4b5563' }}>
                 +{info.times.length - 2} more
               </div>

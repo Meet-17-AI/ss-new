@@ -10,10 +10,7 @@ const pool = new Pool({
 
 async function checkData() {
   try {
-    const res = await pool.query(`
-      SELECT name, profile_picture_url FROM therapists
-    `);
-    console.log('--- Therapist Profile Pictures ---');
+    const res = await pool.query('SELECT name, is_active FROM therapists WHERE is_active = false');
     console.log(res.rows);
   } catch (err) {
     console.error('Error:', err);

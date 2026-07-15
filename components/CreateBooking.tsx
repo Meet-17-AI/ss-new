@@ -482,7 +482,12 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
           if (availableSlots.length > 0) {
             const formattedSlots = availableSlots.map((slot: string) => {
               const date = new Date(slot);
-              return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+              return date.toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                hour12: true,
+                timeZone: 'Asia/Kolkata' 
+              });
             });
             setAvailableSlots(formattedSlots);
           } else {
@@ -533,6 +538,8 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
         serviceType: selectedTherapy,
         amount: Number(customAmount) || sessionCharges,
         clientType,
+        sessionMode,
+        timezone: selectedTimezone,
         isAdmin: true
       };
 

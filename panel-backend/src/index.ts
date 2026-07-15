@@ -14,7 +14,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from './lib/timezone';
 import { uploadFile } from './lib/minio';
 import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendClientBookingCancellationEmail, sendPaymentLinkEmail } from './lib/email';
-import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage } from './automations/index';
+import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage, sendSessionFeedbackRequest, sendPostSessionTherapistForm } from './automations/index';
 import { generateAdminOTP, verifyAdminOTP } from './otp';
 import { logWebhookApi } from './lib/webhookApiLogger.js';
 
@@ -2946,7 +2946,7 @@ app.get('/api/clients', async (req, res) => {
         invitee_created_at as created_at,
         booking_start_at as latest_booking_date,
         booking_invitee_time,
-        client_type
+        'Indian' as client_type
       FROM bookings
       ORDER BY invitee_created_at DESC
     `);
@@ -4087,6 +4087,40 @@ app.get('/api/therapist-schedule', async (req, res) => {
   }
 });
 
+// Get Google Calendar blocks for a therapist
+app.get('/api/therapist/calendar-blocks', async (req, res) => {
+  try {
+    const { therapist_id, timeMin, timeMax } = req.query;
+    if (!therapist_id || !timeMin || !timeMax) {
+      return res.status(400).json({ error: 'therapist_id, timeMin, and timeMax are required' });
+    }
+
+    const tRes = await pool.query('SELECT therapist_id, google_refresh_token, name FROM therapists WHERE therapist_id = $1', [therapist_id]);
+    if (tRes.rows.length === 0 || !tRes.rows[0].google_refresh_token) {
+      return res.json({ blocks: [] }); // No connected calendar
+    }
+
+    const therapist = tRes.rows[0];
+    const { google } = require('googleapis');
+    const oauth2ClientFb = await getAuthenticatedClient(therapist);
+    const calendarFb = google.calendar({ version: 'v3', auth: oauth2ClientFb });
+
+    const fb = await calendarFb.freebusy.query({
+      requestBody: {
+        timeMin: String(timeMin),
+        timeMax: String(timeMax),
+        items: [{ id: 'primary' }]
+      }
+    });
+
+    const busyBlocks = fb.data.calendars?.primary?.busy || [];
+    res.json({ blocks: busyBlocks });
+  } catch (error) {
+    console.error('Error fetching Google Calendar blocks:', error);
+    res.status(500).json({ error: 'Failed to fetch Google Calendar blocks' });
+  }
+});
+
 // Get all therapists
 app.get('/api/therapists-admin', async (req, res) => {
   try {
@@ -5052,7 +5086,8 @@ app.post('/api/transfer-client', async (req, res) => {
         `Transferred ${clientName} from ${fromTherapistName} to ${newTherapist.name}`, clientName, getCurrentISTTimestamp()]
     );
 
-    // Trigger n8n webhook
+    // Trigger n8n webhook (Deprecated/Removed)
+    // Client transfer template is not available in AiSensy, internal notifications are sent below.
     const webhookData = {
       clientName,
       clientEmail,
@@ -5065,22 +5100,7 @@ app.post('/api/transfer-client', async (req, res) => {
       reason: reason || 'No reason provided',
       timestamp: new Date().toISOString()
     };
-    const webhookUrl = `https://n8n.srv1169280.hstgr.cloud/webhook/efc4396f-401b-4d46-bfdb-e990a3ac3846`;
-
-    try {
-      const webhookResponse = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(webhookData)
-      });
-      if (!webhookResponse.ok) {
-        console.error('❌ Webhook failed:', webhookResponse.status, webhookResponse.statusText);
-      } else {
-        console.log('✅ Client transfer webhook sent successfully');
-      }
-    } catch (webhookError) {
-      console.error('❌ Webhook error:', webhookError);
-    }
+    console.log('✅ Client transfer handled. Internal notifications dispatched.');
 
     // Notify new therapist
     const newTherapistUser = await pool.query(
@@ -5844,6 +5864,80 @@ app.delete('/api/notifications/:id', async (req, res) => {
 });
 
 // Create notification for all admins
+app.post('/api/request-feedback', async (req, res) => {
+  try {
+    const { bookingId, clientName, clientEmail, clientPhone, therapistName, sessionName, sessionDate } = req.body;
+    
+    // Equivalent template: client_sessionfeedback
+    await sendSessionFeedbackRequest(
+      bookingId,
+      clientPhone,
+      clientName,
+      therapistName
+    );
+
+    res.status(200).json({ success: true, message: 'Feedback request sent successfully' });
+  } catch (error) {
+    console.error('Error sending feedback request:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/send-session-notes-reminder', async (req, res) => {
+  try {
+    const { bookingId, therapistId, therapistName, clientName, sessionName, sessionTimings, domain } = req.body;
+    
+    // We need therapist phone to send this
+    let phone = 'Unknown';
+    if (therapistId) {
+      const tRes = await pool.query('SELECT contact_info FROM therapists WHERE therapist_id = $1', [therapistId]);
+      if (tRes.rows.length > 0) phone = tRes.rows[0].contact_info;
+    } else {
+      const tRes = await pool.query('SELECT contact_info FROM therapists WHERE name = $1', [therapistName]);
+      if (tRes.rows.length > 0) phone = tRes.rows[0].contact_info;
+    }
+
+    if (phone === 'Unknown' || !phone) {
+      return res.status(400).json({ error: 'Therapist phone not found' });
+    }
+
+    const shortLink = domain + '/session-notes/' + bookingId;
+
+    await sendPostSessionTherapistForm(
+      bookingId,
+      phone,
+      therapistName,
+      clientName,
+      sessionTimings,
+      shortLink
+    );
+
+    res.status(200).json({ success: true, message: 'Session notes reminder sent successfully' });
+  } catch (error) {
+    console.error('Error sending session notes reminder:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/send-whatsapp-reminder', async (req, res) => {
+  try {
+    const { sessionTimings, sessionName, clientName, phone, email, therapistName, mode, meetingLink, checkinUrl } = req.body;
+    
+    await sendAiSensyMessage(
+      "manual_reminder",
+      meetingLink ? "1hr_onlinesession_reminder_api_campaign" : "clientsessionreminder_1hr_inperson_pabbly_api",
+      phone,
+      clientName,
+      meetingLink ? [clientName, sessionName, sessionTimings, meetingLink] : [clientName, sessionName, sessionTimings]
+    );
+
+    res.status(200).json({ success: true, message: 'WhatsApp reminder sent successfully' });
+  } catch (error) {
+    console.error('Error sending WhatsApp reminder:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.post('/api/notifications/create-admin', async (req, res) => {
   try {
     const { notification_type, title, message, related_id } = req.body;
@@ -6098,15 +6192,26 @@ app.post('/api/fetch-slots', async (req, res) => {
       }
     }
 
-    if (therapistId) {
+    if (therapistId || therapistName === 'SafeStories') {
       try {
-        const bookingsRes = await pool.query(
-          `SELECT booking_start_at, booking_end_at FROM bookings 
-           WHERE (therapist_id = $1 OR therapist_id IS NULL) AND booking_status NOT IN ('cancelled', 'Canceled', 'payment_failed')
-           AND booking_start_at >= $2::timestamp WITH TIME ZONE 
-           AND booking_start_at <= $3::timestamp WITH TIME ZONE`,
-          [therapistId, `${daysToCheck[0]}T00:00:00+05:30`, `${daysToCheck[2]}T23:59:59+05:30`]
-        );
+        let bookingsRes;
+        if (therapistId) {
+          bookingsRes = await pool.query(
+            `SELECT booking_start_at, booking_end_at FROM bookings 
+             WHERE therapist_id = $1 AND booking_status NOT IN ('Canceled', 'canceled', 'cancelled')
+             AND booking_start_at >= $2::timestamp WITH TIME ZONE 
+             AND booking_start_at <= $3::timestamp WITH TIME ZONE`,
+            [therapistId, `${daysToCheck[0]}T00:00:00+05:30`, `${daysToCheck[2]}T23:59:59+05:30`]
+          );
+        } else {
+          bookingsRes = await pool.query(
+            `SELECT booking_start_at, booking_end_at FROM bookings 
+             WHERE booking_resource_name ILIKE '%Free Consultation%' AND booking_status NOT IN ('Canceled', 'canceled', 'cancelled')
+             AND booking_start_at >= $1::timestamp WITH TIME ZONE 
+             AND booking_start_at <= $2::timestamp WITH TIME ZONE`,
+            [`${daysToCheck[0]}T00:00:00+05:30`, `${daysToCheck[2]}T23:59:59+05:30`]
+          );
+        }
         
         availableSlots = availableSlots.filter(slot => {
           const slotStartMs = slot.timestampMs;
@@ -6128,7 +6233,7 @@ app.post('/api/fetch-slots', async (req, res) => {
 
       // Google Calendar Free/Busy Filter
       try {
-        const tRes = await pool.query('SELECT google_refresh_token, contact_info AS email, name FROM therapists WHERE therapist_id = $1', [therapistId]);
+        const tRes = await pool.query('SELECT therapist_id, google_refresh_token, name FROM therapists WHERE therapist_id = $1', [therapistId]);
         if (tRes.rows.length > 0 && tRes.rows[0].google_refresh_token) {
           const therapist = tRes.rows[0];
           // Since getAuthenticatedClient expects an object with google_refresh_token, we can pass therapist directly.
@@ -6651,7 +6756,7 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
   // Authoritative captured amount from Razorpay (paise → rupees), falling back to stored amount.
   const capturedAmount = paymentInfo && paymentInfo.amount != null
     ? Number(paymentInfo.amount) / 100
-    : (booking.invitee_payment_amount || payload.amount || 0);
+    : Math.round(Number(booking.invitee_payment_amount || payload.amount || 0));
   // Razorpay payment creation timestamp (unix seconds → JS Date), falling back to now.
   const paidAt = paymentInfo && paymentInfo.created_at
     ? new Date(Number(paymentInfo.created_at) * 1000)
@@ -6836,7 +6941,33 @@ app.post('/api/razorpay/webhook', async (req, res) => {
   try {
     const event = req.body.event;
 
-    if (event === 'payment.captured' || event === 'order.paid') {
+    if (event === 'payment_link.paid') {
+      const plinkEntity = req.body.payload.payment_link.entity;
+      const paymentEntity = req.body.payload.payment.entity;
+      const razorpayPaymentId = paymentEntity.id;
+      const referenceId = plinkEntity.reference_id;
+      
+      if (!referenceId) {
+        return res.status(400).send('No reference_id in payment_link payload');
+      }
+
+      const bookingCheck = await pool.query(
+        `SELECT * FROM bookings WHERE booking_id = $1 AND booking_status IN ('payment_pending', 'waiting_for_payment')`,
+        [referenceId]
+      );
+
+      if (bookingCheck.rows.length === 0) {
+        console.log(`[Webhook] Booking for payment link reference ${referenceId} already processed or not pending.`);
+        return res.status(200).send('OK');
+      }
+
+      const booking = bookingCheck.rows[0];
+      const bookingId = booking.booking_id;
+
+      await processConfirmedBooking(bookingId, razorpayPaymentId, plinkEntity.id, booking, {}, paymentEntity);
+      console.log(`[Webhook] ✅ Successfully verified and confirmed payment link booking ${bookingId}`);
+
+    } else if (event === 'payment.captured' || event === 'order.paid') {
       const paymentEntity = req.body.payload.payment.entity;
       const razorpayOrderId = paymentEntity.order_id;
       const razorpayPaymentId = paymentEntity.id;
@@ -6846,7 +6977,7 @@ app.post('/api/razorpay/webhook', async (req, res) => {
       }
 
       const bookingCheck = await pool.query(
-        `SELECT * FROM bookings WHERE razorpay_order_id = $1 AND booking_status = 'payment_pending'`,
+        `SELECT * FROM bookings WHERE razorpay_order_id = $1 AND booking_status IN ('payment_pending', 'waiting_for_payment')`,
         [razorpayOrderId]
       );
 
@@ -7377,9 +7508,9 @@ app.post('/api/create-booking', async (req, res) => {
         booking_invitee_time, booking_host_time, invitee_payment_amount, invitee_payment_currency,
         booking_status, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id, google_event_id,
-        payment_id, payment_status, invitee_payment_gateway, invitee_question, client_type,
+        payment_id, payment_status, invitee_payment_gateway, invitee_question,
         invitee_created_at, booking_updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, NOW(), NOW())`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, NOW(), NOW())`,
       [
         booking_id,
         invitee_id,
@@ -7406,8 +7537,7 @@ app.post('/api/create-booking', async (req, res) => {
         payload.payment_id || payload.razorpay_payment_id || null,
         (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') ? 'Paid' : (payload.payment_id ? 'Paid' : (payload.isFreeConsultation ? 'Free' : 'Pending')),
         (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') ? (payload.paymentMode === 'qr' ? 'QR' : 'Cash') : (payload.payment_gateway || null),
-        payload.invitee_question || payload.notes || null,
-        payload.clientType || 'Indian'
+        payload.invitee_question || payload.notes || null
       ]
     );
 
@@ -9187,7 +9317,9 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
       time, 
       serviceType, 
       amount,
-      clientType 
+      clientType,
+      sessionMode,
+      timezone
     } = req.body;
 
     let resolvedTherapistId = null;
@@ -9221,17 +9353,43 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
     const sessionDurationMinutes = serviceType === 'Free Consultation' ? 15 : 50;
     const endObj = new Date(startObj.getTime() + sessionDurationMinutes * 60000);
 
+    const formatTime = (dateObj: Date) => dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+    const dayName = startObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
+    const monthName = startObj.toLocaleDateString('en-US', { month: 'short', timeZone: 'Asia/Kolkata' });
+    const dateNum = startObj.toLocaleDateString('en-US', { day: 'numeric', timeZone: 'Asia/Kolkata' });
+    const yearNum = startObj.toLocaleDateString('en-US', { year: 'numeric', timeZone: 'Asia/Kolkata' });
+    const hostTime = `${dayName}, ${monthName} ${dateNum}, ${yearNum} at ${formatTime(startObj)} - ${formatTime(endObj)} IST`;
+
+    const clientTz = timezone || 'Asia/Kolkata';
+    const formatTimeClient = (dateObj: Date) => dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: clientTz });
+    const clientDayName = startObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: clientTz });
+    const clientMonthName = startObj.toLocaleDateString('en-US', { month: 'short', timeZone: clientTz });
+    const clientDateNum = startObj.toLocaleDateString('en-US', { day: 'numeric', timeZone: clientTz });
+    const clientYearNum = startObj.toLocaleDateString('en-US', { year: 'numeric', timeZone: clientTz });
+    
+    let tzShort = 'IST';
+    if (clientTz !== 'Asia/Kolkata') {
+      try {
+        const parts = new Intl.DateTimeFormat('en-US', { timeZone: clientTz, timeZoneName: 'short' }).formatToParts(startObj);
+        tzShort = parts.find(p => p.type === 'timeZoneName')?.value || clientTz;
+      } catch (e) {
+        tzShort = clientTz;
+      }
+    }
+    const inviteeTime = `${clientDayName}, ${clientMonthName} ${clientDateNum}, ${clientYearNum} at ${formatTimeClient(startObj)} - ${formatTimeClient(endObj)} ${tzShort}`;
+    const bookingMode = sessionMode === 'online' ? 'Online Video Call' : 'In Person (Pune)';
 
     await pool.query(
       `INSERT INTO bookings (
         booking_id, therapist_id, invitee_name, invitee_email, invitee_phone,
         booking_start_at, booking_end_at, booking_status, payment_status, invitee_payment_amount,
-        invitee_payment_currency, booking_resource_name, client_type, invitee_created_at, booking_updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, $12, NOW(), NOW())`,
+        invitee_payment_currency, booking_resource_name, booking_mode, invitee_timezone, 
+        booking_invitee_time, booking_host_time, booking_host_name, invitee_created_at, booking_updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, $12, $13, $14, $15, $16, NOW(), NOW())`,
       [
         bookingId, resolvedTherapistId, clientName, clientEmail, clientPhone,
         startObj.toISOString(), endObj.toISOString(), 'waiting_for_payment', 'Pending', amount,
-        serviceType, clientType || 'Indian'
+        serviceType, bookingMode, clientTz, inviteeTime, hostTime, therapistName
       ]
     );
 
@@ -9247,10 +9405,58 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
     // Keep this client's contact info up to date across their bookings (#2)
     await reconcileClientContact(clientEmail, clientPhone);
 
-    let baseUrl = process.env.FRONTEND_URL || 'https://panel.safestories.in';
-    if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+    let paymentLink = '';
     
-    const paymentLink = `${baseUrl}/pay/${bookingId}`;
+    // Generate native Razorpay Payment Link
+    try {
+      const { rows: keyRows } = await pool.query(
+        'SELECT razorpay_key_id, razorpay_key_secret FROM payment_settings ORDER BY id ASC LIMIT 1'
+      );
+      if (keyRows.length > 0 && keyRows[0].razorpay_key_id && keyRows[0].razorpay_key_secret) {
+        const razorpay = new Razorpay({
+          key_id: keyRows[0].razorpay_key_id,
+          key_secret: keyRows[0].razorpay_key_secret,
+        });
+
+        const rzpAmount = Math.round(Number(amount) * 100);
+        const expireBy = Math.floor(Date.now() / 1000) + (30 * 60); // 30 mins
+
+        const plink = await razorpay.paymentLink.create({
+          amount: rzpAmount,
+          currency: 'INR',
+          accept_partial: false,
+          reference_id: bookingId,
+          description: `${serviceType} with ${therapistName}`,
+          customer: {
+            name: clientName || "Client",
+            email: clientEmail || undefined,
+            contact: clientPhone ? clientPhone.replace('+', '') : undefined
+          },
+          notify: {
+            sms: false,
+            email: false
+          },
+          reminder_enable: false,
+          expire_by: expireBy
+        });
+
+        paymentLink = plink.short_url;
+
+        // Store the Razorpay Payment Link ID in the DB
+        await pool.query(
+          `UPDATE bookings SET razorpay_order_id = $1, public_booking_checkin_url = $2 WHERE booking_id = $3`,
+          [plink.id, paymentLink, bookingId]
+        );
+      } else {
+        throw new Error('Razorpay keys not configured');
+      }
+    } catch (rzpErr) {
+      console.error('Error creating Razorpay Payment Link:', rzpErr);
+      // Fallback to internal link if API fails
+      let baseUrl = process.env.FRONTEND_URL || 'https://panel.safestories.in';
+      if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+      paymentLink = `${baseUrl}/pay/${bookingId}`;
+    }
 
     const formattedDate = new Intl.DateTimeFormat('en-IN', {
       timeZone: 'Asia/Kolkata',
@@ -9349,74 +9555,11 @@ app.post('/api/confirm-payment', async (req, res) => {
 
     const booking = updateRes.rows[0];
 
-    // Trigger N8N Webhook for Google Calendar & Emails
-    // Using global fetch (intercepted or real based on setup)
-    const webhookUrl = 'https://fluid.live/webhook/safestories/booking';
-    
-    const tRes = await pool.query('SELECT contact_info AS email FROM therapists WHERE therapist_id = $1', [booking.therapist_id]);
-    const therapistEmail = tRes.rows.length > 0 ? tRes.rows[0].email : '';
-
-    const webhookPayload = {
-      event_type: "booking_created",
-      therapist_email: therapistEmail,
-      client_name: booking.invitee_name,
-      client_email: booking.invitee_email,
-      client_phone: booking.invitee_phone,
-      start_time: booking.booking_start_at,
-      end_time: booking.booking_end_at,
-      service_type: booking.booking_resource_name,
-      amount_paid: booking.payment_amount,
-      booking_id: booking.booking_id
-    };
-
+    // Trigger Native Booking Confirmation (Google Calendar + Whatsapp + Email)
     try {
-      const response = await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(webhookPayload)
-      });
-      
-      const responseText = await response.text();
-      let responseJson;
-      try { responseJson = JSON.parse(responseText); } catch(e) { responseJson = responseText; }
-
-      if (response.ok) {
-        console.log('✓ Triggered N8N Webhook for confirmed payment:', bookingId);
-        await logWebhookApi({
-          log_type: 'webhook_outgoing',
-          name: 'N8N Payment Confirmation Webhook',
-          endpoint: webhookUrl,
-          method: 'POST',
-          status: 'success',
-          request_payload: webhookPayload,
-          response_data: responseJson || { success: true }
-        });
-      } else {
-        const errMsg = `HTTP ${response.status}: ${responseText}`;
-        console.error('❌ N8N Webhook returned error status:', errMsg);
-        await logWebhookApi({
-          log_type: 'webhook_outgoing',
-          name: 'N8N Payment Confirmation Webhook',
-          endpoint: webhookUrl,
-          method: 'POST',
-          status: 'failed',
-          request_payload: webhookPayload,
-          error_message: errMsg,
-          response_data: responseJson
-        });
-      }
-    } catch (whErr: any) {
-      const errMsg = whErr.message || String(whErr);
-      console.error('❌ Failed to trigger N8N webhook after payment:', errMsg);
-      await logWebhookApi({
-        log_type: 'webhook_outgoing',
-        name: 'N8N Payment Confirmation Webhook',
-        endpoint: webhookUrl,
-        method: 'POST',
-        status: 'failed',
-        request_payload: webhookPayload,
-        error_message: errMsg
-      });
+      await processConfirmedBooking(bookingId, razorpayPaymentId || null, razorpayOrderId || null, booking, {});
+    } catch (processErr: any) {
+      console.error('❌ Failed to process confirmed booking:', processErr);
     }
 
     res.json({ success: true, message: 'Payment confirmed and booking scheduled!' });

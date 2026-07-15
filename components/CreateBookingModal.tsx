@@ -297,10 +297,11 @@ export const CreateBookingModal: React.FC<CreateBookingModalProps> = ({ isOpen, 
       selectedDate,
       sessionMode,
       isFreeConsultation,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
     };
     
     try {
-      const response = await fetch('https://n8n.srv1169280.hstgr.cloud/webhook/b5ab584c-1203-41c0-b296-3107e2e6035e', {
+      const response = await fetch('/api/fetch-slots', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

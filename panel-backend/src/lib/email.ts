@@ -572,12 +572,15 @@ export async function sendClientBookingConfirmationEmail(
                 </div>
                 <div class="detail-item">
                     <span class="label">Location:</span>
-                    <span class="value">Google Meet</span>
+                    <span class="value">${details.joinLink && details.joinLink.includes('http') ? 'Google Meet' : 'In Person (Pune)'}</span>
                 </div>
 
                 <hr style="border: 0; border-top: 1px solid #dce8e6; margin: 15px 0;">
 
-                <a href="${details.joinLink}" class="btn btn-join">Join Session</a>
+                ${details.joinLink && details.joinLink.includes('http') 
+                  ? `<a href="${details.joinLink}" class="btn btn-join">Join Session</a>`
+                  : `<span class="btn btn-join" style="background-color: #f2c730; color: #333333 !important;">In-Person Session</span>`
+                }
                 <a href="${details.checkinUrl}" class="btn btn-manage">Manage Booking</a>
             </div>
 
@@ -754,7 +757,7 @@ export async function sendPaymentLinkEmail(
             <div class="brand"><span class="safe">Safe</span><span class="stories">Stories</span></div>
             <strong class="confirmed">Payment Link Generated</strong>
             <p class="intro-text">
-                Hello <strong>\${details.clientName}</strong>, a payment link has been generated for your upcoming session. Please complete the payment to confirm your booking.
+                Hello <strong>${details.clientName}</strong>, a payment link has been generated for your upcoming session. Please complete the payment to confirm your booking.
             </p>
         </div>
 
@@ -762,16 +765,16 @@ export async function sendPaymentLinkEmail(
             <div class="details-box">
                 <div class="detail-item">
                     <span class="label">Session:</span>
-                    <span class="value">\${details.serviceType}</span>
+                    <span class="value">${details.serviceType}</span>
                 </div>
                 <div class="detail-item">
                     <span class="label">Time:</span>
-                    <span class="value">\${details.sessionTiming}</span>
+                    <span class="value">${details.sessionTiming}</span>
                 </div>
 
                 <hr style="border: 0; border-top: 1px solid #dce8e6; margin: 15px 0;">
 
-                <a href="\${details.paymentLink}" class="btn btn-join">Proceed to Payment</a>
+                <a href="${details.paymentLink}" class="btn btn-join">Proceed to Payment</a>
             </div>
             
             <p style="font-size: 13px; color: #666; text-align: center; margin-top: 10px;">
@@ -791,11 +794,11 @@ export async function sendPaymentLinkEmail(
     const mailOptions = {
       from: 'Resend <onboarding@resend.dev>',
       to: clientEmail,
-      subject: `Complete your booking: Payment Link for \${details.serviceType}`,
+      subject: `Complete your booking: Payment Link for ${details.serviceType}`,
       html: htmlContent,
     };
 
-    await sendEmailWithLogging(mailOptions, `Client Payment Link (\${details.serviceType})`);
+    await sendEmailWithLogging(mailOptions, `Client Payment Link (${details.serviceType})`);
   } catch (error) {
     console.error('❌ Error sending client payment link email:', error);
     throw error;

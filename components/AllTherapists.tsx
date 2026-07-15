@@ -896,7 +896,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
     };
 
     try {
-      const response = await fetch('https://n8n.srv1169280.hstgr.cloud/webhook/0d1db363-bf04-41e5-a667-a9fe1b5ffc83', {
+      const response = await fetch('/api/send-whatsapp-reminder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(webhookData)
@@ -962,7 +962,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
     };
 
     try {
-      const response = await fetch('https://n8n.srv1169280.hstgr.cloud/webhook/fd13ea75-06b4-49e5-8188-75a88a9aaade', {
+      const response = await fetch('/api/send-session-notes-reminder', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(webhookData)
