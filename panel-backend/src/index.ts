@@ -324,17 +324,33 @@ async function getAuthenticatedClient(therapist: any) {
     expiry_date: therapist.google_token_expiry ? new Date(therapist.google_token_expiry).getTime() : undefined
   });
 
+  console.log(`[Token Refresh] Starting token refresh for ${therapist.name} (ID: ${therapist.therapist_id})`);
+  console.log(`[Token Refresh] Has refresh_token: ${!!therapist.google_refresh_token}, Has access_token: ${!!therapist.google_access_token}`);
+
   try {
     const { credentials } = await oauth2Client.refreshAccessToken();
-    if (credentials.access_token) {
+    console.log(`[Token Refresh] Successfully refreshed token for ${therapist.name}`);
+    console.log(`[Token Refresh] Credentials response - access_token exists: ${!!credentials?.access_token}, expiry_date: ${credentials?.expiry_date}`);
+
+    if (credentials?.access_token) {
       const expiryDate = credentials.expiry_date ? new Date(credentials.expiry_date) : new Date(Date.now() + 3500 * 1000);
       await pool.query(
         `UPDATE therapists SET google_access_token = $1, google_token_expiry = $2 WHERE therapist_id = $3`,
         [credentials.access_token, expiryDate, therapist.therapist_id]
       );
+      console.log(`[Token Refresh] Updated tokens in database for ${therapist.name}, access_token saved`);
+      // Update the oauth2Client with the new credentials
+      oauth2Client.setCredentials({
+        refresh_token: therapist.google_refresh_token,
+        access_token: credentials.access_token,
+        expiry_date: expiryDate
+      });
+    } else {
+      console.error(`❌ [Token Refresh] No access_token in refresh response for ${therapist.name}. Credentials:`, credentials);
     }
-  } catch (e) {
-    console.error('Failed to refresh token, using existing', e);
+  } catch (e: any) {
+    console.error(`❌ [Token Refresh] Failed to refresh token for ${therapist.name}:`, e?.message || e);
+    console.error(`[Token Refresh] Error code: ${e?.code}, Error status: ${e?.status}`);
   }
   return oauth2Client;
 }
@@ -7342,10 +7358,25 @@ app.post('/api/create-booking', async (req, res) => {
       });
     }
 
-    let startAt = new Date(`${payload.date} ${payload.slot} GMT+0530`);
+    let startAt: Date;
+
+    // Handle both formats: date+slot OR startTime
+    if (payload.startTime) {
+      // Parse ISO format startTime: "2026-09-10T04:30:00Z" or "2026-09-10T04:30:00+05:30"
+      startAt = new Date(payload.startTime);
+    } else if (payload.date && payload.slot) {
+      // Legacy format: separate date and slot
+      startAt = new Date(`${payload.date} ${payload.slot} GMT+0530`);
+    } else {
+      startAt = new Date();
+    }
+
     if (isNaN(startAt.getTime())) {
       startAt = new Date();
     }
+
+    console.log(`[Create Booking] Parsed startTime: ${startAt.toISOString()} from payload.startTime: ${payload.startTime || 'not provided'}`);
+
     const sessionDurationMinutes = payload.therapyName === 'Free Consultation' || payload.isFreeConsultation ? 15 : 50;
     const endAt = new Date(startAt.getTime() + sessionDurationMinutes * 60000);
 
@@ -7446,7 +7477,9 @@ app.post('/api/create-booking', async (req, res) => {
     if (therapist && therapist.google_refresh_token) {
       console.log(`[Create Booking] Therapist ${therapist.name} has Google Calendar connected. Creating Event.`);
       try {
+        console.log(`[Create Booking] Getting authenticated client for ${therapist.name}...`);
         const oauth2Client = await getAuthenticatedClient(therapist);
+        console.log(`[Create Booking] Got OAuth2 client, creating calendar service...`);
         const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
         const isOnline = payload.sessionMode === 'online';
@@ -7478,6 +7511,7 @@ app.post('/api/create-booking', async (req, res) => {
           eventBody.location = 'SafeStories Office - Lullanagar, Pune, Maharashtra 411040 | https://share.google/3tnQB1ORUWCJcmZyv';
         }
 
+        console.log(`[Create Booking] Inserting event into calendar for ${therapist.name}...`);
         const calendarEvent = await calendar.events.insert({
           calendarId: 'primary',
           conferenceDataVersion: isOnline ? 1 : 0,
@@ -7490,9 +7524,10 @@ app.post('/api/create-booking', async (req, res) => {
           meetLink = calendarEvent.data.hangoutLink || '';
         }
         hasCalendar = true;
-        console.log(`[Create Booking] Successfully created Google Calendar event on ${therapist.name}'s calendar. ${isOnline ? 'Meet Link: ' + meetLink : 'In-person with location'}`);
-      } catch (calendarError) {
-        console.error(`❌ Failed creating Google Calendar event for therapist ${therapist.name}:`, calendarError?.message || calendarError);
+        console.log(`✅ [Create Booking] Successfully created Google Calendar event on ${therapist.name}'s calendar. Event ID: ${google_event_id}. ${isOnline ? 'Meet Link: ' + meetLink : 'In-person with location'}`);
+      } catch (calendarError: any) {
+        console.error(`❌ [Create Booking] Failed creating Google Calendar event for therapist ${therapist.name}:`, calendarError?.message || calendarError);
+        console.error(`[Create Booking] Error details:`, calendarError?.errors || calendarError?.response?.data || calendarError);
       }
     } else if (therapist) {
       console.warn(`⚠️ [Create Booking] Therapist "${therapist.name}" does not have Google Calendar connected. Event will not appear on therapist's calendar.`);
@@ -9890,7 +9925,7 @@ app.get('/api/automation-logs', async (req, res) => {
   }
 });
 
-const PORT = 3002;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 const httpServer = createServer(app);
 
 export const io = new SocketIOServer(httpServer, {
