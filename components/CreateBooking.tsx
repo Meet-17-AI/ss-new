@@ -431,13 +431,14 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       if (response.ok) {
         const data = await response.json();
         
-        if (data && data.length > 0 && data[0]['Available Slots']) {
-          const availableSlots = data[0]['Available Slots'];
+        if (data && data.length > 0) {
+          const availableSlots = data[0]['Available Slots'] || [];
+          // Always read charges from the response, even if no slots are available for this date
           const charges = data[0]['session charges'] || 0;
           const modeString = data[0]['mode'] || '';
           
-          setSessionCharges(charges || 0);
-          setCustomAmount((charges || 0).toString());
+          setSessionCharges(charges);
+          setCustomAmount(charges > 0 ? charges.toString() : '');
           
           const modes: string[] = [];
           try {

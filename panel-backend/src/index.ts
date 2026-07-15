@@ -6200,29 +6200,60 @@ app.post('/api/fetch-slots', async (req, res) => {
       .filter(slot => slot.clientDateStr === payload.selectedDate)
       .map(slot => slot.absoluteIso);
     // Query and prefill session charges from therapy_services
+    // 4-level fallback: most specific → least specific
     let sessionCharges = 0;
     const selectedTherapy = payload.selectedTherapy;
-    if (therapistName && selectedTherapy) {
-      try {
-        const serviceResult = await pool.query(
-          `SELECT charges FROM therapy_services 
-           WHERE (therapist_name ILIKE $1 OR therapist_id = $2) 
-             AND (title ILIKE $3 OR title ILIKE $4) 
-           LIMIT 1`,
-          [`%${therapistName.split(' ')[0]}%`, therapistId, `%${selectedTherapy}%`, `%Session%`]
+    try {
+      let chargeRow = null;
+
+      // Step 1: Match by therapist_id + therapy title (most precise)
+      if (therapistId && selectedTherapy) {
+        const r1 = await pool.query(
+          `SELECT charges FROM therapy_services WHERE therapist_id = $1 AND title ILIKE $2 AND is_active = true LIMIT 1`,
+          [therapistId, `%${selectedTherapy}%`]
         );
-        
-        if (serviceResult.rows.length > 0) {
-          const rawCharges = serviceResult.rows[0].charges;
-          const cleanCharges = parseInt(rawCharges.replace(/[^0-9]/g, ''), 10);
-          if (!isNaN(cleanCharges)) {
-            sessionCharges = cleanCharges;
-            console.log(`[Fetch Slots Filter] Auto-resolved session charges for ${therapistName}: ${cleanCharges}`);
-          }
-        }
-      } catch (chargeErr) {
-        console.error('[Fetch Slots Filter] Failed to lookup session charges:', chargeErr);
+        if (r1.rows.length > 0) chargeRow = r1.rows[0];
       }
+
+      // Step 2: Match by therapist_name (first word) + therapy title
+      if (!chargeRow && therapistName && selectedTherapy) {
+        const r2 = await pool.query(
+          `SELECT charges FROM therapy_services WHERE therapist_name ILIKE $1 AND title ILIKE $2 AND is_active = true LIMIT 1`,
+          [`%${therapistName.split(' ')[0]}%`, `%${selectedTherapy}%`]
+        );
+        if (r2.rows.length > 0) chargeRow = r2.rows[0];
+      }
+
+      // Step 3: Match by full therapist_name only (when therapy title doesn't match)
+      if (!chargeRow && therapistName) {
+        const r3 = await pool.query(
+          `SELECT charges FROM therapy_services WHERE therapist_name ILIKE $1 AND is_active = true ORDER BY id DESC LIMIT 1`,
+          [`%${therapistName.split(' ')[0]}%`]
+        );
+        if (r3.rows.length > 0) chargeRow = r3.rows[0];
+      }
+
+      // Step 4: Match by therapy title alone (last resort)
+      if (!chargeRow && selectedTherapy) {
+        const r4 = await pool.query(
+          `SELECT charges FROM therapy_services WHERE title ILIKE $1 AND is_active = true LIMIT 1`,
+          [`%${selectedTherapy}%`]
+        );
+        if (r4.rows.length > 0) chargeRow = r4.rows[0];
+      }
+
+      if (chargeRow) {
+        const rawCharges = String(chargeRow.charges || '0');
+        const cleanCharges = parseInt(rawCharges.replace(/[^0-9]/g, ''), 10);
+        if (!isNaN(cleanCharges) && cleanCharges > 0) {
+          sessionCharges = cleanCharges;
+          console.log(`[Fetch Slots] Resolved session charges for "${therapistName}" / "${selectedTherapy}": ${cleanCharges}`);
+        }
+      } else {
+        console.warn(`[Fetch Slots] No service found for therapist="${therapistName}", therapy="${selectedTherapy}"`);
+      }
+    } catch (chargeErr) {
+      console.error('[Fetch Slots] Failed to lookup session charges (non-fatal):', chargeErr);
     }
 
     res.json([{ "Available Slots": formattedSlots, "session charges": sessionCharges, success: true }]);
@@ -9184,8 +9215,12 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
 
     const bookingId = randomUUID();
     const startObj = new Date(`${date} ${time} GMT+0530`);
+    if (!date || !time || isNaN(startObj.getTime())) {
+      return res.status(400).json({ error: `Invalid date or time provided. Received date="${date}", time="${time}". Please select a valid slot.` });
+    }
     const sessionDurationMinutes = serviceType === 'Free Consultation' ? 15 : 50;
     const endObj = new Date(startObj.getTime() + sessionDurationMinutes * 60000);
+
 
     await pool.query(
       `INSERT INTO bookings (
