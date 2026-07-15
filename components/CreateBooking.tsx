@@ -624,7 +624,8 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   };
 
   const isPaymentLinkEnabled = () => {
-    const baseValid = selectedSlot && clientName.trim() && clientEmail.trim() && clientWhatsApp.trim();
+    const isTherapistSelected = isFreeConsultation || selectedTherapist;
+    const baseValid = isTherapistSelected && selectedSlot && clientName.trim() && clientEmail.trim() && clientWhatsApp.trim();
     if (!isFreeConsultation) {
       return baseValid && paymentMode !== '' && customAmount.trim() !== '';
     }
