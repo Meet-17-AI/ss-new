@@ -190,6 +190,9 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
 
   useEffect(() => {
     setPaymentMode(isDirectBooking ? '' : 'link');
+    if (!isDirectBooking) {
+      setCurrency('INR');
+    }
   }, [isDirectBooking]);
 
   useEffect(() => {
@@ -1030,26 +1033,28 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                     </div>
                   )}
                   <div className={`flex gap-4 ${!isDirectBooking ? 'md:col-span-2' : ''}`}>
-                    <div className="w-1/3">
-                      <label className="block text-sm font-medium mb-2">
-                        Currency
-                      </label>
-                      <div className="relative">
-                        <select
-                          value={currency}
-                          onChange={(e) => setCurrency(e.target.value)}
-                          className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white pr-8"
-                        >
-                          <option value="INR">₹ INR</option>
-                          <option value="USD">$ USD</option>
-                          <option value="EUR">€ EUR</option>
-                        </select>
-                        <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
-                          ▼
+                    {isDirectBooking && (
+                      <div className="w-1/3">
+                        <label className="block text-sm font-medium mb-2">
+                          Currency
+                        </label>
+                        <div className="relative">
+                          <select
+                            value={currency}
+                            onChange={(e) => setCurrency(e.target.value)}
+                            className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white pr-8"
+                          >
+                            <option value="INR">₹ INR</option>
+                            <option value="USD">$ USD</option>
+                            <option value="EUR">€ EUR</option>
+                          </select>
+                          <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
+                            ▼
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <div className="w-2/3">
+                    )}
+                    <div className={isDirectBooking ? "w-2/3" : "w-full"}>
                       <label className="block text-sm font-medium mb-2">
                         Amount<span className="text-red-500">*</span>
                       </label>
