@@ -6199,8 +6199,33 @@ app.post('/api/fetch-slots', async (req, res) => {
       })
       .filter(slot => slot.clientDateStr === payload.selectedDate)
       .map(slot => slot.absoluteIso);
+    // Query and prefill session charges from therapy_services
+    let sessionCharges = 0;
+    const selectedTherapy = payload.selectedTherapy;
+    if (therapistName && selectedTherapy) {
+      try {
+        const serviceResult = await pool.query(
+          `SELECT charges FROM therapy_services 
+           WHERE (therapist_name ILIKE $1 OR therapist_id = $2) 
+             AND (title ILIKE $3 OR title ILIKE $4) 
+           LIMIT 1`,
+          [`%${therapistName.split(' ')[0]}%`, therapistId, `%${selectedTherapy}%`, `%Session%`]
+        );
+        
+        if (serviceResult.rows.length > 0) {
+          const rawCharges = serviceResult.rows[0].charges;
+          const cleanCharges = parseInt(rawCharges.replace(/[^0-9]/g, ''), 10);
+          if (!isNaN(cleanCharges)) {
+            sessionCharges = cleanCharges;
+            console.log(`[Fetch Slots Filter] Auto-resolved session charges for ${therapistName}: ${cleanCharges}`);
+          }
+        }
+      } catch (chargeErr) {
+        console.error('[Fetch Slots Filter] Failed to lookup session charges:', chargeErr);
+      }
+    }
 
-    res.json([{ "Available Slots": formattedSlots, success: true }]);
+    res.json([{ "Available Slots": formattedSlots, "session charges": sessionCharges, success: true }]);
   } catch (error) {
     console.error('Error in native fetch-slots:', error);
     res.status(500).json({ error: 'Internal server error' });
