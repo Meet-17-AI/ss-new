@@ -7442,7 +7442,7 @@ app.post('/api/create-booking', async (req, res) => {
     let hasCalendar = false;
     let meetLink = '';
     let google_event_id: string | null = null;
-    
+
     if (therapist && therapist.google_refresh_token) {
       console.log(`[Create Booking] Therapist ${therapist.name} has Google Calendar connected. Creating Event.`);
       try {
@@ -7453,7 +7453,7 @@ app.post('/api/create-booking', async (req, res) => {
 
         const eventBody: any = {
           summary: `${payload.therapyName} - ${payload.clientName}`,
-          description: `Therapy session booked via SafeStories.\nClient: ${payload.clientName}\nClient Email: ${maskedEmail}\nSession Mode: ${payload.sessionMode || 'online'}\nNotes: ${payload.notes || 'None'}`,
+          description: `Therapy session booked via SafeStories.\nClient: ${payload.clientName}\nClient Email: ${payload.clientEmail}\nSession Mode: ${payload.sessionMode || 'online'}\nNotes: ${payload.notes || 'None'}`,
           start: {
             dateTime: startAt.toISOString(),
             timeZone: 'Asia/Kolkata'
@@ -7463,7 +7463,7 @@ app.post('/api/create-booking', async (req, res) => {
             timeZone: 'Asia/Kolkata'
           },
           attendees: [
-            { email: maskedEmail }
+            { email: payload.clientEmail }
           ]
         };
 
@@ -7495,8 +7495,12 @@ app.post('/api/create-booking', async (req, res) => {
         hasCalendar = true;
         console.log(`[Create Booking] Successfully created Google Calendar event. ${isOnline ? 'Meet Link: ' + meetLink : 'In-person with location'}`);
       } catch (calendarError) {
-        console.error('❌ Failed creating booking via Google Calendar:', calendarError);
+        console.error('❌ Failed creating Google Calendar event for therapist', therapist.name, ':', calendarError?.message || calendarError);
+        // Log error but continue - booking should still be created, just without calendar event
+        // This allows the booking to proceed even if Google Calendar integration fails
       }
+    } else if (therapist) {
+      console.warn(`⚠️ [Create Booking] Therapist "${therapist.name}" does not have Google Calendar connected. No calendar event will be created. Client will not receive calendar invite.`);
     }
 
     const publicBookingCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
@@ -9891,7 +9895,7 @@ app.get('/api/automation-logs', async (req, res) => {
   }
 });
 
-const PORT = 3002;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 const httpServer = createServer(app);
 
 export const io = new SocketIOServer(httpServer, {
