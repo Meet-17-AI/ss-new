@@ -7453,7 +7453,7 @@ app.post('/api/create-booking', async (req, res) => {
 
         const eventBody: any = {
           summary: `${payload.therapyName} - ${payload.clientName}`,
-          description: `Therapy session booked via SafeStories.\nClient: ${payload.clientName}\nClient Email: ${maskedEmail}\nSession Mode: ${payload.sessionMode || 'online'}\nNotes: ${payload.notes || 'None'}`,
+          description: `Therapy session booked via SafeStories.\nClient: ${payload.clientName}\nSession Mode: ${payload.sessionMode || 'online'}\nNotes: ${payload.notes || 'None'}`,
           start: {
             dateTime: startAt.toISOString(),
             timeZone: 'Asia/Kolkata'
@@ -7461,10 +7461,7 @@ app.post('/api/create-booking', async (req, res) => {
           end: {
             dateTime: endAt.toISOString(),
             timeZone: 'Asia/Kolkata'
-          },
-          attendees: [
-            { email: maskedEmail }
-          ]
+          }
         };
 
         if (isOnline) {
@@ -7493,10 +7490,12 @@ app.post('/api/create-booking', async (req, res) => {
           meetLink = calendarEvent.data.hangoutLink || '';
         }
         hasCalendar = true;
-        console.log(`[Create Booking] Successfully created Google Calendar event. ${isOnline ? 'Meet Link: ' + meetLink : 'In-person with location'}`);
+        console.log(`[Create Booking] Successfully created Google Calendar event on ${therapist.name}'s calendar. ${isOnline ? 'Meet Link: ' + meetLink : 'In-person with location'}`);
       } catch (calendarError) {
-        console.error('❌ Failed creating booking via Google Calendar:', calendarError);
+        console.error(`❌ Failed creating Google Calendar event for therapist ${therapist.name}:`, calendarError?.message || calendarError);
       }
+    } else if (therapist) {
+      console.warn(`⚠️ [Create Booking] Therapist "${therapist.name}" does not have Google Calendar connected. Event will not appear on therapist's calendar.`);
     }
 
     const publicBookingCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
