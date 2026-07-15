@@ -9158,7 +9158,7 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
     }
 
     const bookingId = randomUUID();
-    const startObj = new Date(`${date}T${time}:00+05:30`);
+    const startObj = new Date(`${date} ${time} GMT+0530`);
     const sessionDurationMinutes = serviceType === 'Free Consultation' ? 15 : 50;
     const endObj = new Date(startObj.getTime() + sessionDurationMinutes * 60000);
 
