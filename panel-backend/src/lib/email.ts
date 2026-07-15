@@ -688,3 +688,117 @@ export async function sendClientBookingCancellationEmail(
     throw error;
   }
 }
+
+/**
+ * Send payment link email to Client
+ */
+export async function sendPaymentLinkEmail(
+  clientEmail: string,
+  details: {
+    clientName: string;
+    serviceType: string;
+    sessionTiming: string;
+    paymentLink: string;
+  }
+): Promise<void> {
+  try {
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f9f9f9; }
+        
+        .container { 
+            max-width: 480px; 
+            margin: 30px auto; 
+            background: #ffffff; 
+            border-radius: 12px; 
+            overflow: hidden; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.05); 
+            border: 1px solid #d1d1d1; 
+        }
+        
+        /* Header */
+        .header { text-align: center; padding: 35px 25px 15px; }
+        .brand { font-size: 32px; font-weight: bold; margin: 0; letter-spacing: -0.5px; }
+        .safe { color: #f2c730; } 
+        .stories { color: #1e6d63; } 
+        .confirmed { font-size: 16px; color: #666; margin-top: 8px; font-weight: 600; text-transform: uppercase; display: block; }
+        
+        /* Greeting Line */
+        .intro-text { font-size: 15px; color: #555; margin-top: 15px; line-height: 1.5; }
+
+        /* Session Details Section */
+        .content { padding: 0 30px 30px; }
+        .details-box { background-color: #f0f6f5; border-radius: 10px; padding: 20px; margin: 20px 0; border: 1px solid #e2ecea; }
+        .detail-item { margin-bottom: 10px; font-size: 14px; display: flex; }
+        .label { font-weight: bold; color: #1e6d63; width: 100px; flex-shrink: 0; }
+        .value { color: #444; }
+
+        /* Buttons within details */
+        .btn { display: block; text-align: center; padding: 14px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 12px; font-size: 16px; }
+        .btn-join { background-color: #1e6d63; color: #ffffff !important; }
+        
+        /* Footer */
+        .footer { text-align: center; padding: 25px; background-color: #ffffff; border-top: 1px solid #f0f0f0; }
+        .slogan { font-style: italic; color: #1e6d63; margin: 0; font-size: 15px; font-weight: 500; }
+        .signature { margin-top: 5px; font-size: 14px; color: #888; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="brand"><span class="safe">Safe</span><span class="stories">Stories</span></div>
+            <strong class="confirmed">Payment Link Generated</strong>
+            <p class="intro-text">
+                Hello <strong>\${details.clientName}</strong>, a payment link has been generated for your upcoming session. Please complete the payment to confirm your booking.
+            </p>
+        </div>
+
+        <div class="content">
+            <div class="details-box">
+                <div class="detail-item">
+                    <span class="label">Session:</span>
+                    <span class="value">\${details.serviceType}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="label">Time:</span>
+                    <span class="value">\${details.sessionTiming}</span>
+                </div>
+
+                <hr style="border: 0; border-top: 1px solid #dce8e6; margin: 15px 0;">
+
+                <a href="\${details.paymentLink}" class="btn btn-join">Proceed to Payment</a>
+            </div>
+            
+            <p style="font-size: 13px; color: #666; text-align: center; margin-top: 10px;">
+                Note: This payment link will expire in 30 minutes. Unpaid slots are automatically released.
+            </p>
+        </div>
+
+        <div class="footer">
+            <p class="slogan">Always there for your mental health.</p>
+            <p class="signature"><strong><br />Team SafeStories</strong><br />410, 4th Floor, Marvel Vista Business Centre,<br /> Near Gera Junction, Lullanagar, <br />Pune, Maharashtra 411048</p>
+        </div>
+    </div>
+</body>
+</html>
+    `;
+
+    const mailOptions = {
+      from: 'Resend <onboarding@resend.dev>',
+      to: clientEmail,
+      subject: `Complete your booking: Payment Link for \${details.serviceType}`,
+      html: htmlContent,
+    };
+
+    await sendEmailWithLogging(mailOptions, `Client Payment Link (\${details.serviceType})`);
+  } catch (error) {
+    console.error('❌ Error sending client payment link email:', error);
+    throw error;
+  }
+}
+

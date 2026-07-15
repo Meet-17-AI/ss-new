@@ -13,7 +13,7 @@ import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from './lib/timezone';
 import { uploadFile } from './lib/minio';
-import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendClientBookingCancellationEmail } from './lib/email';
+import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendClientBookingCancellationEmail, sendPaymentLinkEmail } from './lib/email';
 import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage } from './automations/index';
 import { generateAdminOTP, verifyAdminOTP } from './otp';
 import { logWebhookApi } from './lib/webhookApiLogger.js';
@@ -414,7 +414,7 @@ app.post('/api/native/fetch-slots', async (req, res) => {
       try {
         const bookingsRes = await pool.query(
           `SELECT booking_invitee_time FROM bookings 
-           WHERE therapist_id = $1 AND DATE(booking_start_at AT TIME ZONE 'Asia/Kolkata') = $2 AND booking_status != 'Canceled'`,
+           WHERE (therapist_id = $1 OR therapist_id IS NULL) AND DATE(booking_start_at AT TIME ZONE 'Asia/Kolkata') = $2 AND booking_status NOT IN ('cancelled', 'Canceled', 'payment_failed')`,
           [therapistId, payload.selectedDate]
         );
         
@@ -5959,6 +5959,9 @@ app.post('/api/fetch-slots', async (req, res) => {
       }
     } else if (therapistName === 'SafeStories') {
       scheduleId = 999999;
+      if (payload.therapistId) {
+        therapistId = payload.therapistId;
+      }
     } else if (therapistName) {
       const therapistResult = await pool.query(
         'SELECT t.therapist_id, tr.schedule_id FROM therapists t LEFT JOIN therapist_resources tr ON t.therapist_id = tr.therapist_id WHERE TRIM(LOWER(t.name)) = $1 ORDER BY tr.schedule_id DESC NULLS LAST LIMIT 1',
@@ -6099,7 +6102,7 @@ app.post('/api/fetch-slots', async (req, res) => {
       try {
         const bookingsRes = await pool.query(
           `SELECT booking_start_at, booking_end_at FROM bookings 
-           WHERE therapist_id = $1 AND booking_status != 'Canceled'
+           WHERE (therapist_id = $1 OR therapist_id IS NULL) AND booking_status NOT IN ('cancelled', 'Canceled', 'payment_failed')
            AND booking_start_at >= $2::timestamp WITH TIME ZONE 
            AND booking_start_at <= $3::timestamp WITH TIME ZONE`,
           [therapistId, `${daysToCheck[0]}T00:00:00+05:30`, `${daysToCheck[2]}T23:59:59+05:30`]
@@ -6125,7 +6128,7 @@ app.post('/api/fetch-slots', async (req, res) => {
 
       // Google Calendar Free/Busy Filter
       try {
-        const tRes = await pool.query('SELECT google_refresh_token, email, name FROM therapists WHERE therapist_id = $1', [therapistId]);
+        const tRes = await pool.query('SELECT google_refresh_token, contact_info AS email, name FROM therapists WHERE therapist_id = $1', [therapistId]);
         if (tRes.rows.length > 0 && tRes.rows[0].google_refresh_token) {
           const therapist = tRes.rows[0];
           // Since getAuthenticatedClient expects an object with google_refresh_token, we can pass therapist directly.
@@ -9215,6 +9218,20 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
       );
     }
 
+    if (clientEmail) {
+      try {
+        await sendPaymentLinkEmail(clientEmail, {
+          clientName: clientName || "Client",
+          serviceType: serviceType || "Therapy Session",
+          sessionTiming: formattedDate,
+          paymentLink
+        });
+        console.log(`[generate-payment-link] Sent payment link email to ${clientEmail}`);
+      } catch (emailErr) {
+        console.error(`[generate-payment-link] Failed to send payment link email to ${clientEmail}:`, emailErr);
+      }
+    }
+
     res.json({ success: true, paymentLink, bookingId });
   } catch (err) {
     console.error('Error generating payment link:', err);
@@ -9276,7 +9293,7 @@ app.post('/api/confirm-payment', async (req, res) => {
     // Using global fetch (intercepted or real based on setup)
     const webhookUrl = 'https://fluid.live/webhook/safestories/booking';
     
-    const tRes = await pool.query('SELECT email FROM therapists WHERE therapist_id = $1', [booking.therapist_id]);
+    const tRes = await pool.query('SELECT contact_info AS email FROM therapists WHERE therapist_id = $1', [booking.therapist_id]);
     const therapistEmail = tRes.rows.length > 0 ? tRes.rows[0].email : '';
 
     const webhookPayload = {
@@ -9356,7 +9373,7 @@ function startPaymentLinkExpiryCron() {
       // Expire old-style "waiting_for_payment" links
       const result = await pool.query(
         `UPDATE bookings
-         SET booking_status = 'Canceled', booking_updated_at = NOW()
+         SET booking_status = 'cancelled', booking_updated_at = NOW()
          WHERE booking_status = 'waiting_for_payment'
            AND invitee_created_at < NOW() - INTERVAL '30 minutes'
          RETURNING booking_id`
@@ -9368,7 +9385,7 @@ function startPaymentLinkExpiryCron() {
       // Expire "payment_pending" bookings (created via create-pending-booking before Razorpay)
       const pending = await pool.query(
         `UPDATE bookings
-         SET booking_status = 'payment_failed', payment_status = 'Failed', booking_updated_at = NOW()
+         SET booking_status = 'cancelled', payment_status = 'Failed', booking_updated_at = NOW()
          WHERE booking_status = 'payment_pending'
            AND invitee_created_at < NOW() - INTERVAL '30 minutes'
          RETURNING booking_id`

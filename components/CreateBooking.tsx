@@ -55,7 +55,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   const [allowedTherapists, setAllowedTherapists] = useState<string[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [hasRestrictions, setHasRestrictions] = useState(false);
-  const [paymentMode, setPaymentMode] = useState<'link' | 'qr' | 'cash' | ''>('');
+  const [paymentMode, setPaymentMode] = useState<'link' | 'qr' | 'cash' | ''>(isDirectBooking ? '' : 'link');
   const [customAmount, setCustomAmount] = useState<string>('');
   const [currency, setCurrency] = useState<string>('INR');
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
@@ -187,6 +187,10 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
     { code: '+975', country: 'Bhutan' },
     { code: '+977', country: 'Nepal' },
   ];
+
+  useEffect(() => {
+    setPaymentMode(isDirectBooking ? '' : 'link');
+  }, [isDirectBooking]);
 
   useEffect(() => {
     fetchTherapies();
@@ -1003,26 +1007,28 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
             {!isFreeConsultation && (
               <div className="flex flex-col gap-6 mb-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">
-                      Payment Method<span className="text-red-500">*</span>
-                    </label>
-                    <div className="relative">
-                      <select
-                        value={paymentMode}
-                        onChange={(e) => setPaymentMode(e.target.value as any)}
-                        className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white pr-10"
-                      >
-                        <option value="">Select Payment Method</option>
-                        <option value="qr">QR (Paid)</option>
-                        <option value="cash">Cash (Paid)</option>
-                      </select>
-                      <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
-                        ▼
+                  {isDirectBooking && (
+                    <div>
+                      <label className="block text-sm font-medium mb-2">
+                        Payment Method<span className="text-red-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <select
+                          value={paymentMode}
+                          onChange={(e) => setPaymentMode(e.target.value as any)}
+                          className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white pr-10"
+                        >
+                          <option value="">Select Payment Method</option>
+                          <option value="qr">QR (Paid)</option>
+                          <option value="cash">Cash (Paid)</option>
+                        </select>
+                        <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
+                          ▼
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className="flex gap-4">
+                  )}
+                  <div className={`flex gap-4 ${!isDirectBooking ? 'md:col-span-2' : ''}`}>
                     <div className="w-1/3">
                       <label className="block text-sm font-medium mb-2">
                         Currency

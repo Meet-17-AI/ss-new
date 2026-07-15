@@ -5098,10 +5098,49 @@ app.post('/api/fetch-slots', async (req, res) => {
         // FILTER LOGIC: Remove slots on days the therapist is unavailable according to DaySchedule
         if (Array.isArray(jsonResponse) && jsonResponse[0] && jsonResponse[0]["Available Slots"]) {
           const therapistName = payload.therapistName;
+          let therapistId = payload.therapistId || null;
           
           if (therapistName) {
             if (therapistName === 'SafeStories') {
-              // SafeStories allows all slots
+              // SafeStories allows all slots, but still deconflict if a therapistId is specified
+              if (payload.therapistId) {
+                therapistId = payload.therapistId;
+                try {
+                  const targetDateStr = payload.selectedDate;
+                  const targetDate = new Date(`${targetDateStr}T12:00:00Z`);
+                  const daysToCheck = [-1, 0, 1].map(offset => {
+                    const d = new Date(targetDate.getTime() + offset * 86400000);
+                    return d.toISOString().split('T')[0];
+                  });
+
+                  const bookingsRes = await pool.query(
+                    `SELECT booking_start_at, booking_end_at FROM bookings 
+                     WHERE (therapist_id = $1 OR therapist_id IS NULL) AND booking_status NOT IN ('cancelled', 'Canceled', 'payment_failed')
+                     AND booking_start_at >= $2::timestamp WITH TIME ZONE 
+                     AND booking_start_at <= $3::timestamp WITH TIME ZONE`,
+                    [therapistId, `${daysToCheck[0]}T00:00:00+05:30`, `${daysToCheck[2]}T23:59:59+05:30`]
+                  );
+
+                  const originalSlots = jsonResponse[0]["Available Slots"];
+                  const filteredSlots = originalSlots.filter((slotISO: string) => {
+                    const slotStartMs = new Date(slotISO).getTime();
+                    const slotEndMs = slotStartMs + 50 * 60000;
+
+                    return !bookingsRes.rows.some(booking => {
+                      if (!booking.booking_start_at) return false;
+                      const bookedStartMs = new Date(booking.booking_start_at).getTime();
+                      const bookedEndMs = booking.booking_end_at 
+                        ? new Date(booking.booking_end_at).getTime()
+                        : bookedStartMs + 50 * 60000;
+
+                      return slotStartMs < bookedEndMs && slotEndMs > bookedStartMs;
+                    });
+                  });
+                  jsonResponse[0]["Available Slots"] = filteredSlots;
+                } catch (err) {
+                  console.error('[Fetch Slots Booking Deconfliction] Failed to filter booked slots for SafeStories:', err);
+                }
+              }
             } else {
               const therapistResult = await pool.query(
                 'SELECT t.therapist_id, tr.schedule_id FROM therapists t LEFT JOIN therapist_resources tr ON t.therapist_id = tr.therapist_id WHERE TRIM(LOWER(t.name)) = $1 ORDER BY tr.schedule_id DESC NULLS LAST LIMIT 1',
@@ -5110,6 +5149,7 @@ app.post('/api/fetch-slots', async (req, res) => {
               
               if (therapistResult.rows.length > 0 && therapistResult.rows[0].schedule_id) {
                 const scheduleId = therapistResult.rows[0].schedule_id;
+                therapistId = therapistResult.rows[0].therapist_id;
                 
                 try {
                   const scheduleRes = await fetch(`https://n8n.srv1169280.hstgr.cloud/webhook/424780e4-8e10-4308-84fd-5925450cc123?scheduleId=${scheduleId}`);
@@ -5121,7 +5161,7 @@ app.post('/api/fetch-slots', async (req, res) => {
                       const daysMap = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
                       
                       const originalSlots = jsonResponse[0]["Available Slots"];
-                      const filteredSlots = originalSlots.filter((slotISO: string) => {
+                      let filteredSlots = originalSlots.filter((slotISO: string) => {
                         const d = new Date(slotISO);
                         const dayString = daysMap[d.getDay()];
                         
@@ -5131,6 +5171,43 @@ app.post('/api/fetch-slots', async (req, res) => {
                         }
                         return true;
                       });
+
+                      // Apply booking deconfliction logic
+                      if (therapistId) {
+                        try {
+                          const targetDateStr = payload.selectedDate;
+                          const targetDate = new Date(`${targetDateStr}T12:00:00Z`);
+                          const daysToCheck = [-1, 0, 1].map(offset => {
+                            const d = new Date(targetDate.getTime() + offset * 86400000);
+                            return d.toISOString().split('T')[0];
+                          });
+
+                          const bookingsRes = await pool.query(
+                            `SELECT booking_start_at, booking_end_at FROM bookings 
+                             WHERE (therapist_id = $1 OR therapist_id IS NULL) AND booking_status NOT IN ('cancelled', 'Canceled', 'payment_failed')
+                             AND booking_start_at >= $2::timestamp WITH TIME ZONE 
+                             AND booking_start_at <= $3::timestamp WITH TIME ZONE`,
+                            [therapistId, `${daysToCheck[0]}T00:00:00+05:30`, `${daysToCheck[2]}T23:59:59+05:30`]
+                          );
+
+                          filteredSlots = filteredSlots.filter((slotISO: string) => {
+                            const slotStartMs = new Date(slotISO).getTime();
+                            const slotEndMs = slotStartMs + 50 * 60000;
+
+                            return !bookingsRes.rows.some(booking => {
+                              if (!booking.booking_start_at) return false;
+                              const bookedStartMs = new Date(booking.booking_start_at).getTime();
+                              const bookedEndMs = booking.booking_end_at 
+                                ? new Date(booking.booking_end_at).getTime()
+                                : bookedStartMs + 50 * 60000;
+
+                              return slotStartMs < bookedEndMs && slotEndMs > bookedStartMs;
+                            });
+                          });
+                        } catch (err) {
+                          console.error('[Fetch Slots Booking Deconfliction] Failed to filter booked slots:', err);
+                        }
+                      }
                       
                       console.log(`[Fetch Slots Filter] Original slots: ${originalSlots.length}, Filtered slots: ${filteredSlots.length}`);
                       jsonResponse[0]["Available Slots"] = filteredSlots;
@@ -5501,7 +5578,7 @@ app.get('/api/sos-documentation', async (req, res) => {
       SELECT COUNT(*) as session_count
       FROM bookings
       WHERE invitee_email = $1 AND invitee_phone = $2
-      AND booking_status != 'cancelled'
+      AND booking_status NOT IN ('cancelled', 'Canceled', 'payment_failed')
     `;
     const sessionCount = await pool.query(sessionCountQuery, [clientEmail, clientPhone]);
 
@@ -6509,7 +6586,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
-const PORT = 3002;
+const PORT = 3003;
 const httpServer = createServer(app);
 
 export const io = new SocketIOServer(httpServer, {
