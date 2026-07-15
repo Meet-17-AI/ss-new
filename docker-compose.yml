@@ -88,6 +88,7 @@ services:
 
     environment:
       - NODE_ENV=production
+      - PORT=3002
       - PGHOST=${PGHOST}
       - PGPORT=${PGPORT}
       - PGDATABASE=${PGDATABASE}
