@@ -7509,8 +7509,8 @@ app.post('/api/create-booking', async (req, res) => {
         booking_status, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id, google_event_id,
         payment_id, payment_status, invitee_payment_gateway, invitee_question,
-        client_type, invitee_created_at, booking_updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, NOW(), NOW())`,
+        invitee_created_at, booking_updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, NOW(), NOW())`,
       [
         booking_id,
         invitee_id,
@@ -7537,8 +7537,7 @@ app.post('/api/create-booking', async (req, res) => {
         payload.payment_id || payload.razorpay_payment_id || null,
         (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') ? 'Paid' : (payload.payment_id ? 'Paid' : (payload.isFreeConsultation ? 'Free' : 'Pending')),
         (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') ? (payload.paymentMode === 'qr' ? 'QR' : 'Cash') : (payload.payment_gateway || null),
-        payload.invitee_question || payload.notes || null,
-        payload.clientType || 'Indian'
+        payload.invitee_question || payload.notes || null
       ]
     );
 
@@ -7725,9 +7724,9 @@ app.post('/api/create-pending-booking', async (req, res) => {
         booking_status, payment_status, invitee_payment_gateway,
         razorpay_order_id, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, mask_id,
-        booking_invitee_time, booking_host_time, invitee_question, client_type,
+        booking_invitee_time, booking_host_time, invitee_question,
         invitee_created_at, booking_updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25, NOW(), NOW())`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, NOW(), NOW())`,
       [
         booking_id, invitee_id, 'Direct Booking',
         payload.clientName || 'Unknown Client',
@@ -7744,8 +7743,7 @@ app.post('/api/create-pending-booking', async (req, res) => {
         payload.sessionMode === 'online' ? 'Online Video Call' : 'In Person (Pune)',
         maskId,
         '', '',
-        payload.invitee_question || payload.notes || null,
-        payload.clientType || 'Indian'
+        payload.invitee_question || payload.notes || null
       ]
     );
 
@@ -9385,12 +9383,12 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
         booking_id, therapist_id, invitee_name, invitee_email, invitee_phone,
         booking_start_at, booking_end_at, booking_status, payment_status, invitee_payment_amount,
         invitee_payment_currency, booking_resource_name, booking_mode, invitee_timezone, 
-        booking_invitee_time, booking_host_time, booking_host_name, client_type, invitee_created_at, booking_updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())`,
+        booking_invitee_time, booking_host_time, booking_host_name, invitee_created_at, booking_updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, $12, $13, $14, $15, $16, NOW(), NOW())`,
       [
         bookingId, resolvedTherapistId, clientName, clientEmail, clientPhone,
         startObj.toISOString(), endObj.toISOString(), 'waiting_for_payment', 'Pending', amount,
-        serviceType, bookingMode, clientTz, inviteeTime, hostTime, therapistName, clientType || 'Indian'
+        serviceType, bookingMode, clientTz, inviteeTime, hostTime, therapistName
       ]
     );
 
