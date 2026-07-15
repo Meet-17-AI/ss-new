@@ -6554,7 +6554,7 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
   let hasCalendar = false;
   let meetLink = '';
   let google_event_id = null;
-  if (therapist && therapist.google_refresh_token) {
+  if (therapist && therapist.google_refresh_token && !booking.google_event_id) {
     try {
       const oauth2Client = await getAuthenticatedClient(therapist);
       const { google } = require('googleapis');
