@@ -24,7 +24,6 @@
     "nodemailer": "^8.0.9",
     "pg": "^8.21.0",
     "razorpay": "^2.9.6",
-    "resend": "^6.12.4",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {

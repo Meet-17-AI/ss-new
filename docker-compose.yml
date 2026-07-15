@@ -103,6 +103,8 @@ services:
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
       - FRONTEND_URL=${FRONTEND_URL}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - GMAIL_USER=${GMAIL_USER}
+      - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD}
     restart: always
     deploy:
       update_config:

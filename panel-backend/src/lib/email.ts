@@ -1,4 +1,3 @@
-import { Resend } from 'resend';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import { logWebhookApi } from './webhookApiLogger.js';
@@ -6,12 +5,8 @@ import { logWebhookApi } from './webhookApiLogger.js';
 // Load environment variables
 dotenv.config({ path: '.env.local' });
 
-// Email service configuration
+// Email service configuration — Gmail SMTP only
 const useGmailSmtp = process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD;
-const resendApiKey = process.env.RESEND_API_KEY || 'missing_api_key';
-const resend = new Resend(resendApiKey);
-
-const RESEND_ENDPOINT = 'https://api.resend.com/emails';
 
 // Initialize Gmail SMTP transporter
 let gmailTransporter: any = null;
@@ -25,75 +20,58 @@ if (useGmailSmtp) {
   });
 
   console.log(`✅ Gmail SMTP configured: ${process.env.GMAIL_USER}`);
+} else {
+  console.error('❌ Gmail SMTP NOT configured: GMAIL_USER / GMAIL_APP_PASSWORD are missing. Emails will fail.');
 }
 
 async function sendEmailWithLogging(mailOptions: any, emailType: string): Promise<any> {
-  try {
-    if (useGmailSmtp && gmailTransporter) {
-      // Send via Gmail SMTP
-      const fromEmail = process.env.GMAIL_USER || 'noreply@safestories.com';
-
-      const result = await gmailTransporter.sendMail({
-        from: fromEmail,
-        to: mailOptions.to,
-        subject: mailOptions.subject,
-        html: mailOptions.html,
-        text: mailOptions.text,
-      });
-
-      console.log(`✅ Email sent via Gmail SMTP [${emailType}]:`, result.messageId);
-      await logWebhookApi({
-        log_type: 'api_outgoing',
-        name: `Gmail SMTP (${emailType})`,
-        endpoint: 'smtp.gmail.com:587',
-        method: 'SMTP',
-        status: 'success',
-        request_payload: { to: mailOptions.to, subject: mailOptions.subject },
-        response_data: { messageId: result.messageId }
-      });
-
-      return { data: { id: result.messageId }, error: null };
-    } else {
-      // Fallback to Resend
-      const { data, error } = await resend.emails.send(mailOptions);
-      if (error) {
-        console.error(`❌ Resend API Error [${emailType}]:`, error);
-        await logWebhookApi({
-          log_type: 'api_outgoing',
-          name: `Resend Email API (${emailType})`,
-          endpoint: RESEND_ENDPOINT,
-          method: 'POST',
-          status: 'failed',
-          request_payload: mailOptions,
-          error_message: JSON.stringify(error),
-          response_data: error
-        });
-        throw error;
-      }
-      console.log(`✅ Email sent via Resend [${emailType}]:`, data?.id);
-      await logWebhookApi({
-        log_type: 'api_outgoing',
-        name: `Resend Email API (${emailType})`,
-        endpoint: RESEND_ENDPOINT,
-        method: 'POST',
-        status: 'success',
-        request_payload: mailOptions,
-        response_data: data
-      });
-      return { data, error };
-    }
-  } catch (err: any) {
-    console.error(`❌ Exception sending email [${emailType}]:`, err);
-    const endpoint = useGmailSmtp ? 'smtp.gmail.com:587' : RESEND_ENDPOINT;
-    const method = useGmailSmtp ? 'SMTP' : 'POST';
-
+  if (!useGmailSmtp || !gmailTransporter) {
+    const msg = `Gmail SMTP not configured (missing GMAIL_USER / GMAIL_APP_PASSWORD) — cannot send [${emailType}]`;
+    console.error(`❌ ${msg}`);
     await logWebhookApi({
       log_type: 'api_outgoing',
-      name: `Email Service (${emailType})`,
-      endpoint: endpoint,
-      method: method,
+      name: `Gmail SMTP (${emailType})`,
+      endpoint: 'smtp.gmail.com:587',
+      method: 'SMTP',
       status: 'failed',
-      request_payload: mailOptions,
+      request_payload: { to: mailOptions.to, subject: mailOptions.subject },
+      error_message: msg
+    });
+    throw new Error(msg);
+  }
+
+  try {
+    const fromEmail = process.env.GMAIL_USER;
+
+    const result = await gmailTransporter.sendMail({
+      from: fromEmail,
+      to: mailOptions.to,
+      subject: mailOptions.subject,
+      html: mailOptions.html,
+      text: mailOptions.text,
+    });
+
+    console.log(`✅ Email sent via Gmail SMTP [${emailType}]:`, result.messageId);
+    await logWebhookApi({
+      log_type: 'api_outgoing',
+      name: `Gmail SMTP (${emailType})`,
+      endpoint: 'smtp.gmail.com:587',
+      method: 'SMTP',
+      status: 'success',
+      request_payload: { to: mailOptions.to, subject: mailOptions.subject },
+      response_data: { messageId: result.messageId }
+    });
+
+    return { data: { id: result.messageId }, error: null };
+  } catch (err: any) {
+    console.error(`❌ Exception sending email [${emailType}]:`, err);
+    await logWebhookApi({
+      log_type: 'api_outgoing',
+      name: `Gmail SMTP (${emailType})`,
+      endpoint: 'smtp.gmail.com:587',
+      method: 'SMTP',
+      status: 'failed',
+      request_payload: { to: mailOptions.to, subject: mailOptions.subject },
       error_message: err.message || String(err)
     });
     throw err;
@@ -236,7 +214,7 @@ export async function sendOTPEmail(
     `;
 
     const mailOptions = {
-      from: 'Resend <onboarding@resend.dev>',
+      from: 'SafeStories <therapy@safestories.in>',
       to: email,
       subject: '🔐 Your SafeStories Profile Setup OTP',
       html: htmlContent,
@@ -391,7 +369,7 @@ export async function sendPasswordResetOTP(
     `;
 
     const mailOptions = {
-      from: 'Resend <onboarding@resend.dev>',
+      from: 'SafeStories <therapy@safestories.in>',
       to: email,
       subject: '🔐 Password Reset OTP - SafeStories',
       html: htmlContent,
@@ -427,7 +405,7 @@ The SafeStories Team`,
  */
 export async function verifyEmailConfig(): Promise<boolean> {
   try {
-    // Resend doesn't require explicit verification
+    // Gmail SMTP does not require explicit verification here
     console.log('✅ Email configuration verified');
     return true;
   } catch (error) {
@@ -458,7 +436,7 @@ export async function sendAdminBookingConfirmationEmail(
     `;
 
     const mailOptions = {
-      from: 'Resend <onboarding@resend.dev>',
+      from: 'SafeStories <therapy@safestories.in>',
       to: adminEmail,
       subject: `New Session Confirmed: ${details.sessionName}`,
       html: htmlContent,
@@ -599,7 +577,7 @@ export async function sendClientBookingConfirmationEmail(
     `;
 
     const mailOptions = {
-      from: 'Resend <onboarding@resend.dev>',
+      from: 'SafeStories <therapy@safestories.in>',
       to: clientEmail,
       subject: `Session Confirmed: ${details.sessionName}`,
       html: htmlContent,
@@ -679,7 +657,7 @@ export async function sendClientBookingCancellationEmail(
 </html>`;
 
     const mailOptions = {
-      from: 'Resend <onboarding@resend.dev>',
+      from: 'SafeStories <therapy@safestories.in>',
       to: clientEmail,
       subject: `Session Cancelled: ${details.sessionName}`,
       html: htmlContent,
@@ -792,7 +770,7 @@ export async function sendPaymentLinkEmail(
     `;
 
     const mailOptions = {
-      from: 'Resend <onboarding@resend.dev>',
+      from: 'SafeStories <therapy@safestories.in>',
       to: clientEmail,
       subject: `Complete your booking: Payment Link for ${details.serviceType}`,
       html: htmlContent,
