@@ -3908,10 +3908,34 @@ app.post('/api/webhook/feedback', async (req, res) => {
   }
 });
 
+// Derive the true session START instant (ms since epoch) from booking_invitee_time.
+// booking_start_at/booking_end_at are stored inconsistently (some UTC, some IST
+// wall-clock), so they are NOT reliable for time comparisons. convertToIST()
+// normalizes every stored format ("...IST" and "...(GMT+05:30)") into a single
+// IST string, which we parse here to get an unambiguous instant.
+const MONTH_IDX: { [k: string]: number } = {
+  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11
+};
+function getBookingStartMs(inviteeTime: string | null | undefined): number | null {
+  if (!inviteeTime) return null;
+  const istStr = convertToIST(inviteeTime); // -> "Weekday, Mon DD, YYYY at HH:MM AM - HH:MM AM IST"
+  const m = istStr.match(/(\w{3}) (\d{1,2}), (\d{4}) at (\d{1,2}):(\d{2}) ([AP]M)/);
+  if (!m) return null;
+  const [, mon, day, year, hh, mm, period] = m;
+  const monthIdx = MONTH_IDX[mon];
+  if (monthIdx === undefined) return null;
+  let hour = parseInt(hh, 10);
+  if (period === 'PM' && hour !== 12) hour += 12;
+  if (period === 'AM' && hour === 12) hour = 0;
+  // The parsed time is IST wall-clock; the real UTC instant is that minus 5:30.
+  return Date.UTC(parseInt(year, 10), monthIdx, parseInt(day, 10), hour, parseInt(mm, 10)) - 330 * 60000;
+}
+
 app.get('/api/appointments', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT 
+      SELECT
         b.booking_id,
         b.booking_invitee_time,
         b.booking_resource_name,
@@ -3940,13 +3964,22 @@ app.get('/api/appointments', async (req, res) => {
       ORDER BY b.booking_start_at DESC
     `);
 
+    const nowMs = Date.now();
     const appointments = result.rows.map(row => {
       let status = row.booking_status;
+
+      // A booking stays "Upcoming" (scheduled) until its session START time has
+      // passed. Derive the real start instant from booking_invitee_time (storage-
+      // agnostic); fall back to the SQL end-time flag only if the string can't be
+      // parsed. This replaces the old `booking_end_at < NOW() + 5:30` rule, whose
+      // +5:30 offset mis-flagged not-yet-started sessions as past.
+      const startMs = getBookingStartMs(row.booking_invitee_time);
+      const hasStarted = startMs !== null ? (startMs <= nowMs) : row.is_past;
 
       if (row.booking_status !== 'cancelled' && row.booking_status !== 'canceled' && row.booking_status !== 'no_show' && row.booking_status !== 'no show') {
         if (row.has_session_notes) {
           status = 'completed';
-        } else if (row.is_past) {
+        } else if (hasStarted) {
           status = 'pending_notes';
         }
       }
