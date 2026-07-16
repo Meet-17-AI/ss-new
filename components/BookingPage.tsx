@@ -507,7 +507,11 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
       emergencyContactRelation: formData.emergencyRelation,
       emergencyContactNumber: `${formData.emergencyCountryCode}${formData.emergencyNumber}`,
       sessionMode: formData.location === 'google_meet' ? 'online' : 'in-person',
-      timezone: 'Asia/Kolkata',
+      // The slot itself is an IST time (parsed server-side as GMT+05:30), so the
+      // therapist's calendar event is always marked in IST. `timezone` is the
+      // CLIENT's own timezone — it's stored in the DB and used to show the client
+      // their booking time in their local zone. For an IST client this is IST.
+      timezone: clientTimezone,
       notes: compiledNotes,
       invitee_question: compiledNotes, // Send both
       isAdmin: false,
@@ -864,7 +868,8 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
                   </div>
                 ) : availableSlots.length > 0 ? (
                   availableSlots.map((s, i) => {
-                    const converted = convertSlotToClientTz(s, selectedDate);
+                    // Slots are always shown in IST — the therapist's availability is
+                    // defined in IST and the session is booked/marked at that IST time.
                     return (
                       <div
                         key={i}
@@ -873,8 +878,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
                       >
                         <span className="bp-dot available" />
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                          <span>{converted.display} {converted.crossDay && <span style={{ fontSize: 10, opacity: 0.7 }}>{converted.crossDay}</span>}</span>
-                          {converted.istLabel && <span style={{ fontSize: 10, color: selectedSlot === s ? 'rgba(255,255,255,0.75)' : '#9ca3af' }}>{converted.istLabel}</span>}
+                          <span>{formatTime(s)} IST</span>
                         </div>
                       </div>
                     );
