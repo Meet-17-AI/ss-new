@@ -2733,7 +2733,7 @@ app.get('/api/dashboard/bookings', async (req, res) => {
 
     const result = start && end
       ? await pool.query(
-        `SELECT 
+        `SELECT
             invitee_name as client_name,
             invitee_email as client_email,
             invitee_phone as client_phone,
@@ -2741,6 +2741,7 @@ app.get('/api/dashboard/bookings', async (req, res) => {
             booking_mode as mode,
             booking_host_name as therapist_name,
             booking_invitee_time,
+            booking_joining_link,
             booking_id
           FROM bookings
           WHERE booking_status IN ('confirmed', 'scheduled')
@@ -2751,7 +2752,7 @@ app.get('/api/dashboard/bookings', async (req, res) => {
         [start, `${end} 23:59:59`, limitNum]
       )
       : await pool.query(
-        `SELECT 
+        `SELECT
             invitee_name as client_name,
             invitee_email as client_email,
             invitee_phone as client_phone,
@@ -2759,6 +2760,7 @@ app.get('/api/dashboard/bookings', async (req, res) => {
             booking_mode as mode,
             booking_host_name as therapist_name,
             booking_invitee_time,
+            booking_joining_link,
             booking_id
           FROM bookings
           WHERE booking_status IN ('confirmed', 'scheduled')
