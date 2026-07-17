@@ -658,51 +658,6 @@
   background: #f0fdfa; /* teal-50 */
 }
 
-/* ── Default Hours Section ──────────────────────────── */
-.default-hours-section {
-  padding: 16px;
-  background: #f0fdfa;          /* teal-50, flat */
-  border: 1px solid #99f6e4;    /* teal-200 */
-  border-radius: 8px;
-  margin-top: 16px;
-}
-
-.default-hours-section .section-heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #115e59; /* teal-800 */
-  margin-bottom: 4px;
-}
-
-.default-hours-section .section-desc {
-  font-size: 12px;
-  color: #0f766e; /* teal-700 */
-  margin-bottom: 12px;
-}
-
-.default-hours-check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-}
-
-.default-hours-check input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: #0f766e;
-  cursor: pointer;
-}
-
-.default-hours-check span {
-  font-size: 14px;
-  font-weight: 500;
-  color: #111827;
-}
-
 /* ── Modal Footer ───────────────────────────────────── */
 .avail-modal-footer {
   padding: 16px 24px;

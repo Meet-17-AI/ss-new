@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronDown, X, Plus, Trash2, Loader2, Save, Calendar, Clock, RefreshCw } from 'lucide-react';
+import { ChevronDown, X, Plus, Trash2, Loader2, Save, Calendar, Clock } from 'lucide-react';
 import { Toast } from './Toast';
 import './TherapistAvailabilityCalendar.css';
 
@@ -146,7 +146,6 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
   const [modalDate, setModalDate] = useState<number | null>(null);
   const [modalAvailable, setModalAvailable] = useState(true);
   const [modalSlots, setModalSlots] = useState<TimeSlot[]>([{ start: '09:00', end: '17:00', enabled: true }]);
-  const [applyAsDefault, setApplyAsDefault] = useState(false);
 
   // ── Initialize therapist ────────────────────────────
   useEffect(() => {
@@ -281,7 +280,6 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
   const openDateModal = (day: number) => {
     const info = getDateAvailability(day);
     setModalDate(day);
-    setApplyAsDefault(false);
 
     if (info) {
       setModalAvailable(info.is_available);
@@ -315,36 +313,17 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
 
     try {
       const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(modalDate).padStart(2, '0')}`;
-      const d = new Date(calYear, calMonth, modalDate);
-      const weekdayShort = WEEKDAY_SHORT[d.getDay()].toUpperCase();
 
-      let newAvailability = [...(scheduleData.availability || [])];
-
-      if (applyAsDefault) {
-        // Update the weekly rule for this day of the week
-        const idx = newAvailability.findIndex((a: DayAvailability) =>
-          !/\d{4}-\d{2}-\d{2}/.test(a.day) && matchesWeekday(a.day, weekdayShort)
-        );
-        const newEntry: DayAvailability = {
-          day: DAY_MAP[weekdayShort] || weekdayShort,
-          is_available: modalAvailable,
-          times: modalAvailable ? activeTimes : [],
-        };
-        if (idx > -1) newAvailability[idx] = newEntry;
-        else newAvailability.push(newEntry);
-
-        // Also remove any date override for this specific date
-        newAvailability = newAvailability.filter((a: DayAvailability) => a.day !== dateStr);
-      } else {
-        // Save as date-specific override
-        const filtered = newAvailability.filter((a: DayAvailability) => a.day !== dateStr);
-        filtered.push({
+      // Edits always apply to this one date only. The weekly rules are still read
+      // and re-sent untouched below, since the PUT replaces the whole schedule.
+      const newAvailability = [
+        ...(scheduleData.availability || []).filter((a: DayAvailability) => a.day !== dateStr),
+        {
           day: dateStr,
           is_available: modalAvailable,
           times: modalAvailable ? activeTimes : [],
-        });
-        newAvailability = filtered;
-      }
+        },
+      ];
 
       // Prepare payload matching EditEvent's handleUpdateSchedule format
       const therapistName = isAdmin ? selectedTherapist?.name : user.full_name;
@@ -407,7 +386,7 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
 
       // Optimistic local update
       setScheduleData(prev => prev ? { ...prev, availability: newAvailability } : prev);
-      setToast({ message: applyAsDefault ? `Default ${WEEKDAY_NAMES[d.getDay()]} hours updated!` : 'Availability saved!', type: 'success' });
+      setToast({ message: 'Availability saved!', type: 'success' });
       setModalOpen(false);
 
       // Re-fetch to sync
@@ -491,7 +470,10 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
 
       // "Blocked" now means what it says: busy blocks cover every working window.
       const fullyBlocked = hasWindows && freeMinutes <= 0;
-      const partiallyBooked = hasWindows && freeMinutes > 0 && freeMinutes < totalMinutes;
+      // Remaining free time is only actionable from today onwards — on a past date
+      // there is nothing left to book, so the pill would be noise.
+      const partiallyBooked =
+        !isPast && hasWindows && freeMinutes > 0 && freeMinutes < totalMinutes;
       const visuallyUnavailable = !isAvailable || fullyBlocked;
 
       const classes = [
@@ -744,27 +726,6 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
                   </button>
                 </div>
               )}
-
-              {/* Default Hours Section */}
-              <div className="default-hours-section">
-                <div className="section-heading">
-                  <RefreshCw size={14} />
-                  Default Hours
-                </div>
-                <div className="section-desc">
-                  When checked, this schedule will apply to every{' '}
-                  <strong>{modalDate ? new Date(calYear, calMonth, modalDate).toLocaleDateString('en-US', { weekday: 'long' }) : 'day'}</strong>{' '}
-                  going forward.
-                </div>
-                <label className="default-hours-check">
-                  <input
-                    type="checkbox"
-                    checked={applyAsDefault}
-                    onChange={e => setApplyAsDefault(e.target.checked)}
-                  />
-                  <span>Apply as default weekly hours</span>
-                </label>
-              </div>
             </div>
 
             {/* Footer */}
