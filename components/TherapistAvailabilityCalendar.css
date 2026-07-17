@@ -236,6 +236,10 @@
   background: #f59e0b; /* amber-500, flat */
 }
 
+.legend-dot.partly-booked {
+  background: #3b82f6; /* blue-500 */
+}
+
 .legend-dot.today {
   border: 2px solid #0f766e;
   background: #fff;
@@ -366,6 +370,12 @@
 .day-slot-pill.override {
   background: #fef3c7; /* amber-100 */
   color: #92400e;      /* amber-800 */
+}
+
+/* Day is open but partly taken by Google Calendar busy blocks. */
+.day-slot-pill.booked {
+  background: #dbeafe; /* blue-100 */
+  color: #1e40af;      /* blue-800 */
 }
 
 .day-status-badge {

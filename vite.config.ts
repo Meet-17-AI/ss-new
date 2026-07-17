@@ -4,17 +4,22 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
+    // Point the dev server at an already-deployed API instead of a local one, so the
+    // UI can be worked on without booting a backend (whose startup crons send real
+    // client emails). Defaults to the local backend.
+    const apiTarget = env.VITE_API_TARGET || 'http://localhost:3002';
+    const crmTarget = env.VITE_CRM_TARGET || 'http://localhost:3003';
     return {
       server: {
         port: 3004,
         host: '0.0.0.0',
         proxy: {
           '/api/crm': {
-            target: 'http://localhost:3003',
+            target: crmTarget,
             changeOrigin: true,
           },
           '/api': {
-            target: 'http://localhost:3002',
+            target: apiTarget,
             changeOrigin: true,
           },
         },

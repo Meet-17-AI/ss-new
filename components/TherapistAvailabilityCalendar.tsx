@@ -78,6 +78,43 @@ const DAY_MAP: Record<string, string> = {
   THU: 'thursday', FRI: 'friday', SAT: 'saturday',
 };
 
+/** Absolute ms for an "HH:mm" wall-clock time on a given calendar date. */
+const wallClockMs = (year: number, month: number, day: number, hhmm: string) => {
+  const [h, m] = (hhmm || '00:00').split(':').map(Number);
+  return new Date(year, month, day, h || 0, m || 0, 0, 0).getTime();
+};
+
+/**
+ * Minutes of [winStart, winEnd) still free once every overlapping busy block is
+ * removed. Busy blocks may overlap each other, so they are clipped to the window
+ * and merged before subtracting — double-counting would under-report free time
+ * and wrongly black out the day.
+ */
+const freeMinutesInWindow = (
+  winStart: number,
+  winEnd: number,
+  busy: { start: number; end: number }[],
+) => {
+  const total = winEnd - winStart;
+  if (total <= 0) return 0;
+
+  const clipped = busy
+    .map(b => ({ start: Math.max(b.start, winStart), end: Math.min(b.end, winEnd) }))
+    .filter(b => b.end > b.start)
+    .sort((a, b) => a.start - b.start);
+
+  let covered = 0;
+  let cursor = winStart;
+  for (const b of clipped) {
+    if (b.start > cursor) cursor = b.start;
+    if (b.end > cursor) {
+      covered += b.end - cursor;
+      cursor = b.end;
+    }
+  }
+  return Math.round((total - covered) / 60000);
+};
+
 /* ═══════════════════════════════════════════════════════
    Component
    ═══════════════════════════════════════════════════════ */
@@ -425,20 +462,37 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
       const isAvailable = info?.is_available ?? false;
       const isOverride = info?.isOverride ?? false;
 
-      // Find google blocks for this day
-      const dayStart = new Date(calYear, calMonth, day, 0, 0, 0);
-      const dayEnd = new Date(calYear, calMonth, day, 23, 59, 59);
-      const blocksForDay = googleBlocks.filter(b => {
-        const bStart = new Date(b.start);
-        const bEnd = new Date(b.end);
-        return bStart < dayEnd && bEnd > dayStart;
+      // Google busy blocks overlapping this day, as absolute instants.
+      const dayStartMs = new Date(calYear, calMonth, day, 0, 0, 0).getTime();
+      const dayEndMs = new Date(calYear, calMonth, day, 23, 59, 59).getTime();
+      const busyForDay = googleBlocks
+        .map(b => ({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() }))
+        .filter(b => b.start < dayEndMs && b.end > dayStartMs);
+
+      // Subtract busy blocks from each working window individually — mirroring the
+      // slot engine, which drops only the slots that actually overlap. Testing the
+      // busy blocks against the whole 00:00-23:59 day instead let a single 50-min
+      // session (which this app writes to the therapist's own Google Calendar)
+      // black out an otherwise open day.
+      const windows = isAvailable ? (info?.times || []) : [];
+      const windowStates = windows.map((t: any) => {
+        const start = wallClockMs(calYear, calMonth, day, t.start);
+        const end = wallClockMs(calYear, calMonth, day, t.end);
+        return {
+          ...t,
+          totalMinutes: Math.max(0, Math.round((end - start) / 60000)),
+          freeMinutes: freeMinutesInWindow(start, end, busyForDay),
+        };
       });
 
-      const hasGoogleBlocks = blocksForDay.length > 0;
-      
-      // If user wants blocked days to use existing style, and there is a block:
-      // A Google block counts as "unavailable" for visual purposes
-      const visuallyUnavailable = !isAvailable || hasGoogleBlocks;
+      const hasWindows = windowStates.length > 0;
+      const totalMinutes = windowStates.reduce((n: number, w: any) => n + w.totalMinutes, 0);
+      const freeMinutes = windowStates.reduce((n: number, w: any) => n + w.freeMinutes, 0);
+
+      // "Blocked" now means what it says: busy blocks cover every working window.
+      const fullyBlocked = hasWindows && freeMinutes <= 0;
+      const partiallyBooked = hasWindows && freeMinutes > 0 && freeMinutes < totalMinutes;
+      const visuallyUnavailable = !isAvailable || fullyBlocked;
 
       const classes = [
         'avail-day-cell',
@@ -456,20 +510,31 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
         >
           <div className="day-number">{day}</div>
           <div className="day-slots">
-            {isAvailable && info?.times && info.times.length > 0 && !hasGoogleBlocks ? (
-              info.times.slice(0, 2).map((t: any, idx: number) => (
+            {hasWindows && !fullyBlocked ? (
+              windowStates.slice(0, 2).map((t: any, idx: number) => (
                 <div key={idx} className={`day-slot-pill${isOverride ? ' override' : ''}`}>
                   {formatTime12(t.start)} – {formatTime12(t.end)}
                 </div>
               ))
             ) : visuallyUnavailable ? (
-              <div className="day-status-badge off" title={hasGoogleBlocks ? "Blocked on Google Calendar" : "Unavailable"}>
-                {hasGoogleBlocks ? "Blocked" : "Off"}
+              <div
+                className="day-status-badge off"
+                title={fullyBlocked ? 'Fully booked on Google Calendar' : 'Unavailable'}
+              >
+                {fullyBlocked ? 'Blocked' : 'Off'}
               </div>
             ) : null}
-            {isAvailable && info?.times && info.times.length > 2 && !hasGoogleBlocks && (
+            {hasWindows && !fullyBlocked && windowStates.length > 2 && (
               <div className="day-slot-pill" style={{ background: '#f3f4f6', color: '#4b5563' }}>
-                +{info.times.length - 2} more
+                +{windowStates.length - 2} more
+              </div>
+            )}
+            {partiallyBooked && (
+              <div
+                className="day-slot-pill booked"
+                title={`${totalMinutes - freeMinutes} min booked, ${freeMinutes} min still free`}
+              >
+                {Math.round(freeMinutes / 60 * 10) / 10}h free
               </div>
             )}
           </div>
@@ -536,6 +601,7 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
         <div className="avail-legend">
           <div className="legend-item"><div className="legend-dot available" /> Available</div>
           <div className="legend-item"><div className="legend-dot unavailable" /> Unavailable</div>
+          <div className="legend-item"><div className="legend-dot partly-booked" /> Partly booked</div>
           <div className="legend-item"><div className="legend-dot override" /> Override</div>
           <div className="legend-item"><div className="legend-dot today" /> Today</div>
         </div>
