@@ -3910,6 +3910,12 @@ app.post('/api/webhook/feedback', async (req, res) => {
   }
 });
 
+// Statuses meaning "the slot is held but payment has NOT been confirmed yet".
+// 'waiting_for_payment' is written by the dashboard "send payment link" flow,
+// 'payment_pending' by the public booking page. Both are cleared by the Razorpay
+// webhook (-> confirmed) or by the expiry cron (-> cancelled).
+const UNPAID_HOLD_STATUSES = new Set(['waiting_for_payment', 'payment_pending', 'pending']);
+
 // Derive the true session START instant (ms since epoch) from booking_invitee_time.
 // booking_start_at/booking_end_at are stored inconsistently (some UTC, some IST
 // wall-clock), so they are NOT reliable for time comparisons. convertToIST()
@@ -3978,7 +3984,16 @@ app.get('/api/appointments', async (req, res) => {
       const startMs = getBookingStartMs(row.booking_invitee_time);
       const hasStarted = startMs !== null ? (startMs <= nowMs) : row.is_past;
 
-      if (row.booking_status !== 'cancelled' && row.booking_status !== 'canceled' && row.booking_status !== 'no_show' && row.booking_status !== 'no show') {
+      // An unpaid hold is not a committed session, so it must never be promoted
+      // to 'completed'/'pending_notes' just because its start time slipped past
+      // (the expiry cron may not have reached it yet). It stays unpaid until
+      // Razorpay's webhook confirms payment or the cron cancels it.
+      const normalizedStatus = (row.booking_status || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      const isUnpaidHold = UNPAID_HOLD_STATUSES.has(normalizedStatus);
+      const isTerminal = normalizedStatus === 'cancelled' || normalizedStatus === 'canceled' ||
+                         normalizedStatus === 'no_show';
+
+      if (!isUnpaidHold && !isTerminal) {
         if (row.has_session_notes) {
           status = 'completed';
         } else if (hasStarted) {
@@ -9661,10 +9676,13 @@ function startPaymentLinkExpiryCron() {
   console.log('[Cron] Starting Payment Link Expiry background job...');
   setInterval(async () => {
     try {
-      // Expire old-style "waiting_for_payment" links
+      // Expire old-style "waiting_for_payment" links.
+      // payment_status must move to 'Failed' too — leaving it 'Pending' on a
+      // cancelled booking reads as "payment still expected", which it isn't.
+      // This mirrors the payment_pending branch below.
       const result = await pool.query(
         `UPDATE bookings
-         SET booking_status = 'cancelled', booking_updated_at = NOW()
+         SET booking_status = 'cancelled', payment_status = 'Failed', booking_updated_at = NOW()
          WHERE booking_status = 'waiting_for_payment'
            AND invitee_created_at < NOW() - INTERVAL '30 minutes'
          RETURNING booking_id`

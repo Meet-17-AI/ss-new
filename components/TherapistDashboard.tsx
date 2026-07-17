@@ -21,6 +21,7 @@ import { SendBookingModal } from './SendBookingModal';
 import { useUrlState } from '../hooks/useUrlState';
 import Resources from './Resources';
 import { therapistData } from '../lib/sessionData';
+import { isAwaitingPayment } from '../lib/bookingStatus';
 import EditEvent from './EditEvent';
 import { BookingPage } from './BookingPage';
 import { NotificationBell } from './NotificationBell';
@@ -1786,6 +1787,8 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   const getAppointmentStatus = (apt: any) => {
     if (apt.booking_status === 'cancelled') return 'cancelled';
     if (apt.booking_status === 'no_show' || apt.booking_status === 'no show') return 'no_show';
+    // An unpaid hold is not a confirmed session — never show it as Upcoming.
+    if (isAwaitingPayment(apt.booking_status)) return 'awaiting_payment';
     if (apt.has_session_notes) return 'completed';
 
     // Parse session_timings to check if session ended - handle both IST and GMT formats

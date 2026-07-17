@@ -6,6 +6,7 @@ import 'react-big-calendar/lib/css/react-big-calendar.css';
 import './Calendar.css';
 import { Loader } from './Loader';
 import { Toast } from './Toast';
+import { isAwaitingPayment } from '../lib/bookingStatus';
 
 interface Appointment {
   invitee_name: string;
@@ -215,6 +216,8 @@ export const TherapistCalendar: React.FC<TherapistCalendarProps> = ({
         // Apply status filter
         const appointmentStatus = apt.booking_status || 'confirmed';
         if (statusFilter !== 'all') {
+          // An unpaid hold is not a confirmed session — keep it off the Upcoming calendar.
+          if (statusFilter === 'upcoming' && isAwaitingPayment(appointmentStatus)) return;
           if (statusFilter === 'upcoming' && (appointmentStatus === 'cancelled' || appointmentStatus === 'completed')) return;
           if (statusFilter === 'cancelled' && appointmentStatus !== 'cancelled') return;
           if (statusFilter === 'completed' && appointmentStatus !== 'completed' && !apt.has_session_notes) return;

@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx'
 import { SendBookingModal } from './SendBookingModal';
 import { Toast } from './Toast';
 import { Loader } from './Loader';
+import { deriveBookingStatus, statusLabel, statusBadgeClass } from '../lib/bookingStatus';
 
 interface Appointment {
   booking_id?: number;
@@ -105,6 +106,7 @@ export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onC
     { id: 'scheduled', label: 'Upcoming' },
     { id: 'all', label: 'All Bookings' },
     { id: 'completed_sessions', label: 'Completed Sessions' },
+    { id: 'awaiting_payment', label: 'Waiting for Payment' },
     { id: 'cancelled', label: 'Cancelled' },
     { id: 'no_show', label: 'No Show' },
     { id: 'free_consultation', label: 'Free Consultations' },
@@ -403,13 +405,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
     setIsCancelling(false);
   };
 
-  const getAppointmentStatus = (apt: Appointment) => {
-    if (apt.booking_status === 'cancelled' || apt.booking_status === 'canceled') return 'cancelled';
-    if (apt.booking_status === 'no_show' || apt.booking_status === 'no show') return 'no_show';
-    if (apt.booking_status === 'completed') return 'completed';
-    if (apt.booking_status === 'pending_notes') return 'pending_notes';
-    return 'scheduled';
-  };
+  const getAppointmentStatus = (apt: Appointment) => deriveBookingStatus(apt.booking_status);
 
   // The platform placeholder host "SafeStories" is used for unassigned free
   // consultations. The Dashboard's "Upcoming Sessions" list excludes it
@@ -767,15 +763,8 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
                         <td className="px-6 py-4 text-sm">{formatMode(apt.booking_mode)}</td>
                         <td className="px-6 py-4 text-sm">{formatSessionTiming(apt.booking_start_at)}</td>
                         <td className="px-6 py-4 text-sm">
-                          <span className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${getAppointmentStatus(apt) === 'completed' ? 'bg-green-100 text-green-700' :
-                              getAppointmentStatus(apt) === 'cancelled' ? 'bg-red-100 text-red-700' :
-                                getAppointmentStatus(apt) === 'no_show' ? 'bg-orange-100 text-orange-700' :
-                                  getAppointmentStatus(apt) === 'pending_notes' ? 'bg-yellow-100 text-yellow-700' :
-                                    'bg-blue-100 text-blue-700'
-                            }`}>
-                            {getAppointmentStatus(apt) === 'pending_notes' ? 'Pending Notes' :
-                              getAppointmentStatus(apt) === 'no_show' ? 'No Show' :
-                                getAppointmentStatus(apt).charAt(0).toUpperCase() + getAppointmentStatus(apt).slice(1)}
+                          <span className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${statusBadgeClass(apt.booking_status)}`}>
+                            {statusLabel(apt.booking_status)}
                           </span>
                         </td>
                         {showRating && (

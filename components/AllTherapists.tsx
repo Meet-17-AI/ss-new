@@ -10,6 +10,7 @@ import { ProgressNoteDetail } from './ProgressNoteDetail';
 import { GoalTrackingTab } from './GoalTrackingTab';
 import { FreeConsultationDetail } from './FreeConsultationDetail';
 import { therapistData } from '../lib/sessionData';
+import { isAwaitingPayment, statusLabel, statusBadgeClass } from '../lib/bookingStatus';
 import { ViewTherapistModal } from './ViewTherapistModal';
 import { EditTherapistForm } from './EditTherapistForm';
 import { ConfirmModal } from './ConfirmModal';
@@ -751,6 +752,9 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
           status = 'cancelled';
         } else if (status === 'no_show' || status === 'no show') {
           status = 'no_show';
+        } else if (isAwaitingPayment(status)) {
+          // An unpaid hold is not a confirmed session — never show it as Upcoming.
+          status = 'awaiting_payment';
         } else if (apt.has_session_notes) {
           status = 'completed';
         } else {
@@ -1586,16 +1590,8 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                                     <td className="px-4 py-3 text-sm text-gray-600">{apt.booking_host_name || selectedTherapist?.name || 'N/A'}</td>
                                     <td className="px-4 py-3 text-sm text-gray-600">{formatBookingMode(apt.booking_mode || apt.mode)}</td>
                                     <td className="px-4 py-3 text-sm">
-                                      <span className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${apt.booking_status === 'completed' ? 'bg-green-100 text-green-700' :
-                                          apt.booking_status === 'cancelled' ? 'bg-red-100 text-red-700' :
-                                            apt.booking_status === 'no_show' ? 'bg-orange-100 text-orange-700' :
-                                              apt.booking_status === 'pending_notes' ? 'bg-yellow-100 text-yellow-700' :
-                                                'bg-blue-100 text-blue-700'
-                                        }`}>
-                                        {apt.booking_status === 'pending_notes' ? 'Pending Notes' :
-                                          apt.booking_status === 'no_show' ? 'No Show' :
-                                            apt.booking_status === 'scheduled' ? 'Scheduled' :
-                                              apt.booking_status?.charAt(0).toUpperCase() + apt.booking_status?.slice(1)}
+                                      <span className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${statusBadgeClass(apt.booking_status)}`}>
+                                        {statusLabel(apt.booking_status)}
                                       </span>
                                     </td>
                                   </tr>
