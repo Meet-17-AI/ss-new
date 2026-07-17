@@ -6150,8 +6150,19 @@ app.post('/api/fetch-slots', async (req, res) => {
 
     if (Array.isArray(availabilityRules) && availabilityRules.length > 0) {
       for (const dStr of daysToCheck) {
-        // 1. Check exclusions
-        const isExcluded = exclusions.some((ex: any) => ex.start === dStr || ex.end === dStr || ex.date === dStr);
+        // Resolve this date's weekly rule up front — several branches below need it.
+        const dObj = new Date(`${dStr}T12:00:00Z`);
+        const dayOfWeekIST = dObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' }).toLowerCase();
+        const weeklyRule = availabilityRules.find((r: any) => (r.day || '').toLowerCase() === dayOfWeekIST);
+
+        // 1. Exclusions block the whole day. Compare against the full range rather
+        //    than only its endpoints, otherwise a multi-day holiday
+        //    ({start:'2026-08-01', end:'2026-08-10'}) would leave 02–09 bookable.
+        const isExcluded = exclusions.some((ex: any) => {
+          const from = ex.start ?? ex.date;
+          const to = ex.end ?? ex.start ?? ex.date;
+          return from && dStr >= from && dStr <= to; // ISO YYYY-MM-DD compares lexicographically
+        });
         if (isExcluded) continue;
 
         // 2. Check date overrides
@@ -6159,23 +6170,34 @@ app.post('/api/fetch-slots', async (req, res) => {
         let dayRule: any = null;
 
         if (override) {
-          const isAvailable = override.is_available ?? (override.availability !== false && override.isAvailable !== false);
-          const overrideTimes = override.availability || override.times || [];
-          
+          // Resolve availability explicitly. Anything ambiguous must fail CLOSED
+          // (blocked) — never silently open a day to clients.
+          let isAvailable: boolean;
+          if (typeof override.is_available === 'boolean') isAvailable = override.is_available;
+          else if (typeof override.isAvailable === 'boolean') isAvailable = override.isAvailable;
+          else if (typeof override.availability === 'boolean') isAvailable = override.availability;
+          else isAvailable = Array.isArray(override.availability) && override.availability.length > 0;
+
+          const overrideTimes = Array.isArray(override.availability)
+            ? override.availability
+            : (Array.isArray(override.times) ? override.times : []);
+
           if (isAvailable) {
+            // An "available" override carrying no windows must not wipe the day out.
+            // Fall back to the weekly schedule instead of producing zero slots — a
+            // day marked available should never yield fewer slots than no override.
+            const times = overrideTimes.length > 0
+              ? overrideTimes
+              : (weeklyRule && weeklyRule.is_available && Array.isArray(weeklyRule.times) ? weeklyRule.times : []);
             dayRule = {
               day: dStr,
               is_available: true,
-              times: overrideTimes
+              times
             };
           } else {
             // Unavailability override
             if (overrideTimes.length > 0) {
               // Partial day unavailability override: base is standard weekly schedule
-              const dObj = new Date(`${dStr}T12:00:00Z`);
-              const dayOfWeekIST = dObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' }).toLowerCase();
-              const weeklyRule = availabilityRules.find((r) => r.day.toLowerCase() === dayOfWeekIST);
-              
               if (weeklyRule && weeklyRule.is_available && Array.isArray(weeklyRule.times)) {
                 dayRule = {
                   day: dStr,
@@ -6201,9 +6223,7 @@ app.post('/api/fetch-slots', async (req, res) => {
           }
         } else {
           // 3. Fallback to weekly schedule
-          const dObj = new Date(`${dStr}T12:00:00Z`);
-          const dayOfWeekIST = dObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' }).toLowerCase();
-          dayRule = availabilityRules.find((r) => r.day.toLowerCase() === dayOfWeekIST);
+          dayRule = weeklyRule;
         }
         
         if (dayRule && dayRule.is_available && Array.isArray(dayRule.times)) {

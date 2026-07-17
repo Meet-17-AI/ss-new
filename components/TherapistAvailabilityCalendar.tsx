@@ -147,16 +147,40 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
       let data = await res.json();
       if (Array.isArray(data) && data.length > 0) data = data[0];
 
-      // Merge date_overrides into availability
-      let merged = [...(data.availability || [])];
+      // Merge date_overrides into availability. This mirrors the slot engine so the
+      // therapist sees exactly what clients see.
+      const weeklyRules = [...(data.availability || [])];
+      let merged = [...weeklyRules];
+
+      const weeklyRuleFor = (dateStr: string) => {
+        const d = new Date(`${dateStr}T12:00:00Z`);
+        const short = WEEKDAY_SHORT[d.getUTCDay()].toUpperCase();
+        return weeklyRules.find((a: any) => !/\d{4}-\d{2}-\d{2}/.test(a.day) && matchesWeekday(a.day, short));
+      };
+
       if (data.date_overrides) {
         data.date_overrides.forEach((ov: any) => {
-          merged.push({ day: ov.date, is_available: ov.is_available !== false, times: ov.availability || [] });
+          const isAvail = ov.is_available !== false;
+          const times = ov.availability || [];
+          // An "available" override carrying no windows falls back to the weekly
+          // hours — otherwise the day renders as having no availability at all.
+          const weekly = weeklyRuleFor(ov.date);
+          const effective = (isAvail && times.length === 0 && weekly?.is_available)
+            ? (weekly.times || [])
+            : times;
+          merged.push({ day: ov.date, is_available: isAvail, times: effective });
         });
       }
       if (data.exclusions) {
         data.exclusions.forEach((ex: any) => {
-          merged.push({ day: ex.start, is_available: false, times: [] });
+          // Expand the whole range: a multi-day holiday must show every day blocked,
+          // not just its first day.
+          const from = ex.start ?? ex.date;
+          const to = ex.end ?? ex.start ?? ex.date;
+          if (!from) return;
+          for (let d = new Date(`${from}T12:00:00Z`); d <= new Date(`${to}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 1)) {
+            merged.push({ day: d.toISOString().split('T')[0], is_available: false, times: [] });
+          }
         });
       }
       data.availability = merged;
@@ -239,13 +263,23 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
   // ── Save from modal ─────────────────────────────────
   const handleModalSave = async () => {
     if (!scheduleData || !scheduleId || modalDate === null) return;
+
+    const activeTimes = modalSlots.filter(s => s.enabled).map(s => ({ start: s.start, end: s.end }));
+
+    // Marking a day "Available" with no enabled time windows would save an override
+    // with an empty window list, which the slot engine reads as "open, but zero
+    // working hours" — the day then shows as blocked. Stop it at the source.
+    if (modalAvailable && activeTimes.length === 0) {
+      setToast({ message: 'Add at least one time window, or set the day to Unavailable.', type: 'error' });
+      return;
+    }
+
     setSaving(true);
 
     try {
       const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(modalDate).padStart(2, '0')}`;
       const d = new Date(calYear, calMonth, modalDate);
       const weekdayShort = WEEKDAY_SHORT[d.getDay()].toUpperCase();
-      const activeTimes = modalSlots.filter(s => s.enabled).map(s => ({ start: s.start, end: s.end }));
 
       let newAvailability = [...(scheduleData.availability || [])];
 
