@@ -3573,6 +3573,54 @@ app.post('/api/reschedule-booking', async (req, res) => {
     const startAtDate = new Date(new_start_at);
     const endAtDate = new Date(startAtDate.getTime() + (duration || 50) * 60000);
 
+    // 2a. Overlap guard: never move a session onto a slot the same therapist is
+    // already booked for. The stored booking_start_at/booking_end_at columns are
+    // unreliable (some UTC, some IST wall-clock), so we derive every existing
+    // session's true instant from booking_invitee_time via getBookingStartMs()
+    // instead. Pass { force: true } to intentionally allow a double-booking.
+    if (req.body.force !== true) {
+      const newStartMs = startAtDate.getTime();
+      const newEndMs = endAtDate.getTime();
+
+      const scopeById = bookingDetails.therapist_id !== null && bookingDetails.therapist_id !== undefined;
+      const others = await pool.query(
+        `SELECT booking_id, invitee_name, booking_invitee_time, booking_duration, booking_status
+         FROM bookings
+         WHERE booking_id <> $1
+           AND ${scopeById ? 'therapist_id = $2' : 'booking_host_name = $2'}
+           AND booking_invitee_time IS NOT NULL`,
+        [booking_id, scopeById ? bookingDetails.therapist_id : bookingDetails.booking_host_name]
+      );
+
+      const conflicts = others.rows.filter(row => {
+        const normalized = (row.booking_status || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+        // Cancelled / unpaid-hold / no-show sessions don't hold a slot.
+        if (normalized === 'cancelled' || normalized === 'canceled' ||
+            normalized === 'no_show' || normalized === 'payment_failed' ||
+            UNPAID_HOLD_STATUSES.has(normalized)) {
+          return false;
+        }
+        const otherStartMs = getBookingStartMs(row.booking_invitee_time);
+        if (otherStartMs === null) return false; // can't compare reliably
+        const otherEndMs = otherStartMs + (row.booking_duration || 50) * 60000;
+        // Half-open interval overlap: [newStart, newEnd) intersects [otherStart, otherEnd)
+        return newStartMs < otherEndMs && otherStartMs < newEndMs;
+      });
+
+      if (conflicts.length > 0) {
+        console.warn(`[Reschedule Booking] Blocked: slot conflict for booking ${booking_id}`, conflicts.map(c => c.booking_id));
+        return res.status(409).json({
+          error: 'Slot conflict',
+          message: `This therapist already has a session at that time (${conflicts[0].invitee_name?.trim() || 'another client'}). Choose a different slot, or resend with force to override.`,
+          conflicts: conflicts.map(c => ({
+            booking_id: c.booking_id,
+            invitee_name: c.invitee_name?.trim() || null,
+            booking_invitee_time: c.booking_invitee_time
+          }))
+        });
+      }
+    }
+
     // Format: "Saturday, Apr 11, 2026 at 11:00 AM - 11:50 AM IST"
     const datePart = startAtDate.toLocaleDateString('en-US', {
       weekday: 'long',
