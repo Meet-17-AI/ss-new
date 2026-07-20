@@ -5510,11 +5510,18 @@ app.get('/api/session-notes-info', async (req, res) => {
     if (result.rows.length === 0) return res.status(404).json({ error: 'Booking not found' });
 
     const row = result.rows[0];
-    const startAt = new Date(row.booking_start_at);
-    const endAt = new Date(row.booking_end_at);
+    // booking_start_at/booking_end_at are stored inconsistently (some UTC, some IST
+    // wall-clock), so prefer the true instant parsed from booking_invitee_time. Fall
+    // back to the raw timestamp only when the invitee_time string can't be parsed.
+    const startMs = getBookingStartMs(row.booking_invitee_time);
+    const startAt = startMs !== null ? new Date(startMs) : new Date(row.booking_start_at);
+    const endAt = startMs !== null
+      ? new Date(startMs + (row.booking_duration || 50) * 60000)
+      : new Date(row.booking_end_at);
 
-    const fmt = (d: Date) => d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-    const fmtDate = (d: Date) => d.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    // Always format in IST so the date/time don't shift with the server's timezone.
+    const fmt = (d: Date) => d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+    const fmtDate = (d: Date) => d.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Kolkata' });
 
     const inviteeTime = row.booking_invitee_time || '';
     let sessionTiming = `${fmt(startAt)} – ${fmt(endAt)}`;
@@ -8491,7 +8498,38 @@ app.post('/api/session-documentation', async (req, res) => {
           consultation_outcome, close_reason
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
         ON CONFLICT (booking_id) WHERE booking_id IS NOT NULL DO UPDATE SET
-          consultation_outcome = EXCLUDED.consultation_outcome
+          age = EXCLUDED.age,
+          language = EXCLUDED.language,
+          language_other = EXCLUDED.language_other,
+          location = EXCLUDED.location,
+          location_manual = EXCLUDED.location_manual,
+          mode_of_session = EXCLUDED.mode_of_session,
+          previous_therapy = EXCLUDED.previous_therapy,
+          concerns = EXCLUDED.concerns,
+          concerns_other = EXCLUDED.concerns_other,
+          clinical_concerns_observed = EXCLUDED.clinical_concerns_observed,
+          clinical_concerns = EXCLUDED.clinical_concerns,
+          psychiatric_treatment = EXCLUDED.psychiatric_treatment,
+          suicidal_thoughts = EXCLUDED.suicidal_thoughts,
+          suicidal_current = EXCLUDED.suicidal_current,
+          suicidal_ideation_1m = EXCLUDED.suicidal_ideation_1m,
+          suicidal_attempt_1m = EXCLUDED.suicidal_attempt_1m,
+          preferred_therapy_approach = EXCLUDED.preferred_therapy_approach,
+          preferred_therapy_text = EXCLUDED.preferred_therapy_text,
+          consent_explained = EXCLUDED.consent_explained,
+          consent_no_reason = EXCLUDED.consent_no_reason,
+          scope_explained = EXCLUDED.scope_explained,
+          preferred_price = EXCLUDED.preferred_price,
+          preferred_price_other = EXCLUDED.preferred_price_other,
+          readiness = EXCLUDED.readiness,
+          readiness_other = EXCLUDED.readiness_other,
+          consented_followup = EXCLUDED.consented_followup,
+          followup_mode = EXCLUDED.followup_mode,
+          client_questions = EXCLUDED.client_questions,
+          source = EXCLUDED.source,
+          source_other = EXCLUDED.source_other,
+          consultation_outcome = EXCLUDED.consultation_outcome,
+          close_reason = EXCLUDED.close_reason
       `, vals);
       console.log('✅ Consultation form data stored');
       primaryStored = true;
@@ -8515,10 +8553,34 @@ app.post('/api/session-documentation', async (req, res) => {
           medical_history, medications, previous_mental_health, insight_level
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
         ON CONFLICT (booking_id) WHERE booking_id IS NOT NULL DO UPDATE SET
+          client_id = EXCLUDED.client_id,
+          client_name = EXCLUDED.client_name,
           age = EXCLUDED.age,
           gender_identity = EXCLUDED.gender_identity,
           education = EXCLUDED.education,
-          occupation = EXCLUDED.occupation
+          occupation = EXCLUDED.occupation,
+          marital_status = EXCLUDED.marital_status,
+          children = EXCLUDED.children,
+          religion = EXCLUDED.religion,
+          socio_economic_status = EXCLUDED.socio_economic_status,
+          city_state = EXCLUDED.city_state,
+          presenting_concerns = EXCLUDED.presenting_concerns,
+          duration_onset = EXCLUDED.duration_onset,
+          triggers_factors = EXCLUDED.triggers_factors,
+          sleep = EXCLUDED.sleep,
+          appetite = EXCLUDED.appetite,
+          energy_levels = EXCLUDED.energy_levels,
+          weight_changes = EXCLUDED.weight_changes,
+          libido = EXCLUDED.libido,
+          menstrual_history = EXCLUDED.menstrual_history,
+          family_history = EXCLUDED.family_history,
+          genogram_url = EXCLUDED.genogram_url,
+          developmental_history = EXCLUDED.developmental_history,
+          medical_history = EXCLUDED.medical_history,
+          medications = EXCLUDED.medications,
+          previous_mental_health = EXCLUDED.previous_mental_health,
+          insight_level = EXCLUDED.insight_level,
+          updated_at = NOW()
       `, [
         effectiveClientId, client_name, booking_id,
         case_history.age, case_history.gender_identity, case_history.education,
@@ -8644,6 +8706,28 @@ app.post('/api/session-documentation', async (req, res) => {
     } catch (e: any) {
       console.error('❌ [session-documentation] doc_form status update failed:', e?.message || e);
       sectionErrors.push({ section: 'doc_form_status', error: e?.message || String(e) });
+    }
+
+    // Reflect a No Show / Cancelled marked in the notes form onto the booking itself (secondary).
+    // The appointment list derives its displayed status from bookings.booking_status (terminal
+    // states) + has_session_notes; without this, a No Show still rendered as "Completed" the moment
+    // a (possibly empty) note row was inserted. Guard: never touch unpaid/payment-flow or already
+    // terminal bookings, so payment and cancellation flows are left entirely untouched.
+    if (docFormStatus === 'no_show' || docFormStatus === 'cancelled') {
+      try {
+        await pool.query(`
+          UPDATE bookings
+          SET booking_status = $1
+          WHERE booking_id = $2
+            AND booking_status NOT IN (
+              'payment_pending', 'waiting_for_payment', 'payment_failed', 'pending',
+              'cancelled', 'canceled'
+            )
+        `, [docFormStatus, booking_id]);
+      } catch (e: any) {
+        console.error('❌ [session-documentation] booking_status update failed:', e?.message || e);
+        sectionErrors.push({ section: 'booking_status', error: e?.message || String(e) });
+      }
     }
 
     // Decide overall result:

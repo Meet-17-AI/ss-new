@@ -139,6 +139,8 @@ export function SessionNotesForm({ sessionInfo, onClose, onSubmit }: SessionNote
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [hasSignature, setHasSignature] = useState(false);
+  const [showDeclarationError, setShowDeclarationError] = useState(false);
 
   // Step 1 - Session Type & Status
   const [sessionType, setSessionType] = useState('');
@@ -215,6 +217,7 @@ export function SessionNotesForm({ sessionInfo, onClose, onSubmit }: SessionNote
   // Canvas signature helpers
   const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {
     setIsDrawing(true);
+    setHasSignature(true);
     const ctx = canvasRef.current?.getContext('2d');
     if (ctx) { ctx.beginPath(); ctx.moveTo(e.nativeEvent.offsetX, e.nativeEvent.offsetY); }
   };
@@ -240,6 +243,7 @@ export function SessionNotesForm({ sessionInfo, onClose, onSubmit }: SessionNote
     const pos = getTouchPos(canvas, e.touches[0]);
     if (ctx) { ctx.beginPath(); ctx.moveTo(pos.x, pos.y); }
     setIsDrawing(true);
+    setHasSignature(true);
   };
   const drawTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
     e.preventDefault();
@@ -253,6 +257,7 @@ export function SessionNotesForm({ sessionInfo, onClose, onSubmit }: SessionNote
   const clearSignature = () => {
     const canvas = canvasRef.current;
     if (canvas) { const ctx = canvas.getContext('2d'); ctx?.clearRect(0, 0, canvas.width, canvas.height); }
+    setHasSignature(false);
   };
 
   const getStepLabel = () => {
@@ -275,6 +280,11 @@ export function SessionNotesForm({ sessionInfo, onClose, onSubmit }: SessionNote
   const handleBack = () => setStep(s => Math.max(s - 1, 0));
 
   const handleSubmit = () => {
+    // Enforce the fields marked required on the declaration step (signature + self-declaration).
+    if (!hasSignature || !selfDeclaration) {
+      setShowDeclarationError(true);
+      return;
+    }
     const signature = canvasRef.current?.toDataURL() || '';
     onSubmit({
       session_type: sessionType,
@@ -651,10 +661,19 @@ export function SessionNotesForm({ sessionInfo, onClose, onSubmit }: SessionNote
               <div className={`w-4 h-4 rounded border flex items-center justify-center ${selfDeclaration ? 'bg-[#21615D] border-[#21615D]' : 'border-gray-300'}`}>
                 {selfDeclaration && <Check size={10} color="white" strokeWidth={3} />}
               </div>
-              <input type="checkbox" className="hidden" checked={selfDeclaration} onChange={e => setSelfDeclaration(e.target.checked)} />
+              <input type="checkbox" className="hidden" checked={selfDeclaration} onChange={e => { setSelfDeclaration(e.target.checked); if (e.target.checked) setShowDeclarationError(false); }} />
             </label>
           </div>
         </div>
+        {showDeclarationError && (!hasSignature || !selfDeclaration) && (
+          <p className="text-red-500 text-xs mt-1">
+            {!hasSignature && !selfDeclaration
+              ? 'Please sign and confirm the self-declaration before submitting.'
+              : !hasSignature
+                ? 'Please add your signature before submitting.'
+                : 'Please confirm the self-declaration before submitting.'}
+          </p>
+        )}
       </div>
       <p className="text-xs text-gray-400 italic text-center">Confidential clinical document. To be stored securely as per ethical and legal guidelines (India).</p>
     </div>
@@ -698,6 +717,7 @@ export function SessionNotesForm({ sessionInfo, onClose, onSubmit }: SessionNote
             <div className="w-full flex flex-col items-center gap-4">
               <button
                 onClick={handleSubmit}
+                disabled={!hasSignature || !selfDeclaration}
                 className="w-full py-4 rounded-full text-white font-semibold text-lg shadow-lg transition-all active:scale-95 disabled:opacity-50 disabled:active:scale-100"
                 style={{ backgroundColor: TEAL }}>
                 Submit
