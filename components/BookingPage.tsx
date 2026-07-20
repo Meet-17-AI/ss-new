@@ -202,12 +202,21 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
             };
 
             const currentTherapist = session.owner;
+            const currentTherapistId = session.therapist_id;
 
             if (data.assignedTherapistName) {
               const assignedTherapist = data.assignedTherapistName;
               const assignedTherapy = data.assignedTherapy;
+              const assignedTherapistId = data.assignedTherapistId;
 
-              const therapistMismatch = currentTherapist.toLowerCase().trim() !== assignedTherapist.toLowerCase().trim();
+              // Prefer a stable therapist_id comparison. Display names are stored
+              // inconsistently for the same therapist (e.g. "Muskan" vs "Muskan Negi"),
+              // which previously produced false "different therapist" blocks for a
+              // client trying to re-book their own assigned therapist. Only fall back
+              // to name matching when an id is missing (legacy / hardcoded services).
+              const therapistMismatch = (currentTherapistId && assignedTherapistId)
+                ? String(currentTherapistId).trim() !== String(assignedTherapistId).trim()
+                : currentTherapist.toLowerCase().trim() !== assignedTherapist.toLowerCase().trim();
               const therapyMismatch = assignedTherapy && getCategory(session.title) !== getCategory(assignedTherapy);
 
               if (therapistMismatch || therapyMismatch) {
