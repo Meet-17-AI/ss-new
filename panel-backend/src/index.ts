@@ -256,12 +256,8 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
       if (existingCheck.rows.length > 0) {
         console.error(`❌ Google Calendar ${userEmail} is already linked to therapist ${existingCheck.rows[0].name}`);
-        let baseUrl = process.env.FRONTEND_URL || 'https://panel.safestories.in';
-        if (baseUrl.includes('safestories-dashboard') || baseUrl.includes('safestories-panel.vercel.app')) {
-          baseUrl = 'https://panel.safestories.in';
-        }
-        if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
-        
+        const baseUrl = frontendBaseUrl();
+
         if (adminRedirect) {
           return res.redirect(`${baseUrl}/admin?googleAuth=error&reason=already_linked`);
         } else {
@@ -295,11 +291,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
     console.log(`✓ Connected Google Calendar successfully for therapist: ${therapistId} (${userEmail})`);
 
-    let baseUrl = process.env.FRONTEND_URL || 'https://panel.safestories.in';
-    if (baseUrl.includes('safestories-dashboard') || baseUrl.includes('safestories-panel.vercel.app')) {
-      baseUrl = 'https://panel.safestories.in';
-    }
-    if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+    const baseUrl = frontendBaseUrl();
 
     // Route back to whoever initiated: admin flows send adminRedirect=true
     // explicitly. Therapists (adminRedirect=false) must always return to the
@@ -3698,7 +3690,7 @@ app.post('/api/reschedule-booking', async (req, res) => {
     if (notify !== false) {
       try {
         const { sendBookingRescheduledClient, sendBookingRescheduledTherapist } = await import('./automations/index.js');
-        const baseUrl = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://panel.safestories.in';
+        const baseUrl = frontendBaseUrl();
         const shortLink = bookingDetails.public_booking_checkin_url || `${baseUrl}/booking-confirmation/${booking_id}`;
 
         try {
@@ -3963,6 +3955,16 @@ app.post('/api/webhook/feedback', async (req, res) => {
 // 'payment_pending' by the public booking page. Both are cleared by the Razorpay
 // webhook (-> confirmed) or by the expiry cron (-> cancelled).
 const UNPAID_HOLD_STATUSES = new Set(['waiting_for_payment', 'payment_pending', 'pending']);
+
+// Always resolve the public site base URL to panel.safestories.in. FRONTEND_URL may be
+// unset, or (in stale deploy configs) still point at a dead vercel host — never emit those.
+function frontendBaseUrl(): string {
+  let base = process.env.FRONTEND_URL || 'https://panel.safestories.in';
+  if (base.includes('vercel.app') || base.includes('safestories-dashboard')) {
+    base = 'https://panel.safestories.in';
+  }
+  return base.replace(/\/$/, '');
+}
 
 // Derive the true session START instant (ms since epoch) from booking_invitee_time.
 // booking_start_at/booking_end_at are stored inconsistently (some UTC, some IST
@@ -5538,7 +5540,7 @@ app.get('/api/session-notes-info', async (req, res) => {
     // Auto-populate custom_form_link in DB for consultations if empty
     if (isConsultation) {
       const host = req.headers.host || '';
-      const baseUrl = host.includes('localhost') ? 'http://localhost:3004' : (process.env.FRONTEND_URL ? process.env.FRONTEND_URL.replace(/\/$/, '') : 'https://panel.safestories.in');
+      const baseUrl = host.includes('localhost') ? 'http://localhost:3004' : frontendBaseUrl();
       const publicLink = `${baseUrl}/session-notes/${row.booking_id}`;
       
       // Upsert into client_doc_form
@@ -6802,6 +6804,26 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
     // Start transaction for all database updates
     await client.query('BEGIN');
 
+    // Atomic claim: exactly one confirmation path may proceed. This conditional UPDATE
+    // row-locks the booking; any concurrent caller (the Razorpay webhook and the browser
+    // verify-payment racing, a webhook retry, or the pending-payment cron) will match 0 rows
+    // once the winner commits, and returns here without creating a duplicate Google Calendar
+    // event. Replaces the old check-then-act on a stale, unlocked booking object.
+    const claim = await client.query(
+      `UPDATE bookings SET booking_status = 'confirmed'
+       WHERE booking_id = $1
+         AND booking_status IN ('payment_pending', 'waiting_for_payment')
+       RETURNING google_event_id`,
+      [bookingId]
+    );
+    if (claim.rowCount === 0) {
+      await client.query('ROLLBACK');
+      console.log(`[processConfirmedBooking] Booking ${bookingId} already confirmed by another path — skipping to avoid a duplicate event.`);
+      return; // finally{} releases the client; nothing below this runs for the loser
+    }
+    // Freshly locked event id — use this instead of the stale passed-in booking object.
+    const claimedEventId = claim.rows[0].google_event_id;
+
     // 3. Resolve therapist (for Google Calendar)
     const therapistName = payload.therapistName || booking.booking_host_name || 'Unknown Therapist';
     let therapistId = payload.therapistId || booking.therapist_id || null;
@@ -6856,7 +6878,7 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
   let hasCalendar = false;
   let meetLink = '';
   let google_event_id = null;
-  if (therapist && therapist.google_refresh_token && !booking.google_event_id) {
+  if (therapist && therapist.google_refresh_token && !claimedEventId) {
     try {
       const oauth2Client = await getAuthenticatedClient(therapist);
       const { google } = require('googleapis');
@@ -6913,7 +6935,7 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
          invitee_payment_amount = $7,
          booking_updated_at = NOW()
      WHERE booking_id = $8`,
-    [razorpayPaymentId, razorpayOrderId, joinLink, google_event_id || booking.google_event_id,
+    [razorpayPaymentId, razorpayOrderId, joinLink, google_event_id || claimedEventId,
      inviteeTime, hostTime, capturedAmount, bookingId]
   );
 
@@ -8767,11 +8789,16 @@ app.get('/api/case-history', async (req, res) => {
       result = await pool.query('SELECT * FROM client_case_history WHERE booking_id = $1', [booking_id]);
     } else {
       result = await pool.query(
-        `SELECT * FROM client_case_history 
+        `SELECT * FROM client_case_history
          WHERE client_id = $1
             OR booking_id IN (
-              SELECT booking_id FROM bookings 
-              WHERE invitee_email = $1 OR invitee_phone = $1
+              SELECT b.booking_id FROM bookings b
+              WHERE b.invitee_email = $1
+                 OR regexp_replace(b.invitee_phone, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+                 OR (b.invitee_email IS NOT NULL AND b.invitee_email IN (
+                       SELECT invitee_email FROM bookings
+                       WHERE regexp_replace(invitee_phone, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+                         AND invitee_email IS NOT NULL))
             )
          ORDER BY created_at DESC LIMIT 1`,
         [client_id]
@@ -8822,14 +8849,23 @@ app.get('/api/progress-notes', async (req, res) => {
       return res.status(400).json({ error: 'client_id is required' });
     }
 
-    // Fetch from client_progress_notes (new system)
+    // Fetch from client_progress_notes (new system).
+    // Match by stored client_id, OR by any booking that belongs to this client — resolved with
+    // NORMALIZED phone matching (so "+91 99..." and "+9199..." are the same) plus email linkage
+    // (so a client who booked under two different numbers but one email is still matched). The
+    // old exact `invitee_phone = $1` hid notes whenever the profile phone format differed.
     const progressNotesResult = await pool.query(
       `SELECT *, 'progress_note' as note_type
-       FROM client_progress_notes 
-       WHERE client_id::text = $1 
+       FROM client_progress_notes
+       WHERE client_id::text = $1
           OR booking_id IN (
-            SELECT booking_id FROM bookings 
-            WHERE invitee_email = $1 OR invitee_phone = $1
+            SELECT b.booking_id FROM bookings b
+            WHERE b.invitee_email = $1
+               OR regexp_replace(b.invitee_phone, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+               OR (b.invitee_email IS NOT NULL AND b.invitee_email IN (
+                     SELECT invitee_email FROM bookings
+                     WHERE regexp_replace(invitee_phone, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+                       AND invitee_email IS NOT NULL))
           )
        ORDER BY session_date DESC`,
       [client_id]
@@ -8849,7 +8885,12 @@ app.get('/api/progress-notes', async (req, res) => {
               'session_note' as note_type, csn.booking_id
        FROM client_session_notes csn
        INNER JOIN bookings b ON csn.booking_id::text = b.booking_id::text
-       WHERE b.invitee_phone = $1 OR b.invitee_email = $1
+       WHERE regexp_replace(b.invitee_phone, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+          OR b.invitee_email = $1
+          OR (b.invitee_email IS NOT NULL AND b.invitee_email IN (
+                SELECT invitee_email FROM bookings
+                WHERE regexp_replace(invitee_phone, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+                  AND invitee_email IS NOT NULL))
        ORDER BY csn.created_at DESC`,
       [client_id]
     );
@@ -9688,9 +9729,7 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
     } catch (rzpErr) {
       console.error('Error creating Razorpay Payment Link:', rzpErr);
       // Fallback to internal link if API fails
-      let baseUrl = process.env.FRONTEND_URL || 'https://panel.safestories.in';
-      if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
-      paymentLink = `${baseUrl}/pay/${bookingId}`;
+      paymentLink = `${frontendBaseUrl()}/pay/${bookingId}`;
     }
 
     const formattedDate = new Intl.DateTimeFormat('en-IN', {
