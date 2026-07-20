@@ -484,6 +484,16 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     }
   }, [clientDateRange]);
 
+  // When a DIFFERENT client is opened, clear any month/date filter left over from the previously
+  // viewed client — otherwise a stale filter hides the new client's older bookings (making it look
+  // like only the latest booking exists). Keyed on client_phone so the same-client emergency-info
+  // refresh above doesn't reset it. The guarded updater avoids a spurious extra fetch when the
+  // range is already empty.
+  useEffect(() => {
+    setClientDateRange(prev => (prev.start || prev.end) ? { start: '', end: '' } : prev);
+    setClientSelectedMonth('All Time');
+  }, [selectedClient?.client_phone]);
+
   // Socket.io Real-time Updates
   useEffect(() => {
     if (!socket) return;
