@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, UserCog, Calendar, CreditCard, LogOut, PieChart, MessageCircle, ChevronUp, ChevronDown, FileText, Bell, Copy, Send, Plus, User, Eye, AlertCircle, X, RefreshCw, Settings, FileWarning } from 'lucide-react';
+import { LayoutDashboard, Users, UserCog, Calendar, CreditCard, LogOut, PieChart, MessageCircle, ChevronUp, ChevronDown, FileText, Bell, Copy, Send, Plus, User, Eye, AlertCircle, X, RefreshCw, Settings, FileWarning, LifeBuoy } from 'lucide-react';
 import { Logo } from './Logo';
 import { AllClients } from './AllClients';
 import { AllTherapists } from './AllTherapists';
@@ -12,6 +12,7 @@ import { CreatePage } from './CreatePage';
 import { NewTherapist } from './NewTherapist';
 import { AuditLogs } from './AuditLogs';
 import { Notifications } from './Notifications';
+import { TicketsPage } from './TicketsPage';
 import { Loader } from './Loader';
 import { Toast } from './Toast';
 import { ChangePassword } from './ChangePassword';
@@ -500,6 +501,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             <Bell size={20} className={activeView === 'notifications' ? 'text-black' : 'text-gray-700'} />
             <span className={activeView === 'notifications' ? 'text-black' : 'text-gray-700'}>Notifications</span>
           </div>
+          <div
+            className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
+            style={{ backgroundColor: activeView === 'tickets' ? '#F4A9365C' : 'transparent' }}
+            onClick={() => {
+              resetAllStates();
+              navigate('/admin/tickets');
+            }}
+          >
+            <LifeBuoy size={20} className={activeView === 'tickets' ? 'text-black' : 'text-gray-700'} />
+            <span className={activeView === 'tickets' ? 'text-black' : 'text-gray-700'}>Tickets</span>
+          </div>
 
         </nav>
 
@@ -616,6 +628,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           <Route path="therapy-calendars/new" element={<TherapyCalendarDetails />} />
           <Route path="therapy-calendars/:id" element={<TherapyCalendarDetails />} />
           <Route path="notifications" element={<Notifications userRole="admin" userId={user?.id} />} />
+          <Route path="tickets" element={<TicketsPage />} />
           
           <Route path="dashboard" element={
             loading ? <Loader /> : (

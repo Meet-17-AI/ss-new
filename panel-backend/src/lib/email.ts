@@ -783,3 +783,47 @@ export async function sendPaymentLinkEmail(
   }
 }
 
+/**
+ * Notify the internal team that a support ticket / issue has been raised.
+ */
+export async function sendIssueReportEmail(
+  recipients: string[],
+  ticket: {
+    id: number; subject: string; component: string; description: string;
+    reported_by: string; user_role: string; screenshot_url?: string | null; created_at?: any;
+  }
+): Promise<void> {
+  const created = ticket.created_at ? new Date(ticket.created_at).toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }) : new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+  const esc = (s: string) => String(s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const shot = ticket.screenshot_url
+    ? `<tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Screenshot</td><td style="padding:6px 12px;"><a href="${ticket.screenshot_url}">View screenshot</a></td></tr>`
+    : '';
+  const html = `
+  <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:560px;margin:0 auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+    <div style="background:#1e6d63;color:#fff;padding:16px 20px;">
+      <div style="font-size:18px;font-weight:700;">🐛 New Support Ticket #${ticket.id}</div>
+      <div style="font-size:13px;opacity:.9;">A new issue has been raised in the SafeStories panel</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;color:#334155;">
+      <tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;width:120px;">Ticket ID</td><td style="padding:6px 12px;">#${ticket.id}</td></tr>
+      <tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Subject</td><td style="padding:6px 12px;">${esc(ticket.subject)}</td></tr>
+      <tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Component</td><td style="padding:6px 12px;">${esc(ticket.component)}</td></tr>
+      <tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Reported by</td><td style="padding:6px 12px;">${esc(ticket.reported_by)} (${esc(ticket.user_role)})</td></tr>
+      <tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Raised at</td><td style="padding:6px 12px;">${created} IST</td></tr>
+      ${shot}
+    </table>
+    <div style="padding:12px 20px;border-top:1px solid #e2e8f0;">
+      <div style="font-weight:bold;color:#1e6d63;margin-bottom:6px;">Description</div>
+      <div style="white-space:pre-wrap;color:#334155;font-size:14px;">${esc(ticket.description)}</div>
+    </div>
+    <div style="padding:12px 20px;background:#f8fafc;font-size:12px;color:#64748b;">Manage this ticket in the panel → Tickets page.</div>
+  </div>`;
+  const mailOptions = {
+    from: 'SafeStories <therapy@safestories.in>',
+    to: recipients.join(', '),
+    subject: `🐛 New Ticket #${ticket.id}: ${ticket.subject} [${ticket.component}]`,
+    html,
+  };
+  await sendEmailWithLogging(mailOptions, `Issue Report #${ticket.id}`);
+}
+

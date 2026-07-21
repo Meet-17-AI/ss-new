@@ -13,7 +13,7 @@ import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from './lib/timezone';
 import { uploadFile } from './lib/minio';
-import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendClientBookingCancellationEmail, sendPaymentLinkEmail } from './lib/email';
+import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendClientBookingCancellationEmail, sendPaymentLinkEmail, sendIssueReportEmail } from './lib/email';
 import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage, sendSessionFeedbackRequest, sendPostSessionTherapistForm } from './automations/index';
 import { generateAdminOTP, verifyAdminOTP } from './otp';
 import { logWebhookApi } from './lib/webhookApiLogger.js';
@@ -1176,16 +1176,84 @@ app.post('/api/report-issue', async (req, res) => {
     }
 
     const result = await pool.query(
-      `INSERT INTO report_issues (subject, component, description, screenshot_url, reported_by, user_role, status, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'open', CURRENT_TIMESTAMP)
-       RETURNING id`,
+      `INSERT INTO report_issues (subject, component, description, screenshot_url, reported_by, user_role, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'open', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       RETURNING id, created_at`,
       [subject, component, description, screenshot_url, reported_by, user_role]
     );
+    const issueId = result.rows[0].id;
 
-    res.json({ success: true, issueId: result.rows[0].id });
+    // Notify the internal team by email (best-effort — never fails the submission).
+    const ticketRecipients = (process.env.TICKET_NOTIFY_EMAILS || 'meetpandya@fluid.live,rohnit@fluid.live')
+      .split(',').map(e => e.trim()).filter(Boolean);
+    try {
+      await sendIssueReportEmail(ticketRecipients, {
+        id: issueId, subject, component, description, reported_by, user_role,
+        screenshot_url, created_at: result.rows[0].created_at,
+      });
+    } catch (mailErr: any) {
+      console.error(`[report-issue] Ticket #${issueId} saved but email notification failed:`, mailErr?.message || mailErr);
+    }
+
+    res.json({ success: true, issueId });
   } catch (error) {
     console.error('Error reporting issue:', error);
     res.status(500).json({ error: 'Failed to report issue' });
+  }
+});
+
+// List all tickets (admin ticket inbox). Optional ?status= filter.
+app.get('/api/report-issues', async (req, res) => {
+  try {
+    const { status } = req.query;
+    const params: any[] = [];
+    let where = '';
+    if (status && status !== 'all') { params.push(status); where = 'WHERE status = $1'; }
+    const result = await pool.query(
+      `SELECT id, subject, component, description, screenshot_url, reported_by, user_role,
+              status, notes, created_at, updated_at, resolved_at
+       FROM report_issues ${where} ORDER BY created_at DESC`,
+      params
+    );
+    // Status counts for the tab badges
+    const counts = await pool.query(`SELECT status, COUNT(*)::int n FROM report_issues GROUP BY status`);
+    const countMap: Record<string, number> = {};
+    counts.rows.forEach((r: any) => { countMap[r.status] = r.n; });
+    res.json({ tickets: result.rows, counts: countMap });
+  } catch (error) {
+    console.error('Error listing report issues:', error);
+    res.status(500).json({ error: 'Failed to list tickets' });
+  }
+});
+
+// Update a ticket's status and/or notes.
+app.patch('/api/report-issues/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+    const allowed = ['open', 'in_progress', 'resolved', 'closed'];
+    if (status !== undefined && !allowed.includes(status)) {
+      return res.status(400).json({ error: `Invalid status. Allowed: ${allowed.join(', ')}` });
+    }
+    const sets: string[] = ['updated_at = CURRENT_TIMESTAMP'];
+    const vals: any[] = [];
+    let i = 1;
+    if (status !== undefined) {
+      sets.push(`status = $${i++}`); vals.push(status);
+      // Stamp resolved_at when moving to a terminal state; clear it if reopened.
+      sets.push(`resolved_at = ${(status === 'resolved' || status === 'closed') ? 'CURRENT_TIMESTAMP' : 'NULL'}`);
+    }
+    if (notes !== undefined) { sets.push(`notes = $${i++}`); vals.push(notes); }
+    vals.push(id);
+    const result = await pool.query(
+      `UPDATE report_issues SET ${sets.join(', ')} WHERE id = $${i} RETURNING *`,
+      vals
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Ticket not found' });
+    res.json({ success: true, ticket: result.rows[0] });
+  } catch (error) {
+    console.error('Error updating ticket:', error);
+    res.status(500).json({ error: 'Failed to update ticket' });
   }
 });
 
@@ -10252,6 +10320,24 @@ async function runStartupMigrations() {
     await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_id TEXT`);
     await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_status TEXT`);
     await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS razorpay_order_id TEXT`);
+
+    // Ticketing: ensure the report_issues table + tracking columns exist.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS report_issues (
+        id SERIAL PRIMARY KEY,
+        subject TEXT NOT NULL,
+        component TEXT NOT NULL,
+        description TEXT NOT NULL,
+        screenshot_url TEXT,
+        reported_by TEXT NOT NULL,
+        user_role TEXT NOT NULL,
+        status TEXT DEFAULT 'open',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        resolved_at TIMESTAMP,
+        notes TEXT
+      )`);
+    await pool.query(`ALTER TABLE report_issues ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_report_issues_status ON report_issues(status)`);
 
     // Make masked_email unique per client. The old generated expression used
     // lpad(id,5,'0'), which TRUNCATES ids longer than 5 digits — collapsing every
