@@ -1,4 +1,4 @@
-Deployment triggered: 2026-06-13 Calendar Edit Feature Production Deploy
-Timestamp: $(date)
-Features: Calendar event editing for admin users
+Deployment triggered: 2026-07-21 Redeploy duplicate-calendar-event fix (atomic claim in processConfirmedBooking)
+Timestamp: 2026-07-21
+Features: Ensure commit a6c1a21 (prevent duplicate Google Calendar events on paid public bookings) is running in production
 Status: Ready for production
