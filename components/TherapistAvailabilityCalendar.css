@@ -392,6 +392,37 @@
   color: #9ca3af;      /* gray-400 */
 }
 
+/* Day is Available in the schedule but every window is taken on Google Calendar. */
+.avail-day-cell.fully-booked {
+  background: #fef2f2;     /* red-50 */
+  border-color: #fecaca;   /* red-200 */
+}
+
+.avail-day-cell.fully-booked .day-number {
+  color: #b91c1c;          /* red-700 */
+}
+
+.day-status-badge.booked-full {
+  background: #fee2e2;      /* red-100 */
+  color: #b91c1c;          /* red-700 */
+}
+
+.legend-dot.fully-booked {
+  background: #ef4444;      /* red-500 */
+}
+
+/* Modal note: shown when an Available day is fully booked on Google Calendar. */
+.avail-modal-note {
+  margin: 12px 20px 0;
+  padding: 10px 12px;
+  background: #fef2f2;      /* red-50 */
+  border: 1px solid #fecaca;/* red-200 */
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #991b1b;          /* red-800 */
+}
+
 /* ══════════════════════════════════════════════════════
    Availability Modal (slide-over panel)
    ══════════════════════════════════════════════════════ */
