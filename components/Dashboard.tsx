@@ -1035,7 +1035,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                         })
                       });
                       if (res.ok) {
-                        setToast({ message: 'Booking rescheduled successfully!', type: 'success' });
+                        const data = await res.json().catch(() => ({}));
+                        if (data?.calendar_warning) {
+                          setToast({ message: `Rescheduled, but note: ${data.calendar_warning}`, type: 'error' });
+                        } else {
+                          setToast({ message: 'Booking rescheduled successfully!', type: 'success' });
+                        }
                         setShowRescheduleModal(false);
                         setRescheduleTarget(null);
                         setSelectedBookingIndex(null);

@@ -347,6 +347,28 @@ async function getAuthenticatedClient(therapist: any) {
   return oauth2Client;
 }
 
+// Resolve the therapist that owns the Google Calendar an event lives on, and
+// return an authenticated calendar client for it — using the SAME token source
+// as event creation (therapists.google_refresh_token via getAuthenticatedClient).
+// A booking's event was created on the therapist's calendar, so reschedule and
+// cancel must patch/delete against that same calendar. Returns null when the
+// therapist can't be resolved or has no connected Google Calendar.
+async function getCalendarClientForBooking(bookingDetails: any): Promise<{ calendar: any; therapist: any } | null> {
+  let therapist: any = null;
+  if (bookingDetails.therapist_id) {
+    const tr = await pool.query('SELECT * FROM therapists WHERE therapist_id = $1 LIMIT 1', [bookingDetails.therapist_id]);
+    therapist = tr.rows[0] || null;
+  }
+  if (!therapist && bookingDetails.booking_host_name) {
+    const tr = await pool.query('SELECT * FROM therapists WHERE name ILIKE $1 LIMIT 1', [`%${String(bookingDetails.booking_host_name).split(' ')[0]}%`]);
+    therapist = tr.rows[0] || null;
+  }
+  if (!therapist || !therapist.google_refresh_token) return null;
+  const oauth2Client = await getAuthenticatedClient(therapist);
+  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+  return { calendar, therapist };
+}
+
 app.post('/api/auth/google/disconnect', async (req, res) => {
   try {
     const { therapistId } = req.body;
@@ -3413,34 +3435,33 @@ app.post('/api/cancel-booking', async (req, res) => {
       [reason || 'No reason provided', booking_id]
     );
 
-    // 3. Delete from Google Calendar if event exists
+    // 3. Delete from Google Calendar if event exists. Use the same auth path as
+    // event creation (therapists.google_refresh_token). The old code read
+    // users.google_calendar_tokens — a column that does not exist — so the delete
+    // silently failed on every cancel and the event was orphaned on the calendar.
     const googleEventId = bookingDetails.google_event_id;
-    const cancelHostId = bookingDetails.booking_host_calendar_id || bookingDetails.therapist_id;
-    
-    if (googleEventId && cancelHostId) {
+
+    if (googleEventId) {
       try {
-        const tokenRes = await pool.query('SELECT google_calendar_tokens FROM users WHERE therapist_id = $1 OR CAST(id AS TEXT) = $1', [cancelHostId]);
-        if (tokenRes.rows.length > 0 && tokenRes.rows[0].google_calendar_tokens) {
-          const tokens = typeof tokenRes.rows[0].google_calendar_tokens === 'string' 
-            ? JSON.parse(tokenRes.rows[0].google_calendar_tokens) 
-            : tokenRes.rows[0].google_calendar_tokens;
-            
-          const oauth2Client = new google.auth.OAuth2(
-            process.env.GOOGLE_CLIENT_ID,
-            process.env.GOOGLE_CLIENT_SECRET,
-            process.env.GOOGLE_REDIRECT_URI
-          );
-          oauth2Client.setCredentials(tokens);
-          const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-          
-          await calendar.events.delete({
+        const gc = await getCalendarClientForBooking(bookingDetails);
+        if (!gc) {
+          console.warn(`[Cancel Booking] No connected Google Calendar for booking ${booking_id} — event ${googleEventId} not deleted.`);
+        } else {
+          await gc.calendar.events.delete({
             calendarId: 'primary',
-            eventId: googleEventId
+            eventId: googleEventId,
+            sendUpdates: 'none'
           });
           console.log(`[Cancel Booking] Successfully deleted Google Calendar event ${googleEventId}`);
         }
-      } catch (calErr) {
-        console.error('[Cancel Booking] Failed to delete Google Calendar event:', calErr);
+      } catch (calErr: any) {
+        // Google returns 410 (Gone) / 404 if the event is already deleted — treat as success.
+        const code = calErr?.code || calErr?.response?.status;
+        if (code === 404 || code === 410) {
+          console.log(`[Cancel Booking] Google Calendar event ${googleEventId} already gone (${code}).`);
+        } else {
+          console.error('[Cancel Booking] Failed to delete Google Calendar event:', calErr?.message || calErr);
+        }
       }
     }
 
@@ -3718,39 +3739,37 @@ app.post('/api/reschedule-booking', async (req, res) => {
       [startAtDate.toISOString(), endAtDate.toISOString(), duration || 50, bookingInviteeTime, bookingDetails.booking_start_at, booking_id]
     );
 
-    // 2.5 Update Google Calendar event if it exists
+    // 2.5 Move the Google Calendar event to the new time. Use the same auth path
+    // as event creation (therapists.google_refresh_token). The old code read
+    // users.google_calendar_tokens — a column that does not exist — so the patch
+    // silently failed on every reschedule and the calendar kept the old time.
+    // patch() keeps the same event id and Meet link; only start/end change.
     const googleEventId = bookingDetails.google_event_id;
-    const googleCalendarHostId = bookingDetails.booking_host_calendar_id || bookingDetails.therapist_id;
-    
-    if (googleEventId && googleCalendarHostId) {
+    let calendarUpdated = false;
+    let calendarWarning: string | null = null;
+
+    if (googleEventId) {
       try {
-        const tokenRes = await pool.query('SELECT google_calendar_tokens FROM users WHERE therapist_id = $1 OR CAST(id AS TEXT) = $1', [googleCalendarHostId]);
-        if (tokenRes.rows.length > 0 && tokenRes.rows[0].google_calendar_tokens) {
-          const tokens = typeof tokenRes.rows[0].google_calendar_tokens === 'string' 
-            ? JSON.parse(tokenRes.rows[0].google_calendar_tokens) 
-            : tokenRes.rows[0].google_calendar_tokens;
-            
-          const { google } = require('googleapis');
-          const oauth2Client = new google.auth.OAuth2(
-            process.env.GOOGLE_CLIENT_ID,
-            process.env.GOOGLE_CLIENT_SECRET,
-            process.env.GOOGLE_REDIRECT_URI
-          );
-          oauth2Client.setCredentials(tokens);
-          const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-          
-          await calendar.events.patch({
+        const gc = await getCalendarClientForBooking(bookingDetails);
+        if (!gc) {
+          calendarWarning = 'This therapist has no connected Google Calendar, so the calendar event was not moved.';
+          console.warn(`[Reschedule Booking] No connected Google Calendar for booking ${booking_id} — event ${googleEventId} not moved.`);
+        } else {
+          await gc.calendar.events.patch({
             calendarId: 'primary',
             eventId: googleEventId,
+            sendUpdates: 'none',
             requestBody: {
               start: { dateTime: startAtDate.toISOString(), timeZone: 'Asia/Kolkata' },
               end: { dateTime: endAtDate.toISOString(), timeZone: 'Asia/Kolkata' }
             }
           });
+          calendarUpdated = true;
           console.log(`[Reschedule Booking] Successfully updated Google Calendar event ${googleEventId}`);
         }
-      } catch (calErr) {
-        console.error('[Reschedule Booking] Failed to update Google Calendar event:', calErr);
+      } catch (calErr: any) {
+        calendarWarning = 'The booking was rescheduled but its Google Calendar event could not be updated. Please update it manually.';
+        console.error('[Reschedule Booking] Failed to update Google Calendar event:', calErr?.message || calErr);
       }
     }
 
@@ -3842,7 +3861,12 @@ app.post('/api/reschedule-booking', async (req, res) => {
       }
     }
 
-    res.json({ success: true, message: 'Booking rescheduled successfully and forwarded' });
+    res.json({
+      success: true,
+      message: 'Booking rescheduled successfully and forwarded',
+      calendar_updated: calendarUpdated,
+      calendar_warning: googleEventId && !calendarUpdated ? calendarWarning : null
+    });
 
   } catch (error: any) {
     console.error('[Reschedule Booking] Error:', error);
