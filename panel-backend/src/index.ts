@@ -3990,6 +3990,77 @@ function getBookingStartMs(inviteeTime: string | null | undefined): number | nul
   return Date.UTC(parseInt(year, 10), monthIdx, parseInt(day, 10), hour, parseInt(mm, 10)) - 330 * 60000;
 }
 
+// ── Client-privacy calendar helpers ─────────────────────────────────────────
+// Resolve the client's MASKED email (client<id>@safestories.in) for a booking.
+// Reuses the stored masked_emails row (deduped by real_email) or generates one
+// if absent. Returns null on any problem — it NEVER returns the real email.
+async function resolveMaskedEmail(db: { query: Function }, maskId: any, realEmail: string | null | undefined): Promise<string | null> {
+  try {
+    if (maskId !== null && maskId !== undefined && maskId !== '') {
+      const r = await db.query('SELECT masked_email FROM masked_emails WHERE id = $1', [maskId]);
+      if (r.rows[0]?.masked_email) return r.rows[0].masked_email;
+    }
+    if (realEmail) {
+      const up = await db.query(
+        `INSERT INTO masked_emails (real_email, created_at) VALUES ($1, CURRENT_TIMESTAMP)
+         ON CONFLICT (real_email) DO UPDATE SET real_email = EXCLUDED.real_email
+         RETURNING masked_email`,
+        [realEmail]
+      );
+      if (up.rows[0]?.masked_email) return up.rows[0].masked_email;
+    }
+  } catch (e: any) {
+    console.error('[masked-email] resolve failed:', e?.message || e);
+  }
+  return null;
+}
+
+// Insert a Google Calendar event on the therapist's calendar showing ONLY the
+// client's name + masked email (never phone, never real email). If the masked
+// email is missing or Google rejects the attendee, it retries with NAME ONLY.
+// Always uses sendUpdates:'none' so Google never emails the masked alias.
+async function insertClientCalendarEvent(calendar: any, opts: {
+  therapyLabel: string; clientName: string; mode: string; notes: string;
+  maskedEmail: string | null; startISO: string; endISO: string;
+  isOnline: boolean; location: string;
+}): Promise<{ eventId: string | null; meetLink: string }> {
+  const buildBody = (withMask: boolean) => {
+    const useMask = withMask && !!opts.maskedEmail;
+    const body: any = {
+      summary: `${opts.therapyLabel} - ${opts.clientName}`,
+      description: useMask
+        ? `Session via SafeStories.\nClient: ${opts.clientName}\nEmail: ${opts.maskedEmail}\nMode: ${opts.mode}\nNotes: ${opts.notes}`
+        : `Session via SafeStories.\nClient: ${opts.clientName}\nMode: ${opts.mode}\nNotes: ${opts.notes}`,
+      start: { dateTime: opts.startISO, timeZone: 'Asia/Kolkata' },
+      end:   { dateTime: opts.endISO,   timeZone: 'Asia/Kolkata' },
+    };
+    if (useMask) body.attendees = [{ email: opts.maskedEmail }];
+    if (opts.isOnline) {
+      body.conferenceData = { createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } } };
+    } else {
+      body.location = opts.location;
+    }
+    return body;
+  };
+  const doInsert = async (withMask: boolean) => {
+    const ev = await calendar.events.insert({
+      calendarId: 'primary',
+      conferenceDataVersion: opts.isOnline ? 1 : 0,
+      sendUpdates: 'none',
+      requestBody: buildBody(withMask),
+    });
+    return { eventId: ev.data.id || null, meetLink: opts.isOnline ? (ev.data.hangoutLink || '') : '' };
+  };
+  try {
+    return await doInsert(true);
+  } catch (e: any) {
+    // Any failure involving the masked attendee → retry NAME ONLY. Never fall
+    // back to the client's real email or phone on the therapist's calendar.
+    console.error('[calendar] insert with masked email failed — retrying name-only:', e?.message || e);
+    return await doInsert(false);
+  }
+}
+
 app.get('/api/appointments', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -6869,10 +6940,8 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
   }
   const inviteeTime = `${cDay}, ${cMonth} ${cDate}, ${cYear} at ${fmtClient(startAt)} - ${fmtClient(endAt)} ${tzShort}`;
 
-  const maskedEmailRes = await client.query(
-    'SELECT masked_email FROM masked_emails WHERE id = $1', [booking.mask_id]
-  );
-  const maskedEmail = maskedEmailRes.rows[0]?.masked_email || booking.invitee_email;
+  // Masked email for the therapist's calendar — generate/reuse; never the real email.
+  const maskedEmail = await resolveMaskedEmail(client, booking.mask_id, payload.clientEmail || booking.invitee_email);
 
   // 5. Create Google Calendar event (best-effort)
   let hasCalendar = false;
@@ -6885,27 +6954,19 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
       const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
       const isOnline = (payload.sessionMode || '') === 'online' ||
                        booking.booking_mode?.toLowerCase().includes('online');
-      const eventBody = {
-        summary: `${payload.therapyName || booking.booking_resource_name} - ${payload.clientName || booking.invitee_name}`,
-        description: `Session via SafeStories.\nClient: ${payload.clientName || booking.invitee_name}\nEmail: ${maskedEmail}\nMode: ${payload.sessionMode || 'online'}\nNotes: ${payload.notes || 'None'}`,
-        start: { dateTime: startAt.toISOString(), timeZone: 'Asia/Kolkata' },
-        end:   { dateTime: endAt.toISOString(),   timeZone: 'Asia/Kolkata' },
-        attendees: [{ email: maskedEmail }]
-      };
-      if (isOnline) {
-        eventBody.conferenceData = {
-          createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: 'hangoutsMeet' } }
-        };
-      } else {
-        eventBody.location = 'SafeStories Office - Lullanagar, Pune, Maharashtra 411040 | https://share.google/3tnQB1ORUWCJcmZyv';
-      }
-      const calEvent = await calendar.events.insert({
-        calendarId: 'primary',
-        conferenceDataVersion: isOnline ? 1 : 0,
-        requestBody: eventBody
+      const ev = await insertClientCalendarEvent(calendar, {
+        therapyLabel: payload.therapyName || booking.booking_resource_name,
+        clientName: payload.clientName || booking.invitee_name,
+        mode: payload.sessionMode || 'online',
+        notes: payload.notes || 'None',
+        maskedEmail,
+        startISO: startAt.toISOString(),
+        endISO: endAt.toISOString(),
+        isOnline,
+        location: 'SafeStories Office - Lullanagar, Pune, Maharashtra 411040 | https://share.google/3tnQB1ORUWCJcmZyv'
       });
-      google_event_id = calEvent.data.id || null;
-      if (isOnline) meetLink = calEvent.data.hangoutLink || '';
+      google_event_id = ev.eventId;
+      if (isOnline) meetLink = ev.meetLink;
       hasCalendar = true;
     } catch (calErr) {
       console.error('[verify-payment] Google Calendar event creation failed:', calErr);
@@ -6986,6 +7047,14 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
   const therapyName = payload.therapyName  || booking.booking_resource_name;
   const sessionMode = payload.sessionMode  || 'online';
   const checkinUrl  = booking.public_booking_checkin_url;
+  // Duration shown in the email is derived from the same start/end instants that
+  // build the Google Calendar event, so it always matches the calendar (15 min for
+  // free consultations, 50 for therapy sessions). Falls back to 50 only if the
+  // stored times are missing/invalid.
+  const emailDurationMinutes = (() => {
+    const d = Math.round((endAt.getTime() - startAt.getTime()) / 60000);
+    return Number.isFinite(d) && d > 0 ? d : 50;
+  })();
 
     // 7. Send confirmation emails and log (best-effort, but log within transaction)
     try {
@@ -6995,7 +7064,7 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
         sessionName: therapyName,
         dateStr: `${dayName}, ${monthName} ${dateNum}, ${yearNum}`,
         timeRangeStr: `${startTimeStr} - ${endTimeStr}`,
-        duration: 50,
+        duration: emailDurationMinutes,
         joinLink: hasCalendar ? meetLink : sessionMode,
         checkinUrl,
         calendarStartRaw: startAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z',
@@ -7631,47 +7700,22 @@ app.post('/api/create-booking', async (req, res) => {
 
         const isOnline = payload.sessionMode === 'online';
 
-        const eventBody: any = {
-          summary: `${payload.therapyName} - ${payload.clientName}`,
-          description: `Therapy session booked via SafeStories.\nClient: ${payload.clientName}\nSession Mode: ${payload.sessionMode || 'online'}\nNotes: ${payload.notes || 'None'}`,
-          start: {
-            dateTime: startAt.toISOString(),
-            timeZone: 'Asia/Kolkata'
-          },
-          end: {
-            dateTime: endAt.toISOString(),
-            timeZone: 'Asia/Kolkata'
-          }
-        };
-
-        if (isOnline) {
-          eventBody.conferenceData = {
-            createRequest: {
-              requestId: randomUUID(),
-              conferenceSolutionKey: {
-                type: 'hangoutsMeet'
-              }
-            }
-          };
-        } else {
-          // In-person: add office location with Google Maps link
-          eventBody.location = 'SafeStories Office - Lullanagar, Pune, Maharashtra 411040 | https://share.google/3tnQB1ORUWCJcmZyv';
-        }
-
         console.log(`[Create Booking] Inserting event into calendar for ${therapist.name}...`);
-        const calendarEvent = await calendar.events.insert({
-          calendarId: 'primary',
-          conferenceDataVersion: isOnline ? 1 : 0,
-          requestBody: eventBody
+        const ev = await insertClientCalendarEvent(calendar, {
+          therapyLabel: payload.therapyName || 'Session',
+          clientName: payload.clientName,
+          mode: payload.sessionMode || 'online',
+          notes: payload.notes || 'None',
+          maskedEmail,
+          startISO: startAt.toISOString(),
+          endISO: endAt.toISOString(),
+          isOnline,
+          location: 'SafeStories Office - Lullanagar, Pune, Maharashtra 411040 | https://share.google/3tnQB1ORUWCJcmZyv'
         });
-
-        google_event_id = calendarEvent.data.id || null;
-
-        if (isOnline) {
-          meetLink = calendarEvent.data.hangoutLink || '';
-        }
+        google_event_id = ev.eventId;
+        if (isOnline) meetLink = ev.meetLink;
         hasCalendar = true;
-        console.log(`✅ [Create Booking] Successfully created Google Calendar event on ${therapist.name}'s calendar. Event ID: ${google_event_id}. ${isOnline ? 'Meet Link: ' + meetLink : 'In-person with location'}`);
+        console.log(`✅ [Create Booking] Created calendar event ${google_event_id} on ${therapist.name}'s calendar (client shown as name + masked email).`);
       } catch (calendarError: any) {
         console.error(`❌ [Create Booking] Failed creating Google Calendar event for therapist ${therapist.name}:`, calendarError?.message || calendarError);
         console.error(`[Create Booking] Error details:`, calendarError?.errors || calendarError?.response?.data || calendarError);
@@ -7753,7 +7797,7 @@ app.post('/api/create-booking', async (req, res) => {
         sessionName: payload.therapyName || 'Session',
         dateStr: `${dayName}, ${monthName} ${dateNum}, ${yearNum}`,
         timeRangeStr: `${startTimeStr} - ${endTimeStr}`,
-        duration: 50,
+        duration: sessionDurationMinutes,
         joinLink: hasCalendar ? meetLink : (payload.sessionMode || 'online'),
         checkinUrl: publicBookingCheckinUrl,
         calendarStartRaw: startAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z',
@@ -9655,17 +9699,27 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
     const inviteeTime = `${clientDayName}, ${clientMonthName} ${clientDateNum}, ${clientYearNum} at ${formatTimeClient(startObj)} - ${formatTimeClient(endObj)} ${tzShort}`;
     const bookingMode = sessionMode === 'online' ? 'Online Video Call' : 'In Person (Pune)';
 
+    // Generate/reuse the client's masked email now so the calendar event created
+    // after payment shows a masked address (never the real one).
+    const maskRes = await pool.query(
+      `INSERT INTO masked_emails (real_email, created_at) VALUES ($1, CURRENT_TIMESTAMP)
+       ON CONFLICT (real_email) DO UPDATE SET real_email = EXCLUDED.real_email
+       RETURNING id`,
+      [clientEmail]
+    );
+    const maskId = maskRes.rows[0].id;
+
     await pool.query(
       `INSERT INTO bookings (
         booking_id, therapist_id, invitee_name, invitee_email, invitee_phone,
         booking_start_at, booking_end_at, booking_status, payment_status, invitee_payment_amount,
-        invitee_payment_currency, booking_resource_name, booking_mode, invitee_timezone, 
-        booking_invitee_time, booking_host_time, booking_host_name, invitee_created_at, booking_updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, $12, $13, $14, $15, $16, NOW(), NOW())`,
+        invitee_payment_currency, booking_resource_name, booking_mode, invitee_timezone,
+        booking_invitee_time, booking_host_time, booking_host_name, mask_id, invitee_created_at, booking_updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())`,
       [
         bookingId, resolvedTherapistId, clientName, clientEmail, clientPhone,
         startObj.toISOString(), endObj.toISOString(), 'waiting_for_payment', 'Pending', amount,
-        serviceType, bookingMode, clientTz, inviteeTime, hostTime, therapistName
+        serviceType, bookingMode, clientTz, inviteeTime, hostTime, therapistName, maskId
       ]
     );
 
@@ -10198,7 +10252,34 @@ async function runStartupMigrations() {
     await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_id TEXT`);
     await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_status TEXT`);
     await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS razorpay_order_id TEXT`);
-    
+
+    // Make masked_email unique per client. The old generated expression used
+    // lpad(id,5,'0'), which TRUNCATES ids longer than 5 digits — collapsing every
+    // recent client onto client10000@safestories.in. Recompute as client<id>@.
+    try {
+      const genExpr = await pool.query(
+        `SELECT generation_expression FROM information_schema.columns
+         WHERE table_name = 'masked_emails' AND column_name = 'masked_email'`
+      );
+      if ((genExpr.rows[0]?.generation_expression || '').includes('lpad')) {
+        const mc = await pool.connect();
+        try {
+          await mc.query('BEGIN');
+          await mc.query('ALTER TABLE masked_emails DROP COLUMN masked_email');
+          await mc.query(`ALTER TABLE masked_emails ADD COLUMN masked_email TEXT GENERATED ALWAYS AS ('client' || id::text || '@safestories.in') STORED`);
+          await mc.query('COMMIT');
+          console.log('[migration] masked_email regenerated as unique client<id>@safestories.in');
+        } catch (e: any) {
+          await mc.query('ROLLBACK');
+          console.error('[migration] masked_email fix failed, rolled back:', e?.message || e);
+        } finally {
+          mc.release();
+        }
+      }
+    } catch (e: any) {
+      console.error('[migration] masked_email check failed:', e?.message || e);
+    }
+
     // Webhook/API logs table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS webhook_api_logs (
