@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, UserCog, Calendar, CreditCard, LogOut, PieChart, MessageCircle, ChevronUp, ChevronDown, FileText, Bell, Copy, Send, Plus, User, Eye, AlertCircle, X, RefreshCw, Settings, FileWarning, LifeBuoy } from 'lucide-react';
+import { LayoutDashboard, Users, UserCog, Calendar, CreditCard, LogOut, PieChart, MessageCircle, ChevronUp, ChevronDown, FileText, Bell, Copy, Send, Plus, User, Eye, AlertCircle, X, RefreshCw, Settings, FileWarning, LifeBuoy, UserPlus, Headphones } from 'lucide-react';
 import { Logo } from './Logo';
 import { AllClients } from './AllClients';
 import { AllTherapists } from './AllTherapists';
@@ -54,6 +54,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showProfileDropdown, setShowProfileDropdown] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [profilePictureUrl, setProfilePictureUrl] = useState<string>('');
 
   useEffect(() => {
@@ -436,14 +438,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'clients' ? '#F4A9365C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'appointments' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
-              navigate('/admin/clients');
+              navigate('/admin/appointments');
             }}
           >
-            <Users size={20} className={activeView === 'clients' ? 'text-black' : 'text-gray-700'} />
-            <span className={activeView === 'clients' ? 'text-black' : 'text-gray-700'}>All Clients</span>
+            <Calendar size={20} className={activeView === 'appointments' ? 'text-black' : 'text-gray-700'} />
+            <span className={activeView === 'appointments' ? 'text-black' : 'text-gray-700'}>Booking</span>
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
@@ -453,19 +455,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               navigate('/admin/therapists');
             }}
           >
-            <UserCog size={20} className={activeView === 'therapists' ? 'text-black' : 'text-gray-700'} />
-            <span className={activeView === 'therapists' ? 'text-black' : 'text-gray-700'}>All Therapists</span>
+            <Users size={20} className={activeView === 'therapists' ? 'text-black' : 'text-gray-700'} />
+            <span className={activeView === 'therapists' ? 'text-black' : 'text-gray-700'}>Therapists</span>
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'appointments' ? '#F4A9365C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'clients' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
               resetAllStates();
-              navigate('/admin/appointments');
+              navigate('/admin/clients');
             }}
           >
-            <Calendar size={20} className={activeView === 'appointments' ? 'text-black' : 'text-gray-700'} />
-            <span className={activeView === 'appointments' ? 'text-black' : 'text-gray-700'}>Bookings</span>
+            <UserPlus size={20} className={activeView === 'clients' ? 'text-black' : 'text-gray-700'} />
+            <span className={activeView === 'clients' ? 'text-black' : 'text-gray-700'}>Clients</span>
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
@@ -478,47 +480,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             <CreditCard size={20} className={activeView === 'refunds' ? 'text-black' : 'text-gray-700'} />
             <span className={activeView === 'refunds' ? 'text-black' : 'text-gray-700'}>Payments</span>
           </div>
-
-          <div
-            className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'therapy-calendars' ? '#F4A9365C' : 'transparent' }}
-            onClick={() => {
-              resetAllStates();
-              navigate('/admin/therapy-calendars');
-            }}
-          >
-            <Calendar size={20} className={activeView === 'therapy-calendars' ? 'text-black' : 'text-gray-700'} />
-            <span className={activeView === 'therapy-calendars' ? 'text-black' : 'text-gray-700'}>Therapy Calendars</span>
-          </div>
-          <div
-            className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'notifications' ? '#F4A9365C' : 'transparent' }}
-            onClick={() => {
-              resetAllStates();
-              navigate('/admin/notifications');
-            }}
-          >
-            <Bell size={20} className={activeView === 'notifications' ? 'text-black' : 'text-gray-700'} />
-            <span className={activeView === 'notifications' ? 'text-black' : 'text-gray-700'}>Notifications</span>
-          </div>
-          <div
-            className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'tickets' ? '#F4A9365C' : 'transparent' }}
-            onClick={() => {
-              resetAllStates();
-              navigate('/admin/tickets');
-            }}
-          >
-            <LifeBuoy size={20} className={activeView === 'tickets' ? 'text-black' : 'text-gray-700'} />
-            <span className={activeView === 'tickets' ? 'text-black' : 'text-gray-700'}>Tickets</span>
-          </div>
-
-        </nav>
-
-        {user?.username !== 'Test' && (
-          <div className="px-4 mb-4 pt-4 border-t">
+          
+          {user?.username !== 'Test' && (
             <div
-              className="rounded-lg px-4 py-3 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
+              className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
               style={{ backgroundColor: activeView === 'appSettings' ? '#F4A9365C' : 'transparent' }}
               onClick={() => {
                 resetAllStates();
@@ -528,71 +493,88 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               <Settings size={20} className={activeView === 'appSettings' ? 'text-teal-700' : 'text-gray-700'} />
               <span className={activeView === 'appSettings' ? 'text-teal-700' : 'text-gray-700'}>Settings</span>
             </div>
-          </div>
-        )}
-
-        <div className="p-4 border-t relative" ref={profileMenuRef}>
-          {/* Profile Dropdown Menu */}
-          {showProfileMenu && (
-            <div className="absolute bottom-full left-4 right-4 mb-2 bg-white border rounded-lg shadow-lg z-50">
-              <button
-                onClick={() => {
-                  setShowProfileMenu(false);
-                  navigate('/admin/settings');
-                }}
-                className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3 border-b"
-              >
-                <User size={18} className="text-gray-600" />
-                <span className="text-sm font-medium">Edit Profile</span>
-              </button>
-              <button
-                onClick={() => {
-                  setShowProfileMenu(false);
-                  navigate('/admin/changePassword');
-                }}
-                className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-center gap-3"
-              >
-                <Eye size={18} className="text-gray-600" />
-                <span className="text-sm font-medium">Change/Forgot Password</span>
-              </button>
-            </div>
           )}
-
-          {/* Profile Box */}
-          <div
-            className="flex items-center gap-3 rounded-lg p-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: '#2D757930' }}
-            onClick={() => setShowProfileMenu(!showProfileMenu)}
-          >
-            {profilePictureUrl ? (
-              <img
-                src={profilePictureUrl}
-                alt="Profile"
-                className="w-10 h-10 rounded-lg object-cover"
-              />
-            ) : (
-              <div className="w-10 h-10 bg-orange-400 rounded-lg flex items-center justify-center">
-                <Users size={20} className="text-white" />
-              </div>
-            )}
-            <div className="flex-1">
-              <div className="font-semibold text-sm">{user?.full_name || user?.username}</div>
-              <div className="text-xs text-gray-600">Role: {user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : 'Admin'}</div>
-            </div>
-            <LogOut size={18} className="text-red-500 cursor-pointer" onClick={(e) => {
-              e.stopPropagation();
-              onLogout();
-            }} />
-          </div>
-        </div>
+        </nav>
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-auto relative">
+      <div className="flex-1 flex flex-col overflow-hidden relative bg-gray-50">
+        
+        {/* Global Header */}
+        <header className="bg-white border-b px-8 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm">
+          <div className="flex-1"></div>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => navigate('/admin/tickets')}
+              className="p-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors relative"
+              title="Tickets"
+            >
+              <Headphones size={24} />
+            </button>
+            
+            <NotificationBell
+              userId={user?.id}
+              userRole="admin"
+              onViewAll={() => { resetAllStates(); navigate('/admin/notifications'); }}
+            />
+            
+            <button className="flex items-center gap-2 border rounded-lg px-4 py-2 bg-white hover:bg-gray-50 transition-colors">
+              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+              <span className="text-sm font-medium text-gray-700">Live Sessions: {liveSessionsCount}</span>
+            </button>
+
+            <div className="relative">
+              <button
+                onClick={() => setShowProfileDropdown(!showProfileDropdown)}
+                className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded-lg transition-colors border ml-2"
+              >
+                <div className="w-8 h-8 rounded-full bg-teal-600 text-white flex items-center justify-center font-bold text-sm">
+                  {user?.full_name?.charAt(0) || user?.username?.charAt(0) || 'A'}
+                </div>
+                <span className="text-sm font-medium text-gray-700 hidden sm:block">
+                  {user?.full_name || user?.username}
+                </span>
+                <ChevronDown size={16} className="text-gray-500" />
+              </button>
+
+              {showProfileDropdown && (
+                <div className="absolute right-0 mt-2 w-48 bg-white border rounded-xl shadow-lg py-1 z-50">
+                  <div className="px-4 py-2 border-b">
+                    <p className="text-sm font-medium text-gray-900 truncate">
+                      {user?.full_name || user?.username}
+                    </p>
+                    <p className="text-xs text-gray-500 truncate">{user?.email}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowProfileDropdown(false);
+                      navigate('/admin/edit-profile');
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-teal-50 hover:text-teal-700 transition-colors flex items-center gap-2"
+                  >
+                    <User size={16} />
+                    Edit Profile
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowProfileDropdown(false);
+                      setShowLogoutConfirm(true);
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2"
+                  >
+                    <LogOut size={16} />
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-auto relative p-0 m-0">
         <Routes>
           <Route path="appSettings/*" element={<SettingsPage onBack={() => navigate('/admin/dashboard')} user={user} />} />
-          <Route path="settings" element={<AdminEditProfile user={user} onBack={() => navigate('/admin/dashboard')} />} />
-          <Route path="changePassword" element={<ChangePassword user={user} onBack={() => navigate('/admin/dashboard')} />} />
+          <Route path="edit-profile" element={<AdminEditProfile user={user} onBack={() => navigate('/admin/dashboard')} />} />
           <Route path="create" element={
             <CreatePage
               onCreateBooking={() => navigate('/admin/createBooking')}
@@ -640,15 +622,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                     <p className="text-gray-600">Welcome Back, {user?.full_name || user?.username}!</p>
                   </div>
                   <div className="flex items-center gap-4">
-                    <NotificationBell
-                      userId={user?.id}
-                      userRole="admin"
-                      onViewAll={() => { resetAllStates(); navigate('/admin/notifications'); }}
-                    />
-                    <button className="flex items-center gap-2 border rounded-lg px-4 py-2 bg-white hover:bg-gray-50">
-                  <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                  <span className="text-sm font-medium">Live Sessions: {liveSessionsCount}</span>
-                </button>
                 <div className="relative" ref={dropdownRef}>
                   <button
                     onClick={() => setIsDateDropdownOpen(!isDateDropdownOpen)}
@@ -1160,6 +1133,37 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
         </div>
       )}
 
+      {/* Logout Confirmation Modal */}
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999] p-4 backdrop-blur-sm" onClick={() => setShowLogoutConfirm(false)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-6 animate-in fade-in zoom-in duration-200" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-center w-12 h-12 rounded-full bg-red-100 mx-auto mb-4">
+              <LogOut className="text-red-600" size={24} />
+            </div>
+            <h3 className="text-xl font-bold text-center text-gray-900 mb-2">Confirm Logout</h3>
+            <p className="text-center text-gray-500 mb-6">Are you sure you want to log out of your account?</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowLogoutConfirm(false)}
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setShowLogoutConfirm(false);
+                  onLogout();
+                }}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition-colors"
+              >
+                Logout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      </div>
     </div>
   );
 };

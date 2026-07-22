@@ -4,6 +4,8 @@ import { ReportIssuePage } from './ReportIssuePage';
 import { AuditLogs } from './AuditLogs';
 import { TherapiesManagementPage } from './TherapiesManagementPage';
 import { PaymentSettings } from './PaymentSettings';
+import { TherapyCalendars } from './TherapyCalendars';
+import { TherapyCalendarDetails } from './TherapyCalendarDetails';
 import { ArrowLeft, AlertCircle, FileText, Calendar, Heart, Search, RefreshCw, CreditCard } from 'lucide-react';
 
 interface SettingsPageProps {
@@ -299,6 +301,18 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, user }) => {
               </div>
             </div>
 
+            <div 
+              onClick={() => navigate('/admin/appSettings/therapy-calendars')}
+              className="bg-white p-8 rounded-xl border border-gray-200 shadow-sm cursor-pointer hover:shadow-md hover:border-teal-500 transition-all flex flex-col items-center justify-center text-center gap-4 group"
+            >
+              <div className="w-16 h-16 bg-teal-50 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
+                <Calendar size={32} className="text-teal-700" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800">Therapy Calendars</h3>
+                <p className="text-sm text-gray-500 mt-2">Manage and view all therapy calendars</p>
+              </div>
+            </div>
 
             <div 
               onClick={() => navigate('/admin/appSettings/payments')} 
@@ -334,6 +348,9 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, user }) => {
                 <Route path="therapies" element={<TherapiesManagementPage />} />
                 <Route path="calendars" element={<CalendarConnectionsAdmin />} />
                 <Route path="payments" element={<PaymentSettings />} />
+                <Route path="therapy-calendars" element={<TherapyCalendars />} />
+                <Route path="therapy-calendars/new" element={<TherapyCalendarDetails />} />
+                <Route path="therapy-calendars/:id" element={<TherapyCalendarDetails />} />
               </Routes>
             </div>
           </div>

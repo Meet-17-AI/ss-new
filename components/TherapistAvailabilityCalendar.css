@@ -224,20 +224,17 @@
   border-radius: 3px;
 }
 
+/* Legend dots mirror the grid cell colours exactly. */
 .legend-dot.available {
-  background: #0f766e; /* teal-700, flat */
+  background: #0f766e; /* teal-700 — matches available cell */
 }
 
 .legend-dot.unavailable {
-  background: #e5e7eb; /* gray-200 */
-}
-
-.legend-dot.override {
-  background: #f59e0b; /* amber-500, flat */
+  background: #9ca3af; /* gray-400 — matches grey "Off"/"Busy" */
 }
 
 .legend-dot.partly-booked {
-  background: #3b82f6; /* blue-500 */
+  background: #f59e0b; /* amber-500 — matches partly-booked pill */
 }
 
 .legend-dot.today {
@@ -300,7 +297,7 @@
 }
 
 .avail-day-cell.available {
-  border-color: #99f6e4;   /* teal-200 */
+  border-color: #99f6e4;   /* teal-200 — original available colour */
   background: #f0fdfa;     /* teal-50 */
 }
 
@@ -311,11 +308,6 @@
 
 .avail-day-cell.unavailable .day-number {
   color: #9ca3af; /* gray-400 */
-}
-
-.avail-day-cell.has-override {
-  border-color: #fde68a;   /* amber-200 */
-  background: #fffbeb;     /* amber-50 */
 }
 
 .avail-day-cell.past {
@@ -360,22 +352,17 @@
   font-weight: 600;
   padding: 2px 5px;
   border-radius: 4px;
-  background: #ccfbf1; /* teal-100 */
+  background: #ccfbf1; /* teal-100 — original available slot pill */
   color: #115e59;      /* teal-800 */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.day-slot-pill.override {
-  background: #fef3c7; /* amber-100 */
-  color: #92400e;      /* amber-800 */
-}
-
 /* Day is open but partly taken by Google Calendar busy blocks. */
 .day-slot-pill.booked {
-  background: #dbeafe; /* blue-100 */
-  color: #1e40af;      /* blue-800 */
+  background: #fef3c7; /* amber-100 */
+  color: #92400e;      /* amber-800 */
 }
 
 .day-status-badge {
@@ -411,16 +398,17 @@
   background: #ef4444;      /* red-500 */
 }
 
-/* Modal note: shown when an Available day is fully booked on Google Calendar. */
+/* Modal note: shown when an Available day is busy all day on Google Calendar
+   (the day is locked). Neutral grey — informational, not an error. */
 .avail-modal-note {
-  margin: 12px 20px 0;
+  margin: 12px 24px 0;
   padding: 10px 12px;
-  background: #fef2f2;      /* red-50 */
-  border: 1px solid #fecaca;/* red-200 */
+  background: #f9fafb;      /* gray-50 */
+  border: 1px solid #e5e7eb;/* gray-200 */
   border-radius: 8px;
   font-size: 12px;
   line-height: 1.5;
-  color: #991b1b;          /* red-800 */
+  color: #4b5563;          /* gray-600 */
 }
 
 /* ══════════════════════════════════════════════════════
@@ -528,6 +516,12 @@
 
 .toggle-switch.on {
   background: #0f766e; /* teal-700, flat */
+}
+
+/* Locked: day is busy all day on Google Calendar — toggle is non-interactive. */
+.toggle-switch.locked {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .toggle-switch .toggle-knob {

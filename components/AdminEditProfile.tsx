@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Upload, X } from 'lucide-react';
 import { Toast } from './Toast';
+import { ChangePassword } from './ChangePassword';
 
 interface AdminEditProfileProps {
   user: any;
@@ -357,6 +358,11 @@ export const AdminEditProfile: React.FC<AdminEditProfileProps> = ({ user, onBack
             {saving ? 'Saving...' : 'Save Profile Changes'}
           </button>
         </form>
+      </div>
+
+      <div className="mt-8">
+        <h2 className="text-xl font-bold mb-4">Security Settings</h2>
+        <ChangePassword user={user} hideHeader={true} />
       </div>
 
       {toast && (

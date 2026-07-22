@@ -3,11 +3,12 @@ import { Eye, EyeOff, ArrowLeft } from 'lucide-react';
 import { Toast } from './Toast';
 
 interface ChangePasswordProps {
-  onBack: () => void;
+  onBack?: () => void;
   user: any;
+  hideHeader?: boolean;
 }
 
-export const ChangePassword: React.FC<ChangePasswordProps> = ({ onBack, user }) => {
+export const ChangePassword: React.FC<ChangePasswordProps> = ({ onBack, user, hideHeader = false }) => {
   const [activeTab, setActiveTab] = useState<'change' | 'forgot'>('change');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -260,17 +261,21 @@ export const ChangePassword: React.FC<ChangePasswordProps> = ({ onBack, user }) 
   };
 
   return (
-    <div className="p-8 bg-gray-50 min-h-screen">
-      <button
-        onClick={onBack}
-        className="flex items-center gap-2 text-gray-600 hover:text-gray-800 mb-6"
-      >
-        <ArrowLeft size={20} />
-        <span>Back</span>
-      </button>
+    <div className={hideHeader ? "" : "p-8 bg-gray-50 min-h-screen"}>
+      {!hideHeader && (
+        <>
+          <button
+            onClick={onBack}
+            className="flex items-center gap-2 text-gray-600 hover:text-gray-800 mb-6"
+          >
+            <ArrowLeft size={20} />
+            <span>Back</span>
+          </button>
 
-      <h1 className="text-3xl font-bold mb-1">Change/Forgot Password</h1>
-      <p className="text-gray-600 mb-8">Update or recover your account password</p>
+          <h1 className="text-3xl font-bold mb-1">Change/Forgot Password</h1>
+          <p className="text-gray-600 mb-8">Update or recover your account password</p>
+        </>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-4 mb-6 border-b">

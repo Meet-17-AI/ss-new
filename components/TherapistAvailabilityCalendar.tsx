@@ -145,7 +145,7 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
   const [modalOpen, setModalOpen] = useState(false);
   const [modalDate, setModalDate] = useState<number | null>(null);
   const [modalAvailable, setModalAvailable] = useState(true);
-  const [modalFullyBooked, setModalFullyBooked] = useState(false);
+  const [modalLocked, setModalLocked] = useState(false);
   const [modalSlots, setModalSlots] = useState<TimeSlot[]>([{ start: '09:00', end: '17:00', enabled: true }]);
 
   // ── Initialize therapist ────────────────────────────
@@ -266,7 +266,7 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
     const override = (scheduleData.availability || []).find((a: DayAvailability) =>
       /\d{4}-\d{2}-\d{2}/.test(a.day) && a.day === dateStr
     );
-    if (override) return { ...override, isOverride: true };
+    if (override) return { ...override };
 
     // Fallback to weekly rule
     const d = new Date(calYear, calMonth, day);
@@ -274,7 +274,7 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
     const weekly = (scheduleData.availability || []).find((a: DayAvailability) =>
       !/\d{4}-\d{2}-\d{2}/.test(a.day) && matchesWeekday(a.day, weekday.slice(0, 3))
     );
-    return weekly ? { ...weekly, isOverride: false } : null;
+    return weekly ? { ...weekly } : null;
   };
 
   // ── Open modal for a date ───────────────────────────
@@ -282,27 +282,22 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
     const info = getDateAvailability(day);
     setModalDate(day);
 
-    // Detect "available in the schedule but fully booked on Google Calendar" so the
-    // modal can explain why an Available day shows as blocked on the grid.
-    let fullyBookedNow = false;
+    // Lock the day when it's switched ON in the schedule but Google Calendar is busy
+    // the whole calendar day — no open hours remain to offer, so editing availability
+    // here does nothing until the therapist frees their Google Calendar.
+    let lockedNow = false;
     if (info?.is_available && (info.times || []).length > 0) {
       const dayStartMs = new Date(calYear, calMonth, day, 0, 0, 0).getTime();
       const dayEndMs = new Date(calYear, calMonth, day, 23, 59, 59).getTime();
       const busyForDay = googleBlocks
         .map(b => ({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() }))
         .filter(b => b.start < dayEndMs && b.end > dayStartMs);
-      const free = (info.times || []).reduce((n: number, t: any) =>
-        n + freeMinutesInWindow(
-          wallClockMs(calYear, calMonth, day, t.start),
-          wallClockMs(calYear, calMonth, day, t.end),
-          busyForDay
-        ), 0);
-      fullyBookedNow = free <= 0;
+      lockedNow = freeMinutesInWindow(dayStartMs, dayEndMs, busyForDay) <= 0;
     }
-    setModalFullyBooked(fullyBookedNow);
+    setModalLocked(lockedNow);
 
     if (info) {
-      setModalAvailable(info.is_available);
+      setModalAvailable(lockedNow ? false : info.is_available);
       setModalSlots(
         info.times && info.times.length > 0
           ? info.times.map((t: any) => ({ start: t.start, end: t.end, enabled: true }))
@@ -459,7 +454,6 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
       const isPast = thisDate < todayDate;
       const isToday = day === today.getDate() && calMonth === today.getMonth() && calYear === today.getFullYear();
       const isAvailable = info?.is_available ?? false;
-      const isOverride = info?.isOverride ?? false;
 
       // Google busy blocks overlapping this day, as absolute instants.
       const dayStartMs = new Date(calYear, calMonth, day, 0, 0, 0).getTime();
@@ -488,25 +482,35 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
       const totalMinutes = windowStates.reduce((n: number, w: any) => n + w.totalMinutes, 0);
       const freeMinutes = windowStates.reduce((n: number, w: any) => n + w.freeMinutes, 0);
 
-      // "Blocked" now means what it says: busy blocks cover every working window.
-      const fullyBlocked = hasWindows && freeMinutes <= 0;
+      // Free time left across the ENTIRE calendar day (00:00–23:59), not just the
+      // working windows — used to tell two "no slots left" situations apart:
+      //  • Google busy the whole day  → the therapist is out all day
+      //  • only working hours booked  → sessions fill the open hours, rest of day free
+      const freeWholeDay = freeMinutesInWindow(dayStartMs, dayEndMs, busyForDay);
+
+      // Day is switched ON in the schedule but Google Calendar is busy the whole day.
+      const wholeDayBusy = isAvailable && hasWindows && freeWholeDay <= 0;
+      // Working windows are fully taken, but the day isn't entirely blocked → red "Booked".
+      const fullyBlocked = isAvailable && hasWindows && freeMinutes <= 0 && !wholeDayBusy;
       // Remaining free time is only actionable from today onwards — on a past date
       // there is nothing left to book, so the pill would be noise.
       const partiallyBooked =
         !isPast && hasWindows && freeMinutes > 0 && freeMinutes < totalMinutes;
-      // Two distinct "blocked" meanings, styled differently so they don't look alike:
-      //  • schedule marks the day off  → grey "Off"  (opens with toggle Unavailable)
-      //  • available but every window is taken on Google → red "Booked" (toggle stays Available)
+      // Three "can't book" meanings, colour-coded to match the legend:
+      //  • schedule marks the day off        → grey  "Off"
+      //  • available but Google busy all day  → grey  "Busy"  (locked in the modal)
+      //  • available but working hours booked → red   "Booked"
       const scheduleUnavailable = !isAvailable;
-      const visuallyUnavailable = scheduleUnavailable || fullyBlocked;
-      const stateClass = scheduleUnavailable ? 'unavailable' : (fullyBlocked ? 'fully-booked' : 'available');
+      const stateClass =
+        (scheduleUnavailable || wholeDayBusy) ? 'unavailable'
+          : fullyBlocked ? 'fully-booked'
+            : 'available';
 
       const classes = [
         'avail-day-cell',
         isToday && 'today',
         isPast && 'past',
         stateClass,
-        isOverride && 'has-override',
       ].filter(Boolean).join(' ');
 
       cells.push(
@@ -517,21 +521,28 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
         >
           <div className="day-number">{day}</div>
           <div className="day-slots">
-            {hasWindows && !fullyBlocked ? (
+            {hasWindows && !fullyBlocked && !wholeDayBusy ? (
               windowStates.slice(0, 2).map((t: any, idx: number) => (
-                <div key={idx} className={`day-slot-pill${isOverride ? ' override' : ''}`}>
+                <div key={idx} className="day-slot-pill">
                   {formatTime12(t.start)} – {formatTime12(t.end)}
                 </div>
               ))
-            ) : visuallyUnavailable ? (
+            ) : fullyBlocked ? (
               <div
-                className={`day-status-badge ${fullyBlocked ? 'booked-full' : 'off'}`}
-                title={fullyBlocked ? 'Available, but fully booked on Google Calendar' : 'Unavailable'}
+                className="day-status-badge booked-full"
+                title="Available, but your working hours are fully booked on Google Calendar"
               >
-                {fullyBlocked ? 'Booked' : 'Off'}
+                Booked
+              </div>
+            ) : (scheduleUnavailable || wholeDayBusy) ? (
+              <div
+                className="day-status-badge off"
+                title={wholeDayBusy ? 'Available in your schedule, but your Google Calendar is busy all day' : 'Unavailable'}
+              >
+                {wholeDayBusy ? 'Busy' : 'Off'}
               </div>
             ) : null}
-            {hasWindows && !fullyBlocked && windowStates.length > 2 && (
+            {hasWindows && !fullyBlocked && !wholeDayBusy && windowStates.length > 2 && (
               <div className="day-slot-pill" style={{ background: '#f3f4f6', color: '#4b5563' }}>
                 +{windowStates.length - 2} more
               </div>
@@ -610,7 +621,6 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
           <div className="legend-item"><div className="legend-dot unavailable" /> Unavailable</div>
           <div className="legend-item"><div className="legend-dot fully-booked" /> Fully booked</div>
           <div className="legend-item"><div className="legend-dot partly-booked" /> Partly booked</div>
-          <div className="legend-item"><div className="legend-dot override" /> Override</div>
           <div className="legend-item"><div className="legend-dot today" /> Today</div>
         </div>
       </div>
@@ -660,32 +670,34 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
             <div className="avail-toggle-row">
               <div>
                 <div className="avail-toggle-label">
-                  {modalAvailable ? 'Available' : 'Unavailable'}
+                  {modalLocked ? 'Unavailable' : (modalAvailable ? 'Available' : 'Unavailable')}
                 </div>
                 <div className="avail-toggle-sublabel">
-                  {modalAvailable ? 'Clients can book during your time slots' : 'No bookings will be accepted'}
+                  {modalLocked
+                    ? 'Locked — your Google Calendar is busy all day'
+                    : (modalAvailable ? 'Clients can book during your time slots' : 'No bookings will be accepted')}
                 </div>
               </div>
               <button
-                className={`toggle-switch${modalAvailable ? ' on' : ''}`}
-                onClick={() => setModalAvailable(!modalAvailable)}
+                className={`toggle-switch${modalAvailable ? ' on' : ''}${modalLocked ? ' locked' : ''}`}
+                onClick={() => { if (!modalLocked) setModalAvailable(!modalAvailable); }}
+                disabled={modalLocked}
               >
                 <div className="toggle-knob" />
               </button>
             </div>
 
-            {modalAvailable && modalFullyBooked && (
+            {modalLocked && (
               <div className="avail-modal-note">
-                You're <strong>Available</strong> this day, but your Google Calendar is
-                fully booked — no open slots remain, which is why the grid shows it as
-                "Booked". You don't need to mark it Unavailable; free up events on your
-                Google Calendar to reopen slots.
+                <strong>Your Google Calendar is fully occupied this day.</strong> To set
+                availability for this date, free up some time on your Google Calendar first —
+                it will open here automatically.
               </div>
             )}
 
             {/* Body */}
             <div className="avail-modal-body">
-              {modalAvailable && (
+              {modalAvailable && !modalLocked && (
                 <div className="time-slots-section">
                   <div className="section-title">Time Slots</div>
 
@@ -765,14 +777,18 @@ const TherapistAvailabilityCalendar: React.FC<TherapistAvailabilityCalendarProps
 
             {/* Footer */}
             <div className="avail-modal-footer">
-              <button className="cancel-btn" onClick={() => setModalOpen(false)}>Cancel</button>
-              <button className="save-btn" onClick={handleModalSave} disabled={saving}>
-                {saving ? (
-                  <><Loader2 size={14} className="spinner" /> Saving...</>
-                ) : (
-                  <><Save size={14} /> Save Changes</>
-                )}
+              <button className="cancel-btn" onClick={() => setModalOpen(false)}>
+                {modalLocked ? 'Close' : 'Cancel'}
               </button>
+              {!modalLocked && (
+                <button className="save-btn" onClick={handleModalSave} disabled={saving}>
+                  {saving ? (
+                    <><Loader2 size={14} className="spinner" /> Saving...</>
+                  ) : (
+                    <><Save size={14} /> Save Changes</>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>
