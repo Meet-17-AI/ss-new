@@ -5821,10 +5821,11 @@ app.get('/api/refunds', async (req, res) => {
     const statusStr = typeof status === 'string' ? status : '';
 
     let query = `
-      SELECT 
+      SELECT
         r.client_name,
         r.session_name,
         r.session_timings,
+        b.booking_invitee_time,
         b.refund_status,
         COALESCE(b.invitee_phone, '') as invitee_phone,
         COALESCE(b.invitee_email, '') as invitee_email,
@@ -5855,26 +5856,21 @@ app.get('/api/refunds', async (req, res) => {
     const result = await pool.query(query, params);
 
     const refunds = result.rows.map(row => {
-      let formattedTimings = 'N/A';
-      if (row.session_timings) {
+      // Prefer the authoritative pre-formatted IST string captured at booking time.
+      // Fall back to deriving from the stored timestamp (formatted in Asia/Kolkata)
+      // only when the invitee string is missing.
+      let formattedTimings: string = (row.booking_invitee_time && String(row.booking_invitee_time).trim())
+        ? String(row.booking_invitee_time).trim()
+        : 'N/A';
+      if (formattedTimings === 'N/A' && row.session_timings) {
         const date = new Date(row.session_timings);
-        const istDate = new Date(date.getTime() + (5.5 * 60 * 60 * 1000));
-        const endDate = new Date(istDate.getTime() + (50 * 60 * 1000));
-
-        const formatTime = (d: Date) => {
-          const hours = d.getHours();
-          const minutes = d.getMinutes();
-          const ampm = hours >= 12 ? 'PM' : 'AM';
-          const hour12 = hours % 12 || 12;
-          return `${hour12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
-        };
-
-        const weekday = istDate.toLocaleDateString('en-US', { weekday: 'long' });
-        const month = istDate.toLocaleDateString('en-US', { month: 'short' });
-        const day = istDate.getDate();
-        const year = istDate.getFullYear();
-
-        formattedTimings = `${weekday}, ${month} ${day}, ${year} at ${formatTime(istDate)} - ${formatTime(endDate)} IST`;
+        const endDate = new Date(date.getTime() + (50 * 60 * 1000));
+        const fmt = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+        const weekday = date.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
+        const month = date.toLocaleDateString('en-US', { month: 'short', timeZone: 'Asia/Kolkata' });
+        const day = date.toLocaleDateString('en-US', { day: 'numeric', timeZone: 'Asia/Kolkata' });
+        const year = date.toLocaleDateString('en-US', { year: 'numeric', timeZone: 'Asia/Kolkata' });
+        formattedTimings = `${weekday}, ${month} ${day}, ${year} at ${fmt(date)} - ${fmt(endDate)} IST`;
       }
 
       return {
@@ -5898,17 +5894,19 @@ app.get('/api/payments', async (req, res) => {
 
     // Helper to format a booking row into the payments shape
     const formatRow = (row: any, startAtField: string, endAtField: string) => {
-      let formattedTimings = 'N/A';
+      // Prefer the authoritative pre-formatted IST string captured at booking time
+      // (booking_invitee_time is exactly what the client saw/agreed to). Historical
+      // booking_start_at values use inconsistent storage conventions (some naive-IST,
+      // some naive-UTC), so re-deriving the time from it is unreliable. Only fall back
+      // to deriving from the timestamp when no invitee string exists (e.g. legacy rows).
+      let formattedTimings: string = (row.booking_invitee_time && String(row.booking_invitee_time).trim())
+        ? String(row.booking_invitee_time).trim()
+        : 'N/A';
       const startRaw = row[startAtField];
-      if (startRaw) {
+      if (formattedTimings === 'N/A' && startRaw) {
         const date = new Date(startRaw);
         const endDate = new Date(row[endAtField] || date.getTime() + 50 * 60 * 1000);
-        const pad = (n: number) => String(n).padStart(2, '0');
-        const fmt = (d: Date) => {
-          const h = d.getHours(); const m = d.getMinutes();
-          const ampm = h >= 12 ? 'PM' : 'AM'; const h12 = h % 12 || 12;
-          return `${h12}:${pad(m)} ${ampm}`;
-        };
+        const fmt = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
         const weekday = date.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
         const month   = date.toLocaleDateString('en-US', { month: 'short',  timeZone: 'Asia/Kolkata' });
         const day     = date.toLocaleDateString('en-US', { day: 'numeric',  timeZone: 'Asia/Kolkata' });

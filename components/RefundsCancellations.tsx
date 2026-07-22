@@ -2,6 +2,18 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Search, Download, Loader } from 'lucide-react';
 import * as XLSX from 'xlsx'
 
+// Render an internal timestamp in IST regardless of the viewer's browser timezone.
+const formatISTDateTime = (value?: string | null): string => {
+  if (!value) return 'N/A';
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return 'N/A';
+  return d.toLocaleString('en-US', {
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+    timeZone: 'Asia/Kolkata',
+  }) + ' IST';
+};
+
 interface Refund {
   client_name: string;
   session_name: string;
@@ -474,11 +486,11 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                 <div className="flex justify-between bg-gray-50 p-4 rounded-lg border">
                   <div>
                     <p className="text-xs text-gray-500 uppercase">Initiated At</p>
-                    <p className="text-sm font-medium text-gray-800">{selectedPayment.created_at ? new Date(selectedPayment.created_at).toLocaleString() : 'N/A'}</p>
+                    <p className="text-sm font-medium text-gray-800">{formatISTDateTime(selectedPayment.created_at)}</p>
                   </div>
                   <div className="text-right">
                     <p className="text-xs text-gray-500 uppercase">{selectedPayment.payment_status === 'Failed' ? 'Failed At' : 'Completed At'}</p>
-                    <p className="text-sm font-medium text-gray-800">{selectedPayment.booking_updated_at ? new Date(selectedPayment.booking_updated_at).toLocaleString() : 'N/A'}</p>
+                    <p className="text-sm font-medium text-gray-800">{formatISTDateTime(selectedPayment.booking_updated_at)}</p>
                   </div>
                 </div>
               </div>
@@ -505,7 +517,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                     {selectedPayment.refund_initiated_at && (
                       <div>
                         <p className="text-xs text-purple-600 uppercase">Initiated At</p>
-                        <p className="text-sm font-medium text-gray-800">{new Date(selectedPayment.refund_initiated_at).toLocaleString()}</p>
+                        <p className="text-sm font-medium text-gray-800">{formatISTDateTime(selectedPayment.refund_initiated_at)}</p>
                       </div>
                     )}
                   </div>
