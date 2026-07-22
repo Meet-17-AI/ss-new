@@ -7139,6 +7139,12 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
   const therapyName = payload.therapyName  || booking.booking_resource_name;
   const sessionMode = payload.sessionMode  || 'online';
   const checkinUrl  = booking.public_booking_checkin_url;
+  // Authoritative mode for the confirmation email: prefer the stored booking_mode
+  // (set from the client's original selection at booking time). Only fall back to
+  // the request payload's sessionMode when the stored mode is missing.
+  const isOnlineForEmail = booking.booking_mode
+    ? /online|meet|video/i.test(booking.booking_mode)
+    : (payload.sessionMode === 'online');
   // Duration shown in the email is derived from the same start/end instants that
   // build the Google Calendar event, so it always matches the calendar (15 min for
   // free consultations, 50 for therapy sessions). Falls back to 50 only if the
@@ -7158,6 +7164,7 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
         timeRangeStr: `${startTimeStr} - ${endTimeStr}`,
         duration: emailDurationMinutes,
         joinLink: hasCalendar ? meetLink : sessionMode,
+        isOnline: isOnlineForEmail,
         checkinUrl,
         calendarStartRaw: startAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z',
         calendarEndRaw:   endAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
@@ -7891,6 +7898,7 @@ app.post('/api/create-booking', async (req, res) => {
         timeRangeStr: `${startTimeStr} - ${endTimeStr}`,
         duration: sessionDurationMinutes,
         joinLink: hasCalendar ? meetLink : (payload.sessionMode || 'online'),
+        isOnline: payload.sessionMode === 'online',
         checkinUrl: publicBookingCheckinUrl,
         calendarStartRaw: startAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z',
         calendarEndRaw: endAt.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
@@ -10025,9 +10033,11 @@ function startPaymentLinkExpiryCron() {
   }, 60000); // Check every 60 seconds
 }
 
-// Start crons
-startPaymentLinkExpiryCron();
-startSessionRemindersCron();
+// Start crons (skipped when READONLY_BOOT=1 — local read-only dev boot, no client emails / prod writes)
+if (process.env.READONLY_BOOT !== '1') {
+  startPaymentLinkExpiryCron();
+  startSessionRemindersCron();
+}
 
 // ==================== END PAYMENT LINK EXPIRATION APIs ====================
 
@@ -10673,8 +10683,12 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 httpServer.listen(PORT as number, '0.0.0.0', async () => {
   console.log(`\nAPI server running on http://localhost:${PORT}`);
   console.log(`Allowed CORS origins: ${getAllowedOrigins().join(', ')}`);
-  await runStartupMigrations();
-  startPaymentLinkExpiryCron();
+  if (process.env.READONLY_BOOT !== '1') {
+    await runStartupMigrations();
+    startPaymentLinkExpiryCron();
+  } else {
+    console.log('[READONLY_BOOT] Skipped migrations + crons (no prod writes, no client emails).');
+  }
 }).on('error', (err: any) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`[ERROR] Port ${PORT} is already in use. Please use a different port or kill the process using this port.`);

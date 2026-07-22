@@ -465,9 +465,16 @@ export async function sendClientBookingConfirmationEmail(
     checkinUrl: string;
     calendarStartRaw: string;
     calendarEndRaw: string;
+    isOnline?: boolean;
   }
 ): Promise<void> {
   try {
+    // Mode shown in the email comes from the authoritative session mode (isOnline)
+    // when the caller provides it; only fall back to sniffing the join link for
+    // older callers that don't pass it. This prevents an in-person booking from
+    // being labelled "Google Meet" just because a meet link happened to be attached.
+    const hasMeetLink = Boolean(details.joinLink && details.joinLink.includes('http'));
+    const isOnlineSession = typeof details.isOnline === 'boolean' ? details.isOnline : hasMeetLink;
     const calendarLink = `https://www.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(details.sessionName)}&dates=${details.calendarStartRaw}/${details.calendarEndRaw}&location=${encodeURIComponent(details.joinLink)}`;
     
     const htmlContent = `
@@ -550,14 +557,16 @@ export async function sendClientBookingConfirmationEmail(
                 </div>
                 <div class="detail-item">
                     <span class="label">Location:</span>
-                    <span class="value">${details.joinLink && details.joinLink.includes('http') ? 'Google Meet' : 'In Person (Pune)'}</span>
+                    <span class="value">${isOnlineSession ? 'Google Meet' : 'In Person (Pune)'}</span>
                 </div>
 
                 <hr style="border: 0; border-top: 1px solid #dce8e6; margin: 15px 0;">
 
-                ${details.joinLink && details.joinLink.includes('http') 
+                ${hasMeetLink
                   ? `<a href="${details.joinLink}" class="btn btn-join">Join Session</a>`
-                  : `<span class="btn btn-join" style="background-color: #f2c730; color: #333333 !important;">In-Person Session</span>`
+                  : isOnlineSession
+                    ? `<span class="btn btn-join" style="background-color: #f2c730; color: #333333 !important;">Online Session</span>`
+                    : `<a href="https://maps.app.goo.gl/7zazUGoGirx3azdg8" class="btn btn-join" style="background-color: #f2c730; color: #333333 !important;">Get Directions</a>`
                 }
                 <a href="${details.checkinUrl}" class="btn btn-manage">Manage Booking</a>
             </div>
