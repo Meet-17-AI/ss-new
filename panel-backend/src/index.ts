@@ -2686,13 +2686,15 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
     const EXCL_SS = "";
-    // Sessions Completed KPI = PAID therapy sessions that actually occurred.
+    // Sessions Completed KPI = therapy sessions that actually occurred.
     // OCCURRED: end-time in the past, excluding cancelled / no-show / unpaid. COALESCE keeps
     // null-status dashboard-direct bookings in (any booking source counts, incl. manual/direct).
-    // PAID_TYPE: only paid therapy types (Individual + Adolescent); Free Consultation is free
-    // and is NOT part of the completed total (shown separately as an info line).
+    // PAID_TYPE: paid therapy types (Individual + Adolescent).
+    // COMPLETED_TYPE: the full Sessions Completed total = paid therapy + Free Consultation.
+    // The per-type breakdown lines (Individual + Adolescent + Free Consultation) sum to this total.
     const OCCURRED = "b.booking_end_at < NOW() + INTERVAL '5 hours 30 minutes' AND COALESCE(LOWER(b.booking_status),'') NOT IN ('cancelled','canceled','no_show','no show','payment_pending','payment_failed')";
     const PAID_TYPE = "(b.booking_resource_name ILIKE '%Individual Therapy%' OR b.booking_resource_name ILIKE '%Individual Session%' OR b.booking_resource_name ILIKE '%Adolescent Therapy%')";
+    const COMPLETED_TYPE = "(b.booking_resource_name ILIKE '%Individual Therapy%' OR b.booking_resource_name ILIKE '%Individual Session%' OR b.booking_resource_name ILIKE '%Adolescent Therapy%' OR b.booking_resource_name ILIKE '%Free Consultation%')";
 
     const revenue = hasDateFilter
       ? await pool.query(
@@ -2715,14 +2717,14 @@ app.get('/api/dashboard/stats', async (req, res) => {
         ['payment_pending', 'payment_failed']
       );
 
-    // Sessions Completed = PAID therapy sessions that occurred (Individual + Adolescent, any source)
+    // Sessions Completed = therapy sessions that occurred (Individual + Adolescent + Free Consultation, any source)
     const sessionsCompleted = hasDateFilter
       ? await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
+        `SELECT COUNT(*) as total FROM bookings b WHERE ${COMPLETED_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
         [start, `${end} 23:59:59`]
       )
       : await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS}`
+        `SELECT COUNT(*) as total FROM bookings b WHERE ${COMPLETED_TYPE} AND ${OCCURRED} ${EXCL_SS}`
       );
 
     const freeConsultations = hasDateFilter
@@ -2810,7 +2812,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
     );
 
     const lastMonthSessionsCompleted = await pool.query(
-      `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
+      `SELECT COUNT(*) as total FROM bookings b WHERE ${COMPLETED_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
       [lastMonthStart.toISOString(), lastMonthEnd.toISOString()]
     );
 
