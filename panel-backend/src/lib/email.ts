@@ -450,6 +450,113 @@ export async function sendAdminBookingConfirmationEmail(
 }
 
 /**
+ * Send booking confirmation email to the Therapist.
+ * Contains: client name, session name, session date/time (IST), session mode,
+ * and — only for online sessions — the Google Meet link. In-person sessions
+ * intentionally include no link.
+ */
+export async function sendTherapistBookingConfirmationEmail(
+  therapistEmail: string,
+  details: {
+    therapistName: string;
+    clientName: string;
+    sessionName: string;
+    sessionTiming: string; // already formatted IST string
+    isOnline: boolean;
+    meetLink?: string;
+  }
+): Promise<void> {
+  try {
+    const modeLabel = details.isOnline ? 'Google Meet (Online)' : 'In Person (SafeStories Office, Pune)';
+    const meetRow = details.isOnline && details.meetLink
+      ? `<div class="detail-item"><span class="label">Meet Link:</span><span class="value"><a href="${details.meetLink}" style="color:#1e6d63;">${details.meetLink}</a></span></div>`
+      : '';
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f9f9f9; }
+        .container { max-width: 480px; margin: 30px auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #d1d1d1; }
+        .header { text-align: center; padding: 35px 25px 15px; }
+        .brand { font-size: 32px; font-weight: bold; margin: 0; letter-spacing: -0.5px; }
+        .safe { color: #f2c730; }
+        .stories { color: #1e6d63; }
+        .confirmed { font-size: 16px; color: #666; margin-top: 8px; font-weight: 600; text-transform: uppercase; display: block; }
+        .intro-text { font-size: 15px; color: #555; margin-top: 15px; line-height: 1.5; }
+        .content { padding: 0 30px 30px; }
+        .details-box { background-color: #f0f6f5; border-radius: 10px; padding: 20px; margin: 20px 0; border: 1px solid #e2ecea; }
+        .detail-item { margin-bottom: 10px; font-size: 14px; display: flex; }
+        .label { font-weight: bold; color: #1e6d63; width: 100px; flex-shrink: 0; }
+        .value { color: #444; word-break: break-word; }
+        .btn-join { display: block; text-align: center; padding: 14px; border-radius: 8px; text-decoration: none; font-weight: bold; margin-top: 12px; font-size: 16px; background-color: #1e6d63; color: #ffffff !important; }
+        .footer { text-align: center; padding: 25px; background-color: #ffffff; border-top: 1px solid #f0f0f0; }
+        .slogan { font-style: italic; color: #1e6d63; margin: 0; font-size: 15px; font-weight: 500; }
+        .signature { margin-top: 5px; font-size: 14px; color: #888; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="brand"><span class="safe">Safe</span><span class="stories">Stories</span></div>
+            <strong class="confirmed">New Session Confirmed</strong>
+            <p class="intro-text">
+                Hello <strong>${details.therapistName}</strong>, a new session has been confirmed and added to your schedule.
+            </p>
+        </div>
+
+        <div class="content">
+            <div class="details-box">
+                <div class="detail-item">
+                    <span class="label">Client:</span>
+                    <span class="value">${details.clientName}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="label">Session:</span>
+                    <span class="value">${details.sessionName}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="label">Date &amp; Time:</span>
+                    <span class="value">${details.sessionTiming}</span>
+                </div>
+                <div class="detail-item">
+                    <span class="label">Mode:</span>
+                    <span class="value">${modeLabel}</span>
+                </div>
+                ${meetRow}
+                ${details.isOnline && details.meetLink
+                  ? `<a href="${details.meetLink}" class="btn-join">Join Session</a>`
+                  : ''}
+            </div>
+        </div>
+
+        <div class="footer">
+            <p class="slogan">Always there for your mental health.</p>
+            <p class="signature"><strong>Team SafeStories</strong></p>
+        </div>
+    </div>
+</body>
+</html>
+    `;
+
+    const mailOptions = {
+      from: 'SafeStories <therapy@safestories.in>',
+      to: therapistEmail,
+      subject: `New Session Confirmed: ${details.sessionName}`,
+      html: htmlContent,
+    };
+
+    await sendEmailWithLogging(mailOptions, `Therapist Booking Confirmation (${details.sessionName})`);
+  } catch (error) {
+    console.error('❌ Error sending therapist booking confirmation email:', error);
+    throw error;
+  }
+}
+
+/**
  * Send booking confirmation email to Client
  */
 export async function sendClientBookingConfirmationEmail(

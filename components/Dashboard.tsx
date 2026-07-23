@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, UserCog, Calendar, CreditCard, LogOut, PieChart, MessageCircle, ChevronUp, ChevronDown, FileText, Bell, Copy, Send, Plus, User, Eye, AlertCircle, X, RefreshCw, Settings, FileWarning, LifeBuoy, UserPlus, Headphones } from 'lucide-react';
+import { LayoutDashboard, Users, UserCog, Calendar, CreditCard, LogOut, PieChart, MessageCircle, ChevronUp, ChevronDown, FileText, Bell, Copy, Send, Plus, User, Eye, AlertCircle, X, RefreshCw, Settings, FileWarning, LifeBuoy, UserPlus, Headphones, Headset } from 'lucide-react';
 import { Logo } from './Logo';
 import { AllClients } from './AllClients';
 import { AllTherapists } from './AllTherapists';
@@ -114,6 +114,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
     { title: 'No Show', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'no_show' },
     { title: 'Free Consultations', value: '0', lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'free_consultation' },
   ]);
+  const [dashboardMetrics, setDashboardMetrics] = useState<any>(null);
   const [bookings, setBookings] = useState<any[]>([]);
 
   const formatClientName = (name: string): string => {
@@ -379,6 +380,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
         { title: 'No Show', value: (statsData.noShows || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'no_show' },
         { title: 'Free Consultations', value: (statsData.freeConsultations || 0).toString(), lastMonth: '0', clickable: true, targetView: 'appointments', targetTab: 'free_consultation' },
       ]);
+      setDashboardMetrics(statsData);
 
       // Fetch all bookings (with a high limit to get total count)
       const bookingsRes = await fetch(`/api/dashboard/bookings?limit=1000`);
@@ -509,7 +511,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               className="p-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors relative"
               title="Tickets"
             >
-              <Headphones size={24} />
+              <Headset size={24} />
             </button>
             
             <NotificationBell
@@ -710,34 +712,100 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               </div>
             </div>
 
-            {/* Stats Grid */}
-            <div className="grid grid-cols-4 gap-4 mb-8">
-              {stats.filter(stat => !(user?.username === 'Test' && (stat.title === 'Revenue' || stat.title === 'Refunded'))).map((stat, index) => (
-                <div
-                  key={index}
-                  className={`bg-white rounded-lg p-6 border ${stat.clickable ? 'cursor-pointer hover:shadow-md transition-shadow' : ''
-                    }`}
-                  onClick={() => {
-                    if (stat.clickable) {
-                      resetAllStates();
-                      navigate(`/admin/${stat.targetView}`);
-                      if (stat.targetView === 'appointments' && stat.targetTab) {
-                        setAppointmentTab(stat.targetTab);
-                      } else if (stat.targetView === 'refunds' && stat.targetTab) {
-                        setRefundTab(stat.targetTab);
-                      }
-                    }
-                  }}
-                >
-                  <div className="text-sm text-gray-600 mb-2">{stat.title}</div>
-                  <CountUpNumber
-                    value={stat.value}
-                    prefix={(stat.title.includes('Revenue') || stat.title.includes('Refunded')) ? '₹' : ''}
-                    className="text-3xl font-bold"
-                  />
+            {/* Stats Rows */}
+            {dashboardMetrics && user?.username !== 'Test' && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                {/* Collection Card */}
+                <div className="bg-white rounded-lg border-2 border-teal-700/20 shadow-sm p-8 flex flex-col">
+                  <div className="mb-8">
+                    <h3 className="text-lg text-gray-700 mb-2 font-medium">Collection</h3>
+                    <div className="text-4xl font-extrabold text-black tracking-tight">
+                      ₹{Number(dashboardMetrics.revenue || 0).toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-6 mt-auto">
+                    <div>
+                      <div className="text-xl font-bold text-gray-500 mb-1">
+                        - ₹{Number(dashboardMetrics.refundedAmount || 0).toLocaleString('en-IN')}
+                      </div>
+                      <div className="text-xs text-gray-500 font-medium uppercase tracking-wider">Refunds</div>
+                    </div>
+                    <div className="pt-4 border-t border-gray-100">
+                      <div className="text-xl font-bold text-gray-700 mb-1">
+                        = ₹{Number((dashboardMetrics.revenue || 0) - (dashboardMetrics.refundedAmount || 0)).toLocaleString('en-IN')}
+                      </div>
+                      <div className="text-xs text-gray-700 font-medium uppercase tracking-wider">Net Revenue</div>
+                    </div>
+                  </div>
                 </div>
-              ))}
-            </div>
+
+                {/* Bookings Card */}
+                <div className="bg-white rounded-lg border-2 border-teal-700/20 shadow-sm p-8 flex flex-col">
+                  <div className="mb-8">
+                    <h3 className="text-lg text-gray-700 mb-2 font-medium">Bookings</h3>
+                    <div className="text-4xl font-extrabold text-black tracking-tight">
+                      {Number(dashboardMetrics.bookings || 0).toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-4 mt-auto">
+                    <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                      <div className="text-sm text-gray-600 font-medium">Cancellation</div>
+                      <div className="text-base font-bold text-gray-700">
+                        {Number(dashboardMetrics.cancelled || 0).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                      <div className="text-sm text-gray-600 font-medium">No Show</div>
+                      <div className="text-base font-bold text-gray-700">
+                        {Number(dashboardMetrics.noShows || 0).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                      <div className="text-sm text-gray-600 font-medium">Free Consultation</div>
+                      <div className="text-base font-bold text-gray-700">
+                        {Number(dashboardMetrics.freeConsultations || 0).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center pt-1">
+                      <div className="text-sm text-gray-600 font-medium">Session Completed</div>
+                      <div className="text-base font-bold text-gray-700">
+                        {Number(dashboardMetrics.sessionsCompleted || 0).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Session Completed Card */}
+                <div className="bg-white rounded-lg border-2 border-teal-700/20 shadow-sm p-8 flex flex-col">
+                  <div className="mb-8">
+                    <h3 className="text-lg text-gray-700 mb-2 font-medium">Session Completed</h3>
+                    <div className="text-4xl font-extrabold text-black tracking-tight">
+                      {Number(dashboardMetrics.sessionsCompleted || 0).toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-4 mt-auto">
+                    <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                      <div className="text-sm text-gray-600 font-medium">Individual Therapy</div>
+                      <div className="text-base font-bold text-gray-700">
+                        {Number(dashboardMetrics.individualTherapyCompleted || 0).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                      <div className="text-sm text-gray-600 font-medium">Adolescent Therapy</div>
+                      <div className="text-base font-bold text-gray-700">
+                        {Number(dashboardMetrics.adolescentTherapyCompleted || 0).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center pt-1">
+                      <div className="text-sm text-gray-600 font-medium">Free Consultation</div>
+                      <div className="text-base font-bold text-gray-700">
+                        {Number(dashboardMetrics.freeConsultationCompleted || 0).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Upcoming Sessions */}
             <div className="bg-white rounded-lg border">

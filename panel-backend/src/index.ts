@@ -13,7 +13,7 @@ import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from './lib/timezone';
 import { uploadFile } from './lib/minio';
-import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendClientBookingCancellationEmail, sendPaymentLinkEmail, sendIssueReportEmail } from './lib/email';
+import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendTherapistBookingConfirmationEmail, sendClientBookingCancellationEmail, sendPaymentLinkEmail, sendIssueReportEmail } from './lib/email';
 import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage, sendSessionFeedbackRequest, sendPostSessionTherapistForm } from './automations/index';
 import { generateAdminOTP, verifyAdminOTP } from './otp';
 import { logWebhookApi } from './lib/webhookApiLogger.js';
@@ -1227,18 +1227,37 @@ app.post('/api/report-issue', async (req, res) => {
 // List all tickets (admin ticket inbox). Optional ?status= filter.
 app.get('/api/report-issues', async (req, res) => {
   try {
-    const { status } = req.query;
+    const { status, reported_by } = req.query;
     const params: any[] = [];
-    let where = '';
-    if (status && status !== 'all') { params.push(status); where = 'WHERE status = $1'; }
+    const conditions: string[] = [];
+
+    if (status && status !== 'all') { 
+      params.push(status); 
+      conditions.push(`status = $${params.length}`); 
+    }
+
+    if (reported_by) {
+      params.push(reported_by);
+      conditions.push(`reported_by = $${params.length}`);
+    }
+
+    const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
+
     const result = await pool.query(
       `SELECT id, subject, component, description, screenshot_url, reported_by, user_role,
               status, notes, created_at, updated_at, resolved_at
        FROM report_issues ${where} ORDER BY created_at DESC`,
       params
     );
+
     // Status counts for the tab badges
-    const counts = await pool.query(`SELECT status, COUNT(*)::int n FROM report_issues GROUP BY status`);
+    let countWhere = '';
+    let countParams: any[] = [];
+    if (reported_by) {
+      countParams.push(reported_by);
+      countWhere = 'WHERE reported_by = $1';
+    }
+    const counts = await pool.query(`SELECT status, COUNT(*)::int n FROM report_issues ${countWhere} GROUP BY status`, countParams);
     const countMap: Record<string, number> = {};
     counts.rows.forEach((r: any) => { countMap[r.status] = r.n; });
     res.json({ tickets: result.rows, counts: countMap });
@@ -2667,6 +2686,13 @@ app.get('/api/dashboard/stats', async (req, res) => {
     const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
     const EXCL_SS = "";
+    // Sessions Completed KPI = PAID therapy sessions that actually occurred.
+    // OCCURRED: end-time in the past, excluding cancelled / no-show / unpaid. COALESCE keeps
+    // null-status dashboard-direct bookings in (any booking source counts, incl. manual/direct).
+    // PAID_TYPE: only paid therapy types (Individual + Adolescent); Free Consultation is free
+    // and is NOT part of the completed total (shown separately as an info line).
+    const OCCURRED = "b.booking_end_at < NOW() + INTERVAL '5 hours 30 minutes' AND COALESCE(LOWER(b.booking_status),'') NOT IN ('cancelled','canceled','no_show','no show','payment_pending','payment_failed')";
+    const PAID_TYPE = "(b.booking_resource_name ILIKE '%Individual Therapy%' OR b.booking_resource_name ILIKE '%Individual Session%' OR b.booking_resource_name ILIKE '%Adolescent Therapy%')";
 
     const revenue = hasDateFilter
       ? await pool.query(
@@ -2689,15 +2715,14 @@ app.get('/api/dashboard/stats', async (req, res) => {
         ['payment_pending', 'payment_failed']
       );
 
-    // Sessions Completed - exclude safestories
+    // Sessions Completed = PAID therapy sessions that occurred (Individual + Adolescent, any source)
     const sessionsCompleted = hasDateFilter
       ? await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE b.booking_end_at < NOW() + INTERVAL '5 hours 30 minutes' AND b.booking_status NOT IN ($1, $2, $3, $4, $5, $6) ${EXCL_SS} AND b.booking_start_at BETWEEN $7 AND $8`,
-        ['cancelled', 'canceled', 'no_show', 'no show', 'payment_pending', 'payment_failed', start, `${end} 23:59:59`]
+        `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
+        [start, `${end} 23:59:59`]
       )
       : await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE b.booking_end_at < NOW() + INTERVAL '5 hours 30 minutes' AND b.booking_status NOT IN ($1, $2, $3, $4, $5, $6) ${EXCL_SS}`,
-        ['cancelled', 'canceled', 'no_show', 'no show', 'payment_pending', 'payment_failed']
+        `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS}`
       );
 
     const freeConsultations = hasDateFilter
@@ -2708,6 +2733,36 @@ app.get('/api/dashboard/stats', async (req, res) => {
       : await pool.query(
         `SELECT COUNT(*) as total FROM bookings WHERE (invitee_payment_amount = 0 OR invitee_payment_amount IS NULL) AND booking_status NOT IN ($1, $2)`,
         ['payment_pending', 'payment_failed']
+      );
+
+    // Per-type = sessions of that type that occurred (same OCCURRED filter as the paid total).
+    // Individual + Adolescent sum to Sessions Completed. Free Consultation is a free-type info
+    // line and is intentionally NOT part of that total.
+    const individualTherapyCompleted = hasDateFilter
+      ? await pool.query(
+        `SELECT COUNT(*) as total FROM bookings b WHERE (b.booking_resource_name ILIKE '%Individual Therapy%' OR b.booking_resource_name ILIKE '%Individual Session%') AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
+        [start, `${end} 23:59:59`]
+      )
+      : await pool.query(
+        `SELECT COUNT(*) as total FROM bookings b WHERE (b.booking_resource_name ILIKE '%Individual Therapy%' OR b.booking_resource_name ILIKE '%Individual Session%') AND ${OCCURRED} ${EXCL_SS}`
+      );
+
+    const adolescentTherapyCompleted = hasDateFilter
+      ? await pool.query(
+        `SELECT COUNT(*) as total FROM bookings b WHERE b.booking_resource_name ILIKE '%Adolescent Therapy%' AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
+        [start, `${end} 23:59:59`]
+      )
+      : await pool.query(
+        `SELECT COUNT(*) as total FROM bookings b WHERE b.booking_resource_name ILIKE '%Adolescent Therapy%' AND ${OCCURRED} ${EXCL_SS}`
+      );
+
+    const freeConsultationCompleted = hasDateFilter
+      ? await pool.query(
+        `SELECT COUNT(*) as total FROM bookings b WHERE b.booking_resource_name ILIKE '%Free Consultation%' AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
+        [start, `${end} 23:59:59`]
+      )
+      : await pool.query(
+        `SELECT COUNT(*) as total FROM bookings b WHERE b.booking_resource_name ILIKE '%Free Consultation%' AND ${OCCURRED} ${EXCL_SS}`
       );
 
     const cancelled = hasDateFilter
@@ -2755,8 +2810,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
     );
 
     const lastMonthSessionsCompleted = await pool.query(
-      `SELECT COUNT(*) as total FROM bookings b WHERE b.booking_end_at < NOW() + INTERVAL '5 hours 30 minutes' AND b.booking_status NOT IN ($1, $2, $3, $4, $5, $6) ${EXCL_SS} AND b.booking_start_at BETWEEN $7 AND $8`,
-      ['cancelled', 'canceled', 'no_show', 'no show', 'payment_pending', 'payment_failed', lastMonthStart.toISOString(), lastMonthEnd.toISOString()]
+      `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
+      [lastMonthStart.toISOString(), lastMonthEnd.toISOString()]
     );
 
     const lastMonthFreeConsultations = await pool.query(
@@ -2793,6 +2848,9 @@ app.get('/api/dashboard/stats', async (req, res) => {
       lastMonthRefunds: lastMonthRefunds.rows[0].total,
       noShows: noShows.rows[0].total,
       lastMonthNoShows: lastMonthNoShows.rows[0].total,
+      individualTherapyCompleted: individualTherapyCompleted.rows[0].total,
+      adolescentTherapyCompleted: adolescentTherapyCompleted.rows[0].total,
+      freeConsultationCompleted: freeConsultationCompleted.rows[0].total,
     };
 
     res.json(responseData);
@@ -7178,6 +7236,33 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
         sessionName: therapyName, sessionTiming: hostTime, sessionMode: sessionMode,
         therapistName, therapistEmail: therapist?.contact_info || 'Not available'
       });
+
+      // Notify the therapist of the confirmed session (best-effort; only if we have their email)
+      const therapistEmailAddr = therapist?.contact_info;
+      if (therapistEmailAddr) {
+        // Meet link: prefer the freshly-generated one, else the link already stored on the
+        // booking. Most online bookings arrive from DaySchedule with booking_joining_link
+        // already set and no regenerated meetLink, so the stored link is the reliable source.
+        // Only attach a link for online sessions (authoritative check via booking_mode).
+        const therapistMeetLink = isOnlineForEmail
+          ? (meetLink || booking.booking_joining_link || undefined)
+          : undefined;
+        await sendTherapistBookingConfirmationEmail(therapistEmailAddr, {
+          therapistName: therapist?.name || therapistName,
+          clientName,
+          sessionName: therapyName,
+          sessionTiming: hostTime,
+          isOnline: isOnlineForEmail,
+          meetLink: therapistMeetLink,
+        });
+        await client.query(
+          `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at)
+           VALUES ($1,$2,$3,$4,$5,CURRENT_TIMESTAMP)`,
+          [bookingId, 'therapist_confirmation_email', therapistEmailAddr, 'success', JSON.stringify({ sent: true })]
+        );
+      } else {
+        console.warn(`[verify-payment] No therapist email for booking ${bookingId}; skipped therapist confirmation email.`);
+      }
     } catch (emailErr) {
       console.error('[verify-payment] Email send failed:', emailErr);
     }
@@ -7922,6 +8007,26 @@ app.post('/api/create-booking', async (req, res) => {
         `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
         [booking_id, 'admin_confirmation_email', adminEmailTarget, 'success', JSON.stringify({ sent: true })]
       );
+
+      // Notify the therapist of the confirmed session (best-effort; only if we have their email)
+      const therapistEmailAddr = therapist?.contact_info;
+      if (therapistEmailAddr) {
+        const isOnlineSession = payload.sessionMode === 'online';
+        await sendTherapistBookingConfirmationEmail(therapistEmailAddr, {
+          therapistName: therapist?.name || therapistName,
+          clientName: payload.clientName || 'Unknown Client',
+          sessionName: payload.therapyName || 'Session',
+          sessionTiming: hostTime,
+          isOnline: isOnlineSession,
+          meetLink: isOnlineSession && hasCalendar ? (meetLink || undefined) : undefined,
+        });
+        await pool.query(
+          `INSERT INTO automation_logs (booking_id, automation_type, recipient, status, response_data, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+          [booking_id, 'therapist_confirmation_email', therapistEmailAddr, 'success', JSON.stringify({ sent: true })]
+        );
+      } else {
+        console.warn(`[Create Booking] No therapist email for booking ${booking_id}; skipped therapist confirmation email.`);
+      }
     } catch (emailErr: any) {
       console.error('[Create Booking] Failed to send confirmation email:', emailErr);
       await pool.query(
