@@ -227,135 +227,59 @@ const CalendarConnectionsAdmin: React.FC = () => {
 const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, user }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const activeTab = location.pathname.split('/').pop() || 'menu';
-
-  // handleBack redirects to the main appSettings (menu) or parent
-  const handleBack = () => {
-    if (activeTab === 'appSettings' || activeTab === 'menu') {
-      onBack();
-    } else {
-      navigate('/admin/appSettings');
+  
+  useEffect(() => {
+    if (location.pathname === '/admin/appSettings' || location.pathname === '/admin/appSettings/') {
+      navigate('/admin/appSettings/therapy-calendars', { replace: true });
     }
-  };
+  }, [location.pathname, navigate]);
+
+  const activeTab = location.pathname.split('/').pop() || '';
+
+  const tabs = [
+    { id: 'therapy-calendars', label: 'Therapy Calendars' },
+    { id: 'calendars', label: 'Calendar Connection' },
+    { id: 'payments', label: 'Payment Gateway' },
+    { id: 'audit', label: 'Audit Logs' }
+  ];
 
   return (
     <div className="p-8 h-full flex flex-col bg-gray-50">
       <div className="flex items-center gap-4 mb-8">
-        <button onClick={handleBack} className="p-2 hover:bg-gray-200 rounded-full transition-colors">
+        <button onClick={onBack} className="p-2 hover:bg-gray-200 rounded-full transition-colors">
           <ArrowLeft size={24} className="text-gray-700" />
         </button>
-        <h1 className="text-3xl font-bold">
-          {activeTab === 'menu' 
-            ? 'Settings' 
-            : activeTab === 'report' 
-            ? 'Report an Issue' 
-            : activeTab === 'audit' 
-            ? 'Audit Logs' 
-            : activeTab === 'therapies'
-            ? 'Therapies Management'
-            : activeTab === 'payments'
-            ? 'Payment Gateways'
-            : 'Calendar Connections'}
-        </h1>
+        <h1 className="text-3xl font-bold">Settings</h1>
       </div>
 
-      <Routes>
-        <Route path="" element={
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <div 
-              onClick={() => navigate('/admin/appSettings/report')} 
-              className="bg-white p-8 rounded-xl border border-gray-200 shadow-sm cursor-pointer hover:shadow-md hover:border-teal-500 transition-all flex flex-col items-center justify-center text-center gap-4 group"
-            >
-              <div className="w-16 h-16 bg-teal-50 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                <AlertCircle size={32} className="text-teal-700" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-gray-800">Report an Issue</h3>
-                <p className="text-sm text-gray-500 mt-2">Submit bug reports, feature requests, or general feedback</p>
-              </div>
-            </div>
+      <div className="flex gap-4 mb-6 border-b">
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => navigate(`/admin/appSettings/${tab.id}`)}
+            className={`pb-3 px-4 font-medium transition-colors ${
+              activeTab === tab.id || (activeTab === 'new' && tab.id === 'therapy-calendars') || (activeTab !== 'menu' && !tabs.find(t=>t.id===activeTab) && tab.id === 'therapy-calendars')
+                ? 'text-teal-700 border-b-2 border-teal-700'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-            <div 
-              onClick={() => navigate('/admin/appSettings/audit')} 
-              className="bg-white p-8 rounded-xl border border-gray-200 shadow-sm cursor-pointer hover:shadow-md hover:border-teal-500 transition-all flex flex-col items-center justify-center text-center gap-4 group"
-            >
-              <div className="w-16 h-16 bg-teal-50 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                <FileText size={32} className="text-teal-700" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-gray-800">Audit Logs</h3>
-                <p className="text-sm text-gray-500 mt-2">Track and monitor all therapist activities and system changes</p>
-              </div>
-            </div>
-
-            <div 
-              onClick={() => navigate('/admin/appSettings/calendars')}
-              className="bg-white p-8 rounded-xl border border-gray-200 shadow-sm cursor-pointer hover:shadow-md hover:border-teal-500 transition-all flex flex-col items-center justify-center text-center gap-4 group"
-            >
-              <div className="w-16 h-16 bg-teal-50 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                <Calendar size={32} className="text-teal-700" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-gray-800">Calendar Connections</h3>
-                <p className="text-sm text-gray-500 mt-2">Manage Google Calendar sync and connections for all therapists</p>
-              </div>
-            </div>
-
-            <div 
-              onClick={() => navigate('/admin/appSettings/therapy-calendars')}
-              className="bg-white p-8 rounded-xl border border-gray-200 shadow-sm cursor-pointer hover:shadow-md hover:border-teal-500 transition-all flex flex-col items-center justify-center text-center gap-4 group"
-            >
-              <div className="w-16 h-16 bg-teal-50 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                <Calendar size={32} className="text-teal-700" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-gray-800">Therapy Calendars</h3>
-                <p className="text-sm text-gray-500 mt-2">Manage and view all therapy calendars</p>
-              </div>
-            </div>
-
-            <div 
-              onClick={() => navigate('/admin/appSettings/payments')} 
-              className="bg-white p-8 rounded-xl border border-gray-200 shadow-sm cursor-pointer hover:shadow-md hover:border-teal-500 transition-all flex flex-col items-center justify-center text-center gap-4 group"
-            >
-              <div className="w-16 h-16 bg-teal-50 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                <CreditCard size={32} className="text-teal-700" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-gray-800">Payment Gateways</h3>
-                <p className="text-sm text-gray-500 mt-2">Configure Razorpay and set active payment methods</p>
-              </div>
-            </div>
-
-          </div>
-        } />
-
-        <Route path="*" element={
-          <div className="bg-white rounded-xl border shadow-sm flex-1 flex flex-col overflow-hidden">
-            <div className="flex-1 overflow-auto relative">
-              <Routes>
-                <Route path="report" element={
-                  <ReportIssuePage 
-                    onBack={handleBack} 
-                    userInfo={{
-                      username: user?.full_name || user?.username || 'Admin',
-                      role: 'Admin'
-                    }}
-                    hideHeader={true}
-                  />
-                } />
-                <Route path="audit" element={<AuditLogs hideHeader={true} />} />
-                <Route path="therapies" element={<TherapiesManagementPage />} />
-                <Route path="calendars" element={<CalendarConnectionsAdmin />} />
-                <Route path="payments" element={<PaymentSettings />} />
-                <Route path="therapy-calendars" element={<TherapyCalendars />} />
-                <Route path="therapy-calendars/new" element={<TherapyCalendarDetails />} />
-                <Route path="therapy-calendars/:id" element={<TherapyCalendarDetails />} />
-              </Routes>
-            </div>
-          </div>
-        } />
-      </Routes>
+      <div className="bg-white rounded-xl border shadow-sm flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 overflow-auto relative">
+          <Routes>
+            <Route path="audit" element={<AuditLogs hideHeader={true} />} />
+            <Route path="calendars" element={<CalendarConnectionsAdmin />} />
+            <Route path="payments" element={<PaymentSettings />} />
+            <Route path="therapy-calendars" element={<TherapyCalendars />} />
+            <Route path="therapy-calendars/new" element={<TherapyCalendarDetails />} />
+            <Route path="therapy-calendars/:id" element={<TherapyCalendarDetails />} />
+          </Routes>
+        </div>
+      </div>
     </div>
   );
 };

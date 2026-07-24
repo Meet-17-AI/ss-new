@@ -277,36 +277,7 @@ export const ChangePassword: React.FC<ChangePasswordProps> = ({ onBack, user, hi
         </>
       )}
 
-      {/* Tabs */}
-      <div className="flex gap-4 mb-6 border-b">
-        <button
-          onClick={() => {
-            setActiveTab('change');
-            setPasswordError('');
-          }}
-          className={`pb-3 px-4 font-medium ${
-            activeTab === 'change'
-              ? 'text-teal-700 border-b-2 border-teal-700'
-              : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          Change Password
-        </button>
-        <button
-          onClick={() => {
-            setActiveTab('forgot');
-            setPasswordError('');
-          }}
-          className={`pb-3 px-4 font-medium ${
-            activeTab === 'forgot'
-              ? 'text-teal-700 border-b-2 border-teal-700'
-              : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          Forgot Password
-        </button>
-      </div>
-
+      {/* Removed Tabs */}
       <div className="bg-white rounded-lg border p-6">
         {activeTab === 'change' ? (
           <form onSubmit={handleChangePassword} className="space-y-4">
@@ -388,14 +359,26 @@ export const ChangePassword: React.FC<ChangePasswordProps> = ({ onBack, user, hi
               </div>
             </div>
 
-            {/* Submit Button */}
-            <button
-              type="submit"
-              disabled={updatingPassword}
-              className="w-full bg-teal-700 text-white py-3 rounded-lg hover:bg-teal-800 font-medium disabled:bg-gray-400 disabled:cursor-not-allowed mt-6"
-            >
-              {updatingPassword ? 'Updating...' : 'Update Password'}
-            </button>
+            {/* Submit Button & Forgot Password */}
+            <div className="mt-6 flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('forgot');
+                  setPasswordError('');
+                }}
+                className="text-sm font-semibold text-teal-700 hover:text-teal-800 text-left w-fit"
+              >
+                Forgot password?
+              </button>
+              <button
+                type="submit"
+                disabled={updatingPassword}
+                className="w-full bg-teal-700 text-white py-3 rounded-lg hover:bg-teal-800 font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {updatingPassword ? 'Updating...' : 'Update Password'}
+              </button>
+            </div>
           </form>
         ) : (
           <>
@@ -409,6 +392,16 @@ export const ChangePassword: React.FC<ChangePasswordProps> = ({ onBack, user, hi
                 <p className="text-sm text-gray-600 mb-4">
                   Enter your email address and we'll send you an OTP to reset your password.
                 </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('change');
+                    setPasswordError('');
+                  }}
+                  className="text-sm font-semibold text-teal-700 hover:text-teal-800 text-left w-fit mb-2 block"
+                >
+                  &larr; Back to Change Password
+                </button>
                 <div>
                   <label className="block text-sm font-semibold mb-1.5">
                     Email Address<span className="text-red-500">*</span>

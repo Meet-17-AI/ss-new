@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, Calendar, LogOut, PieChart, ChevronUp, ChevronDown, ChevronRight, Copy, Send, Search, FileText, Bell, X, User, CalendarIcon, ArrowLeft, Mail, Eye, EyeOff, Edit, Download, MessageCircle } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, LogOut, PieChart, ChevronUp, ChevronDown, ChevronRight, Copy, Send, Search, FileText, Bell, X, User, CalendarIcon, ArrowLeft, Mail, Eye, EyeOff, Edit, Download, MessageCircle, Headset } from 'lucide-react';
 import { Logo } from './Logo';
 import { Notifications } from './Notifications';
 import { Toast } from './Toast';
@@ -25,6 +25,7 @@ import { isAwaitingPayment } from '../lib/bookingStatus';
 import EditEvent from './EditEvent';
 import { BookingPage } from './BookingPage';
 import { NotificationBell } from './NotificationBell';
+import { TicketsPage } from './TicketsPage';
 
 import { Routes, Route, useNavigate, useLocation, Navigate, useSearchParams } from 'react-router-dom';
 import { useSocket } from '../context/SocketContext';
@@ -2438,88 +2439,100 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           </div>
 
         </nav>
-
-        <div className="p-4 border-t relative" ref={profileMenuRef}>
-          {/* Profile Dropdown Menu */}
-          {showProfileMenu && (
-            <div className="absolute bottom-full left-4 right-4 mb-2 bg-white border rounded-lg shadow-lg z-50">
-              <button
-                onClick={() => {
-                  if (!isProfileUnderReview) {
-                    setShowProfileMenu(false);
-                    setActiveView('settings');
-                  }
-                }}
-                disabled={isProfileUnderReview}
-                className={`w-full px-4 py-3 text-left flex items-center gap-3 border-b ${isProfileUnderReview
-                  ? 'bg-gray-100 cursor-not-allowed opacity-60'
-                  : 'hover:bg-gray-50 cursor-pointer'
-                  }`}
-              >
-                <Edit size={18} className="text-gray-600" />
-                <span className="text-sm font-medium">Edit Profile</span>
-                {isProfileUnderReview && (
-                  <span className="ml-auto text-xs text-gray-500">(Disabled)</span>
-                )}
-              </button>
-              <button
-                onClick={() => {
-                  if (!isProfileUnderReview) {
-                    setShowProfileMenu(false);
-                    setActiveView('changePassword');
-                  }
-                }}
-                disabled={isProfileUnderReview}
-                className={`w-full px-4 py-3 text-left flex items-center gap-3 ${isProfileUnderReview
-                  ? 'bg-gray-100 cursor-not-allowed opacity-60'
-                  : 'hover:bg-gray-50 cursor-pointer'
-                  }`}
-              >
-                <Eye size={18} className="text-gray-600" />
-                <span className="text-sm font-medium">Change/Forgot Password</span>
-                {isProfileUnderReview && (
-                  <span className="ml-auto text-xs text-gray-500">(Disabled)</span>
-                )}
-              </button>
-            </div>
-          )}
-
-          {/* Profile Box */}
-          <div
-            className="flex items-center gap-3 rounded-lg p-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: '#2D757930' }}
-            onClick={() => setShowProfileMenu(!showProfileMenu)}
-          >
-            {profilePictureUrl ? (
-              <img
-                src={profilePictureUrl}
-                alt="Profile"
-                className="w-10 h-10 rounded-lg object-cover"
-              />
-            ) : (
-              <div className="w-10 h-10 bg-orange-400 rounded-lg flex items-center justify-center">
-                <Users size={20} className="text-white" />
-              </div>
-            )}
-            <div className="flex-1">
-              <div className="font-semibold text-sm">{user.full_name || user.username}</div>
-              <div className="text-xs text-gray-600">Role: {user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : 'Therapist'}</div>
-            </div>
-            <LogOut size={18} className="text-red-500 cursor-pointer" onClick={async (e) => {
-              e.stopPropagation();
-              await fetch('/api/logout', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user })
-              });
-              onLogout();
-            }} />
-          </div>
-        </div>
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-auto relative">
+      <div className="flex-1 flex flex-col overflow-hidden relative bg-gray-50">
+        
+        {/* Global Header */}
+        <header className="bg-white border-b px-8 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm">
+          <div className="flex-1"></div>
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => setActiveView('tickets')}
+              className="p-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors relative"
+              title="Tickets"
+            >
+              <Headset size={24} />
+            </button>
+            <NotificationBell
+              userId={user?.id}
+              userRole="therapist"
+              onViewAll={() => setActiveView('notifications')}
+            />
+
+            <div className="relative" ref={profileMenuRef}>
+              <div
+                className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded-lg transition-colors border ml-2 cursor-pointer"
+                onClick={() => setShowProfileMenu(!showProfileMenu)}
+              >
+                {/* Reusing existing profilePictureUrl if added later, else standard fallback */}
+                <div className="w-8 h-8 rounded-full bg-teal-600 flex items-center justify-center font-bold text-sm text-white">
+                  {user?.full_name?.charAt(0) || user?.username?.charAt(0) || 'A'}
+                </div>
+                <span className="text-sm font-medium text-gray-700 hidden sm:block">
+                  {user?.full_name || user?.username}
+                </span>
+                <ChevronDown size={16} className="text-gray-500" />
+              </div>
+
+              {/* Profile Dropdown Menu */}
+              {showProfileMenu && (
+                <div className="absolute right-0 mt-2 w-48 bg-white border rounded-xl shadow-lg py-1 z-50">
+                  <div className="px-4 py-2 border-b">
+                    <p className="text-sm font-medium text-gray-900 truncate">
+                      {user?.full_name || user?.username}
+                    </p>
+                    <p className="text-xs text-gray-500 truncate">{user?.role ? user.role.charAt(0).toUpperCase() + user.role.slice(1) : 'Therapist'}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (!isProfileUnderReview) {
+                        setShowProfileMenu(false);
+                        setActiveView('settings');
+                      }
+                    }}
+                    disabled={isProfileUnderReview}
+                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 ${isProfileUnderReview ? 'text-gray-400 cursor-not-allowed' : 'text-gray-700 hover:bg-teal-50 hover:text-teal-700 transition-colors'}`}
+                  >
+                    <Edit size={16} />
+                    Edit Profile
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!isProfileUnderReview) {
+                        setShowProfileMenu(false);
+                        setActiveView('changePassword');
+                      }
+                    }}
+                    disabled={isProfileUnderReview}
+                    className={`w-full text-left px-4 py-2 text-sm flex items-center gap-2 ${isProfileUnderReview ? 'text-gray-400 cursor-not-allowed' : 'text-gray-700 hover:bg-teal-50 hover:text-teal-700 transition-colors'}`}
+                  >
+                    <Eye size={16} />
+                    Change/Forgot Password
+                  </button>
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      await fetch('/api/logout', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ user })
+                      });
+                      onLogout();
+                    }}
+                    className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2"
+                  >
+                    <LogOut size={16} />
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-auto relative p-0 m-0">
         {selectedClient ? (
           <div className="p-8 h-full overflow-auto">
             {/* Header with Back Button */}
@@ -3136,6 +3149,8 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
               </div>
             </div>
           </div>
+        ) : activeView === 'tickets' ? (
+          <TicketsPage userRole="therapist" user={user} />
         ) : activeView === 'clients' ? (
           renderMyClients()
         ) : activeView === 'appointments' ? (
@@ -4216,6 +4231,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           adminUser={user}
         />
       )}
+      </div>
     </div>
   );
-};
+}

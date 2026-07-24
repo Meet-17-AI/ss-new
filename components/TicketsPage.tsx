@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { X, RefreshCw, ExternalLink } from 'lucide-react';
+import { X, RefreshCw, ExternalLink, Plus } from 'lucide-react';
+import { ReportIssuePage } from './ReportIssuePage';
 
 interface Ticket {
   id: number;
@@ -25,7 +26,7 @@ const STATUSES: { key: string; label: string; cls: string }[] = [
 const statusMeta = (k: string) => STATUSES.find(s => s.key === k) || { key: k, label: k, cls: 'bg-gray-100 text-gray-600' };
 const fmt = (d: string | null) => d ? new Date(d).toLocaleString('en-US', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
 
-export const TicketsPage: React.FC = () => {
+export const TicketsPage: React.FC<{ userRole?: string; user?: any }> = ({ userRole = 'admin', user }) => {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [filter, setFilter] = useState<string>('all');
@@ -33,11 +34,13 @@ export const TicketsPage: React.FC = () => {
   const [selected, setSelected] = useState<Ticket | null>(null);
   const [savingNotes, setSavingNotes] = useState(false);
   const [draftNotes, setDraftNotes] = useState('');
+  const [isCreatingTicket, setIsCreatingTicket] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/report-issues${filter !== 'all' ? `?status=${filter}` : ''}`);
+      const reportedByParam = userRole === 'therapist' && (user?.username || user?.full_name) ? `&reported_by=${encodeURIComponent(user.username || user.full_name)}` : '';
+      const res = await fetch(`/api/report-issues?status=${filter}${reportedByParam}`);
       const data = await res.json();
       setTickets(data.tickets || []);
       setCounts(data.counts || {});
@@ -80,12 +83,35 @@ export const TicketsPage: React.FC = () => {
           <h1 className="text-3xl font-bold mb-1">Support Tickets</h1>
           <p className="text-gray-600">Issues reported from the panel — track and resolve them here.</p>
         </div>
-        <button onClick={load} className="flex items-center gap-2 border rounded-lg px-4 py-2 bg-white hover:bg-gray-50 text-sm">
-          <RefreshCw size={16} /> Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <button onClick={load} className="flex items-center gap-2 border rounded-lg px-4 py-2 bg-white hover:bg-gray-50 text-sm">
+            <RefreshCw size={16} /> Refresh
+          </button>
+          <button 
+            onClick={() => setIsCreatingTicket(true)}
+            className="flex items-center gap-2 rounded-lg px-4 py-2 bg-teal-700 text-white hover:bg-teal-800 text-sm font-medium"
+          >
+            <Plus size={16} /> Create Ticket
+          </button>
+        </div>
       </div>
 
-      {/* Status filter tabs */}
+      {isCreatingTicket ? (
+        <div className="bg-white rounded-xl border shadow-sm flex-1 flex flex-col overflow-hidden h-[calc(100vh-200px)]">
+          <div className="flex-1 overflow-auto relative">
+            <ReportIssuePage 
+              onBack={() => { setIsCreatingTicket(false); load(); }} 
+              userInfo={{
+                username: user?.username || user?.full_name || 'Admin',
+                role: userRole === 'therapist' ? 'Therapist' : 'Admin'
+              }}
+              hideHeader={false}
+            />
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* Status filter tabs */}
       <div className="flex gap-2 mb-4 flex-wrap">
         <button onClick={() => setFilter('all')} className={`px-3 py-1.5 rounded-full text-sm font-medium border ${filter === 'all' ? 'bg-teal-700 text-white border-teal-700' : 'bg-white text-gray-600'}`}>
           All ({totalCount})
@@ -165,8 +191,10 @@ export const TicketsPage: React.FC = () => {
                 <div className="text-gray-400 text-xs mb-2">Status</div>
                 <div className="flex gap-2 flex-wrap">
                   {STATUSES.map(s => (
-                    <button key={s.key} onClick={() => changeStatus(selected, s.key)}
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${selected.status === s.key ? s.cls + ' ring-2 ring-offset-1 ring-teal-500' : 'bg-white text-gray-500'}`}>
+                    <button key={s.key} 
+                      onClick={() => userRole !== 'therapist' && changeStatus(selected, s.key)}
+                      disabled={userRole === 'therapist'}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${selected.status === s.key ? s.cls + ' ring-2 ring-offset-1 ring-teal-500' : 'bg-white text-gray-500'} ${userRole === 'therapist' && selected.status !== s.key ? 'opacity-50 cursor-not-allowed' : ''}`}>
                       {s.label}
                     </button>
                   ))}
@@ -176,18 +204,23 @@ export const TicketsPage: React.FC = () => {
               <div>
                 <div className="text-gray-400 text-xs mb-1">Internal notes</div>
                 <textarea value={draftNotes} onChange={e => setDraftNotes(e.target.value)} rows={4}
-                  className="w-full border rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
-                  placeholder="Add resolution notes, root cause, who's handling it…" />
-                <button
-                  disabled={savingNotes}
-                  onClick={async () => { setSavingNotes(true); await patchTicket(selected.id, { notes: draftNotes }); setSavingNotes(false); }}
-                  className="mt-2 bg-teal-700 text-white text-sm px-4 py-2 rounded-lg hover:bg-teal-800 disabled:opacity-60">
-                  {savingNotes ? 'Saving…' : 'Save notes'}
-                </button>
+                  disabled={userRole === 'therapist'}
+                  className="w-full border rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:bg-gray-100 disabled:text-gray-500"
+                  placeholder={userRole === 'therapist' ? "Internal notes are read-only" : "Add resolution notes, root cause, who's handling it…"} />
+                {userRole !== 'therapist' && (
+                  <button
+                    disabled={savingNotes}
+                    onClick={async () => { setSavingNotes(true); await patchTicket(selected.id, { notes: draftNotes }); setSavingNotes(false); }}
+                    className="mt-2 bg-teal-700 text-white text-sm px-4 py-2 rounded-lg hover:bg-teal-800 disabled:opacity-60">
+                    {savingNotes ? 'Saving…' : 'Save notes'}
+                  </button>
+                )}
               </div>
             </div>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

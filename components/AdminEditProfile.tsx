@@ -18,6 +18,7 @@ export const AdminEditProfile: React.FC<AdminEditProfileProps> = ({ user, onBack
   const [profilePicture, setProfilePicture] = useState<File | null>(null);
   const [currentProfilePictureUrl, setCurrentProfilePictureUrl] = useState('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [activeTab, setActiveTab] = useState<'personal' | 'security'>('personal');
 
   const countryCodes = [
     { code: '+91', country: 'India' },
@@ -241,9 +242,34 @@ export const AdminEditProfile: React.FC<AdminEditProfileProps> = ({ user, onBack
       </button>
 
       <h1 className="text-3xl font-bold mb-1">Edit Profile</h1>
-      <p className="text-gray-600 mb-8">Update your personal information</p>
+      <p className="text-gray-600 mb-8">Update your personal information and security settings</p>
+
+      {/* Tabs */}
+      <div className="flex gap-4 mb-6 border-b">
+        <button
+          onClick={() => setActiveTab('personal')}
+          className={`pb-3 px-4 font-medium ${
+            activeTab === 'personal'
+              ? 'text-teal-700 border-b-2 border-teal-700'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          Personal Info
+        </button>
+        <button
+          onClick={() => setActiveTab('security')}
+          className={`pb-3 px-4 font-medium ${
+            activeTab === 'security'
+              ? 'text-teal-700 border-b-2 border-teal-700'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          Security Setting
+        </button>
+      </div>
 
       <div className="bg-white rounded-lg border p-6">
+        {activeTab === 'personal' ? (
         <form onSubmit={handleSaveProfile} className="space-y-4">
           {/* Profile Picture Upload */}
           <div>
@@ -358,11 +384,9 @@ export const AdminEditProfile: React.FC<AdminEditProfileProps> = ({ user, onBack
             {saving ? 'Saving...' : 'Save Profile Changes'}
           </button>
         </form>
-      </div>
-
-      <div className="mt-8">
-        <h2 className="text-xl font-bold mb-4">Security Settings</h2>
-        <ChangePassword user={user} hideHeader={true} />
+        ) : (
+          <ChangePassword user={user} hideHeader={true} />
+        )}
       </div>
 
       {toast && (
