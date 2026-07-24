@@ -2778,15 +2778,17 @@ app.get('/api/dashboard/stats', async (req, res) => {
     // resource_name holds a medium/location string instead of the therapy type.
     const classifyPaid = (s: string) =>
       /adolescent therapy/i.test(s) ? 'adolescent'
-        : /individual therapy|individual session/i.test(s) ? 'individual'
-          : null;
+        : /couples? therapy/i.test(s) ? 'couples'
+          : /individual therapy|individual session/i.test(s) ? 'individual'
+            : null;
     const paidTypeOf = (r: any) =>
       classifyPaid(r.booking_resource_name || '') || classifyPaid(r.booking_subject || '') || 'other';
 
     const individualCompletedCount = paidCompletedRows.filter((r: any) => paidTypeOf(r) === 'individual').length;
     const adolescentCompletedCount = paidCompletedRows.filter((r: any) => paidTypeOf(r) === 'adolescent').length;
-    // Any other paid therapy type (e.g. Couples). Surfaced so the card's breakdown always
-    // adds up to the total; the UI hides this row when it is zero.
+    const couplesTherapyCompletedCount = paidCompletedRows.filter((r: any) => paidTypeOf(r) === 'couples').length;
+    // Any paid type that is none of the above. Surfaced so the card's breakdown always adds
+    // up to the total; the UI hides this row when it is zero.
     const otherTherapyCompletedCount = paidCompletedRows.filter((r: any) => paidTypeOf(r) === 'other').length;
     const freeConsultationCompletedCount = occurredInRange.filter(isFreeRow).length;
 
@@ -2883,6 +2885,7 @@ app.get('/api/dashboard/stats', async (req, res) => {
       lastMonthNoShows: lastMonthNoShows.rows[0].total,
       individualTherapyCompleted: individualCompletedCount,
       adolescentTherapyCompleted: adolescentCompletedCount,
+      couplesTherapyCompleted: couplesTherapyCompletedCount,
       otherTherapyCompleted: otherTherapyCompletedCount,
       freeConsultationCompleted: freeConsultationCompletedCount,
     };

@@ -784,10 +784,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                         {Number(dashboardMetrics.individualTherapyCompleted || 0).toLocaleString('en-IN')}
                       </div>
                     </div>
-                    <div className={`flex justify-between items-center ${Number(dashboardMetrics.otherTherapyCompleted || 0) > 0 ? 'border-b border-gray-100 pb-3' : 'pt-1'}`}>
+                    <div className="flex justify-between items-center border-b border-gray-100 pb-3">
                       <div className="text-sm text-gray-600 font-medium">Adolescent Therapy</div>
                       <div className="text-base font-bold text-gray-700">
                         {Number(dashboardMetrics.adolescentTherapyCompleted || 0).toLocaleString('en-IN')}
+                      </div>
+                    </div>
+                    <div className={`flex justify-between items-center ${Number(dashboardMetrics.otherTherapyCompleted || 0) > 0 ? 'border-b border-gray-100 pb-3' : 'pt-1'}`}>
+                      <div className="text-sm text-gray-600 font-medium">Couples Therapy</div>
+                      <div className="text-base font-bold text-gray-700">
+                        {Number(dashboardMetrics.couplesTherapyCompleted || 0).toLocaleString('en-IN')}
                       </div>
                     </div>
                     {Number(dashboardMetrics.otherTherapyCompleted || 0) > 0 && (
