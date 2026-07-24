@@ -760,12 +760,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                         {Number(dashboardMetrics.noShows || 0).toLocaleString('en-IN')}
                       </div>
                     </div>
-                    <div className="flex justify-between items-center border-b border-gray-100 pb-3">
-                      <div className="text-sm text-gray-600 font-medium">Free Consultation</div>
-                      <div className="text-base font-bold text-gray-700">
-                        {Number(dashboardMetrics.freeConsultations || 0).toLocaleString('en-IN')}
-                      </div>
-                    </div>
                     <div className="flex justify-between items-center pt-1">
                       <div className="text-sm text-gray-600 font-medium">Session Completed</div>
                       <div className="text-base font-bold text-gray-700">
@@ -790,16 +784,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                         {Number(dashboardMetrics.individualTherapyCompleted || 0).toLocaleString('en-IN')}
                       </div>
                     </div>
-                    <div className="flex justify-between items-center border-b border-gray-100 pb-3">
+                    <div className="flex justify-between items-center pt-1">
                       <div className="text-sm text-gray-600 font-medium">Adolescent Therapy</div>
                       <div className="text-base font-bold text-gray-700">
                         {Number(dashboardMetrics.adolescentTherapyCompleted || 0).toLocaleString('en-IN')}
-                      </div>
-                    </div>
-                    <div className="flex justify-between items-center pt-1">
-                      <div className="text-sm text-gray-600 font-medium">Free Consultation</div>
-                      <div className="text-base font-bold text-gray-700">
-                        {Number(dashboardMetrics.freeConsultationCompleted || 0).toLocaleString('en-IN')}
                       </div>
                     </div>
                   </div>

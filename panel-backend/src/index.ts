@@ -2689,12 +2689,14 @@ app.get('/api/dashboard/stats', async (req, res) => {
     // Sessions Completed KPI = therapy sessions that actually occurred.
     // OCCURRED: end-time in the past, excluding cancelled / no-show / unpaid. COALESCE keeps
     // null-status dashboard-direct bookings in (any booking source counts, incl. manual/direct).
-    // PAID_TYPE: paid therapy types (Individual + Adolescent).
-    // COMPLETED_TYPE: the full Sessions Completed total = paid therapy + Free Consultation.
-    // The per-type breakdown lines (Individual + Adolescent + Free Consultation) sum to this total.
+    // PAID_TYPE: paid therapy types only (Individual + Adolescent). Free Consultation is a
+    // free type and is excluded from the Bookings and Sessions Completed KPIs entirely —
+    // it has its own KPI card and its own tab on the bookings page.
+    // NOT_FREE: same exclusion for the un-aliased Bookings-card queries. COALESCE keeps
+    // rows with a NULL resource_name in (NULL NOT ILIKE ... would otherwise drop them).
     const OCCURRED = "b.booking_end_at < NOW() + INTERVAL '5 hours 30 minutes' AND COALESCE(LOWER(b.booking_status),'') NOT IN ('cancelled','canceled','no_show','no show','payment_pending','payment_failed')";
     const PAID_TYPE = "(b.booking_resource_name ILIKE '%Individual Therapy%' OR b.booking_resource_name ILIKE '%Individual Session%' OR b.booking_resource_name ILIKE '%Adolescent Therapy%')";
-    const COMPLETED_TYPE = "(b.booking_resource_name ILIKE '%Individual Therapy%' OR b.booking_resource_name ILIKE '%Individual Session%' OR b.booking_resource_name ILIKE '%Adolescent Therapy%' OR b.booking_resource_name ILIKE '%Free Consultation%')";
+    const NOT_FREE = "AND (COALESCE(booking_resource_name,'') || ' ' || COALESCE(booking_subject,'')) NOT ILIKE '%Free Consultation%'";
 
     const revenue = hasDateFilter
       ? await pool.query(
@@ -2706,25 +2708,25 @@ app.get('/api/dashboard/stats', async (req, res) => {
         ['cancelled', 'canceled', 'payment_pending', 'payment_failed']
       );
 
-    // Bookings - exclude safestories (free consultations managed in CRM)
+    // Bookings - paid session types only; Free Consultation has its own KPI card
     const bookings = hasDateFilter
       ? await pool.query(
-        `SELECT COUNT(*) as total FROM bookings WHERE booking_status NOT IN ($1, $2) ${EXCL_SS} AND booking_start_at BETWEEN $3 AND $4`,
+        `SELECT COUNT(*) as total FROM bookings WHERE booking_status NOT IN ($1, $2) ${NOT_FREE} ${EXCL_SS} AND booking_start_at BETWEEN $3 AND $4`,
         ['payment_pending', 'payment_failed', start, `${end} 23:59:59`]
       )
       : await pool.query(
-        `SELECT COUNT(*) as total FROM bookings WHERE booking_status NOT IN ($1, $2) ${EXCL_SS}`,
+        `SELECT COUNT(*) as total FROM bookings WHERE booking_status NOT IN ($1, $2) ${NOT_FREE} ${EXCL_SS}`,
         ['payment_pending', 'payment_failed']
       );
 
-    // Sessions Completed = therapy sessions that occurred (Individual + Adolescent + Free Consultation, any source)
+    // Sessions Completed = PAID therapy sessions that occurred (Individual + Adolescent, any source)
     const sessionsCompleted = hasDateFilter
       ? await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE ${COMPLETED_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
+        `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
         [start, `${end} 23:59:59`]
       )
       : await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE ${COMPLETED_TYPE} AND ${OCCURRED} ${EXCL_SS}`
+        `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS}`
       );
 
     const freeConsultations = hasDateFilter
@@ -2769,11 +2771,11 @@ app.get('/api/dashboard/stats', async (req, res) => {
 
     const cancelled = hasDateFilter
       ? await pool.query(
-        `SELECT COUNT(*) as total FROM bookings WHERE booking_status IN ($1, $2) ${EXCL_SS} AND booking_start_at BETWEEN $3 AND $4`,
+        `SELECT COUNT(*) as total FROM bookings WHERE booking_status IN ($1, $2) ${NOT_FREE} ${EXCL_SS} AND booking_start_at BETWEEN $3 AND $4`,
         ['cancelled', 'canceled', start, `${end} 23:59:59`]
       )
       : await pool.query(
-        `SELECT COUNT(*) as total FROM bookings WHERE booking_status IN ($1, $2) ${EXCL_SS}`,
+        `SELECT COUNT(*) as total FROM bookings WHERE booking_status IN ($1, $2) ${NOT_FREE} ${EXCL_SS}`,
         ['cancelled', 'canceled']
       );
 
@@ -2797,22 +2799,22 @@ app.get('/api/dashboard/stats', async (req, res) => {
 
     const noShows = hasDateFilter
       ? await pool.query(
-        `SELECT COUNT(*) as total FROM bookings WHERE booking_status IN ($1, $2) ${EXCL_SS} AND booking_start_at BETWEEN $3 AND $4`,
+        `SELECT COUNT(*) as total FROM bookings WHERE booking_status IN ($1, $2) ${NOT_FREE} ${EXCL_SS} AND booking_start_at BETWEEN $3 AND $4`,
         ['no_show', 'no show', start, `${end} 23:59:59`]
       )
       : await pool.query(
-        `SELECT COUNT(*) as total FROM bookings WHERE booking_status IN ($1, $2) ${EXCL_SS}`,
+        `SELECT COUNT(*) as total FROM bookings WHERE booking_status IN ($1, $2) ${NOT_FREE} ${EXCL_SS}`,
         ['no_show', 'no show']
       );
 
     // Last month stats
     const lastMonthBookings = await pool.query(
-      `SELECT COUNT(*) as total FROM bookings WHERE booking_status NOT IN ($1, $2) ${EXCL_SS} AND booking_start_at BETWEEN $3 AND $4`,
+      `SELECT COUNT(*) as total FROM bookings WHERE booking_status NOT IN ($1, $2) ${NOT_FREE} ${EXCL_SS} AND booking_start_at BETWEEN $3 AND $4`,
       ['payment_pending', 'payment_failed', lastMonthStart.toISOString(), lastMonthEnd.toISOString()]
     );
 
     const lastMonthSessionsCompleted = await pool.query(
-      `SELECT COUNT(*) as total FROM bookings b WHERE ${COMPLETED_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
+      `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
       [lastMonthStart.toISOString(), lastMonthEnd.toISOString()]
     );
 

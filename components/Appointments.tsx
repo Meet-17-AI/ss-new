@@ -47,6 +47,22 @@ const getSessionName = (apt: Appointment): string => {
   return name.replace(/ with .+$/i, '').trim() || name;
 };
 
+// Session-type classification (mirrors the Dashboard KPI). Deliberately based on the
+// session TYPE, not the payment amount: a therapy session booked directly from the
+// dashboard may have no amount recorded yet but is still a paid session type, and must
+// not be mistaken for a Free Consultation. Uses getSessionName so bookings whose
+// resource_name holds a location string still classify correctly via booking_subject.
+// Checks resource_name AND booking_subject: some bookings record the medium
+// ("Google Meet") in resource_name, leaving the real session type only in the subject.
+const isFreeConsultationSession = (apt: Appointment): boolean =>
+  /free consultation/i.test(`${apt.booking_resource_name || ''} ${apt.booking_subject || ''}`);
+
+// A paid session is anything that is NOT a Free Consultation — Individual, Adolescent,
+// Couples, etc. Defined as an exclusion rather than an allow-list of known types so that
+// a booking is never silently hidden from every tab when a new therapy type appears.
+const isPaidTherapySession = (apt: Appointment): boolean =>
+  !isFreeConsultationSession(apt);
+
 export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onCreateBooking?: () => void; initialTab?: string }> = ({ onClientClick, onCreateBooking, initialTab }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -104,7 +120,7 @@ export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onC
 
   const tabs = [
     { id: 'scheduled', label: 'Upcoming' },
-    { id: 'all', label: 'All Bookings' },
+    { id: 'all', label: 'All Sessions' },
     { id: 'completed_sessions', label: 'Completed Sessions' },
     { id: 'awaiting_payment', label: 'Waiting for Payment' },
     { id: 'cancelled', label: 'Cancelled' },
@@ -444,10 +460,12 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
     // Therapist filter
     if (selectedTherapist !== 'All Therapists' && apt.booking_host_name?.trim().toLowerCase() !== selectedTherapist.toLowerCase()) return false;
 
-    if (activeTab === 'all') return true;
-    if (activeTab === 'free_consultation') return apt.is_free === true;
+    // All Bookings + Completed Sessions show paid session types only (Individual +
+    // Adolescent), from any booking source. Free Consultations live in their own tab.
+    if (activeTab === 'all') return isPaidTherapySession(apt);
+    if (activeTab === 'free_consultation') return isFreeConsultationSession(apt);
     const status = getAppointmentStatus(apt);
-    if (activeTab === 'completed_sessions') return status === 'completed' || status === 'pending_notes';
+    if (activeTab === 'completed_sessions') return isPaidTherapySession(apt) && (status === 'completed' || status === 'pending_notes');
     // Upcoming tab mirrors the Dashboard: exclude the SafeStories placeholder host.
     if (activeTab === 'scheduled') return status === 'scheduled' && !isPlatformHost(apt);
     return status === activeTab;
@@ -546,10 +564,10 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
               if (!rawDate) return false;
               if (rawDate.getFullYear() !== parseInt(mYear) || rawDate.getMonth() !== monthMap[mName]) return false;
             }
-            if (tab.id === 'all') return true;
-            if (tab.id === 'free_consultation') return apt.is_free === true;
+            if (tab.id === 'all') return isPaidTherapySession(apt);
+            if (tab.id === 'free_consultation') return isFreeConsultationSession(apt);
             const status = getAppointmentStatus(apt);
-            if (tab.id === 'completed_sessions') return status === 'completed' || status === 'pending_notes';
+            if (tab.id === 'completed_sessions') return isPaidTherapySession(apt) && (status === 'completed' || status === 'pending_notes');
             // Upcoming tab mirrors the Dashboard: exclude the SafeStories placeholder host.
             if (tab.id === 'scheduled') return status === 'scheduled' && !isPlatformHost(apt);
             return status === tab.id;
