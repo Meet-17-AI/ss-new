@@ -1,10 +1,8 @@
-/* Single scrolling container - no nested scrollbars */
 .rbc-calendar {
   font-family: inherit;
   background: white;
-  height: 600px !important; /* Reduced height to 600px */
-  overflow-y: auto !important; /* Single scrollable container */
-  min-height: 600px !important; /* Reduced minimum height to 600px */
+  height: 600px !important;
+  min-height: 600px !important;
 }
 
 /* Remove scrolling from all child elements */

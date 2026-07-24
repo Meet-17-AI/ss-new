@@ -447,7 +447,7 @@ export const TherapistCalendar: React.FC<TherapistCalendarProps> = ({
       ) : (
         <div className="flex-1 bg-white rounded-lg border flex flex-col min-h-0 overflow-hidden">
           {/* Calendar Content - Allow scrolling */}
-          <div className="flex-1 min-h-0">
+          <div className="flex-1 min-h-0 overflow-y-auto">
             {calendarEvents.length === 0 ? (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center text-gray-500">
