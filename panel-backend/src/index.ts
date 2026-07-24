@@ -2689,13 +2689,11 @@ app.get('/api/dashboard/stats', async (req, res) => {
     // Sessions Completed KPI = therapy sessions that actually occurred.
     // OCCURRED: end-time in the past, excluding cancelled / no-show / unpaid. COALESCE keeps
     // null-status dashboard-direct bookings in (any booking source counts, incl. manual/direct).
-    // PAID_TYPE: paid therapy types only (Individual + Adolescent). Free Consultation is a
-    // free type and is excluded from the Bookings and Sessions Completed KPIs entirely —
+    // Free Consultation is excluded from the Bookings and Sessions Completed KPIs entirely —
     // it has its own KPI card and its own tab on the bookings page.
-    // NOT_FREE: same exclusion for the un-aliased Bookings-card queries. COALESCE keeps
+    // NOT_FREE: that exclusion for the Bookings-card queries. Reads resource_name AND subject
+    // because some bookings record the medium ("Google Meet") in resource_name. COALESCE keeps
     // rows with a NULL resource_name in (NULL NOT ILIKE ... would otherwise drop them).
-    const OCCURRED = "b.booking_end_at < NOW() + INTERVAL '5 hours 30 minutes' AND COALESCE(LOWER(b.booking_status),'') NOT IN ('cancelled','canceled','no_show','no show','payment_pending','payment_failed')";
-    const PAID_TYPE = "(b.booking_resource_name ILIKE '%Individual Therapy%' OR b.booking_resource_name ILIKE '%Individual Session%' OR b.booking_resource_name ILIKE '%Adolescent Therapy%')";
     const NOT_FREE = "AND (COALESCE(booking_resource_name,'') || ' ' || COALESCE(booking_subject,'')) NOT ILIKE '%Free Consultation%'";
 
     const revenue = hasDateFilter
@@ -2719,15 +2717,78 @@ app.get('/api/dashboard/stats', async (req, res) => {
         ['payment_pending', 'payment_failed']
       );
 
-    // Sessions Completed = PAID therapy sessions that occurred (Individual + Adolescent, any source)
-    const sessionsCompleted = hasDateFilter
-      ? await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
-        [start, `${end} 23:59:59`]
-      )
-      : await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS}`
-      );
+    // ── Sessions Completed (+ per-type breakdown) ──────────────────────────────
+    // Computed in JS using the SAME derivation as /api/appointments, so this KPI and the
+    // bookings page "Completed Sessions" tab can never disagree.
+    // Why not SQL on booking_end_at: booking_start_at/booking_end_at are stored in mixed
+    // timezone conventions (some UTC, some IST wall-clock), so they are unreliable for
+    // "has this happened yet" checks — they wrongly flag not-yet-started sessions as past.
+    // booking_invitee_time is normalised by convertToIST() into an unambiguous instant.
+    const completedRowsRes = await pool.query(`
+      SELECT b.booking_id, b.booking_invitee_time, b.booking_resource_name, b.booking_subject,
+             b.booking_status,
+             CASE WHEN (csn.note_id IS NOT NULL OR cpn.id IS NOT NULL OR fcn.id IS NOT NULL
+                     OR pcf.booking_id IS NOT NULL OR cch.id IS NOT NULL) THEN true ELSE false END AS has_session_notes,
+             (b.booking_end_at < NOW() + INTERVAL '5 hours 30 minutes') AS is_past
+      FROM bookings b
+      LEFT JOIN client_session_notes csn ON b.booking_id = csn.booking_id
+      LEFT JOIN client_progress_notes cpn ON b.booking_id = cpn.booking_id
+      LEFT JOIN free_consultation_pretherapy_notes fcn ON b.booking_id = fcn.booking_id
+      LEFT JOIN pretherapy_call_forms pcf ON b.booking_id::text = pcf.booking_id::text
+      LEFT JOIN client_case_history cch ON b.booking_id = cch.booking_id
+      WHERE b.booking_status NOT IN ('payment_pending', 'payment_failed')
+    `);
+
+    const nowMsKpi = Date.now();
+    // Type is read from resource_name AND subject: some bookings record the medium
+    // ("Google Meet") in resource_name, leaving the real type only in the subject.
+    const typeText = (r: any) => `${r.booking_resource_name || ''} ${r.booking_subject || ''}`;
+    const isFreeRow = (r: any) => /free consultation/i.test(typeText(r));
+
+    // Same rule as /api/appointments: completed once it has notes, or once its start time
+    // has passed — excluding cancelled / no-show / unpaid holds.
+    const occurredRows = completedRowsRes.rows.filter((r: any) => {
+      const norm = (r.booking_status || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      if (UNPAID_HOLD_STATUSES.has(norm)) return false;
+      if (norm === 'cancelled' || norm === 'canceled' || norm === 'no_show') return false;
+      const startMs = getBookingStartMs(r.booking_invitee_time);
+      const hasStarted = startMs !== null ? startMs <= nowMsKpi : r.is_past;
+      return r.has_session_notes || hasStarted;
+    });
+
+    // Date-range bounds are IST calendar days, matching how sessions are displayed.
+    const inRangeIST = (r: any, from?: string, to?: string) => {
+      if (!from || !to) return true;
+      const ms = getBookingStartMs(r.booking_invitee_time);
+      if (ms === null) return false;
+      const fromMs = new Date(`${String(from).slice(0, 10)}T00:00:00+05:30`).getTime();
+      const toMs = new Date(`${String(to).slice(0, 10)}T23:59:59+05:30`).getTime();
+      return ms >= fromMs && ms <= toMs;
+    };
+
+    const occurredInRange = hasDateFilter
+      ? occurredRows.filter((r: any) => inRangeIST(r, start, end))
+      : occurredRows;
+
+    const paidCompletedRows = occurredInRange.filter((r: any) => !isFreeRow(r));
+    const sessionsCompletedCount = paidCompletedRows.length;
+
+    // Each session lands in exactly one bucket, so the breakdown lines never exceed the
+    // total. resource_name is authoritative; the subject is only consulted when the
+    // resource_name holds a medium/location string instead of the therapy type.
+    const classifyPaid = (s: string) =>
+      /adolescent therapy/i.test(s) ? 'adolescent'
+        : /individual therapy|individual session/i.test(s) ? 'individual'
+          : null;
+    const paidTypeOf = (r: any) =>
+      classifyPaid(r.booking_resource_name || '') || classifyPaid(r.booking_subject || '') || 'other';
+
+    const individualCompletedCount = paidCompletedRows.filter((r: any) => paidTypeOf(r) === 'individual').length;
+    const adolescentCompletedCount = paidCompletedRows.filter((r: any) => paidTypeOf(r) === 'adolescent').length;
+    // Any other paid therapy type (e.g. Couples). Surfaced so the card's breakdown always
+    // adds up to the total; the UI hides this row when it is zero.
+    const otherTherapyCompletedCount = paidCompletedRows.filter((r: any) => paidTypeOf(r) === 'other').length;
+    const freeConsultationCompletedCount = occurredInRange.filter(isFreeRow).length;
 
     const freeConsultations = hasDateFilter
       ? await pool.query(
@@ -2737,36 +2798,6 @@ app.get('/api/dashboard/stats', async (req, res) => {
       : await pool.query(
         `SELECT COUNT(*) as total FROM bookings WHERE (invitee_payment_amount = 0 OR invitee_payment_amount IS NULL) AND booking_status NOT IN ($1, $2)`,
         ['payment_pending', 'payment_failed']
-      );
-
-    // Per-type = sessions of that type that occurred (same OCCURRED filter as the paid total).
-    // Individual + Adolescent sum to Sessions Completed. Free Consultation is a free-type info
-    // line and is intentionally NOT part of that total.
-    const individualTherapyCompleted = hasDateFilter
-      ? await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE (b.booking_resource_name ILIKE '%Individual Therapy%' OR b.booking_resource_name ILIKE '%Individual Session%') AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
-        [start, `${end} 23:59:59`]
-      )
-      : await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE (b.booking_resource_name ILIKE '%Individual Therapy%' OR b.booking_resource_name ILIKE '%Individual Session%') AND ${OCCURRED} ${EXCL_SS}`
-      );
-
-    const adolescentTherapyCompleted = hasDateFilter
-      ? await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE b.booking_resource_name ILIKE '%Adolescent Therapy%' AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
-        [start, `${end} 23:59:59`]
-      )
-      : await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE b.booking_resource_name ILIKE '%Adolescent Therapy%' AND ${OCCURRED} ${EXCL_SS}`
-      );
-
-    const freeConsultationCompleted = hasDateFilter
-      ? await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE b.booking_resource_name ILIKE '%Free Consultation%' AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
-        [start, `${end} 23:59:59`]
-      )
-      : await pool.query(
-        `SELECT COUNT(*) as total FROM bookings b WHERE b.booking_resource_name ILIKE '%Free Consultation%' AND ${OCCURRED} ${EXCL_SS}`
       );
 
     const cancelled = hasDateFilter
@@ -2813,10 +2844,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
       ['payment_pending', 'payment_failed', lastMonthStart.toISOString(), lastMonthEnd.toISOString()]
     );
 
-    const lastMonthSessionsCompleted = await pool.query(
-      `SELECT COUNT(*) as total FROM bookings b WHERE ${PAID_TYPE} AND ${OCCURRED} ${EXCL_SS} AND b.booking_start_at BETWEEN $1 AND $2`,
-      [lastMonthStart.toISOString(), lastMonthEnd.toISOString()]
-    );
+    const lastMonthSessionsCompletedCount = occurredRows.filter((r: any) =>
+      !isFreeRow(r) && inRangeIST(r, lastMonthStart.toISOString(), lastMonthEnd.toISOString())).length;
 
     const lastMonthFreeConsultations = await pool.query(
       'SELECT COUNT(*) as total FROM bookings WHERE (invitee_payment_amount = 0 OR invitee_payment_amount IS NULL) AND booking_start_at BETWEEN $1 AND $2',
@@ -2842,8 +2871,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
       refundedAmount: refundedAmount.rows[0].total,
       bookings: bookings.rows[0].total,
       lastMonthBookings: lastMonthBookings.rows[0].total,
-      sessionsCompleted: sessionsCompleted.rows[0].total,
-      lastMonthSessionsCompleted: lastMonthSessionsCompleted.rows[0].total,
+      sessionsCompleted: sessionsCompletedCount,
+      lastMonthSessionsCompleted: lastMonthSessionsCompletedCount,
       freeConsultations: freeConsultations.rows[0].total,
       lastMonthFreeConsultations: lastMonthFreeConsultations.rows[0].total,
       cancelled: cancelled.rows[0].total,
@@ -2852,9 +2881,10 @@ app.get('/api/dashboard/stats', async (req, res) => {
       lastMonthRefunds: lastMonthRefunds.rows[0].total,
       noShows: noShows.rows[0].total,
       lastMonthNoShows: lastMonthNoShows.rows[0].total,
-      individualTherapyCompleted: individualTherapyCompleted.rows[0].total,
-      adolescentTherapyCompleted: adolescentTherapyCompleted.rows[0].total,
-      freeConsultationCompleted: freeConsultationCompleted.rows[0].total,
+      individualTherapyCompleted: individualCompletedCount,
+      adolescentTherapyCompleted: adolescentCompletedCount,
+      otherTherapyCompleted: otherTherapyCompletedCount,
+      freeConsultationCompleted: freeConsultationCompletedCount,
     };
 
     res.json(responseData);
