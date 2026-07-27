@@ -18,6 +18,7 @@ import { CompleteProfileModal } from './CompleteProfileModal';
 import { ProfileUnderReviewBanner } from './ProfileUnderReviewBanner';
 import { EmptyStateCard } from './EmptyStateCard';
 import { SendBookingModal } from './SendBookingModal';
+import { cleanTherapyTypeName } from './Appointments';
 import { useUrlState } from '../hooks/useUrlState';
 import Resources from './Resources';
 import { therapistData } from '../lib/sessionData';
@@ -3462,7 +3463,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                                     {formatClientName(booking.client_name)}
                                   </span>
                                 </td>
-                                <td className="px-6 py-4">{booking.therapy_type}</td>
+                                <td className="px-6 py-4">{cleanTherapyTypeName(booking.therapy_type || '')}</td>
                                 <td className="px-6 py-4">
                                   <div className="flex items-center gap-2">
                                     <span>{formatMode(booking.mode)}</span>
@@ -3581,7 +3582,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                                       {formatClientName(appointment.client_name)}
                                     </span>
                                   </td>
-                                  <td className="px-6 py-4">{appointment.session_name}</td>
+                                  <td className="px-6 py-4">{cleanTherapyTypeName(appointment.session_name || '')}</td>
                                   <td className="px-6 py-4 text-sm">{appointment.session_timings}</td>
                                   <td className="px-6 py-4">
                                     {formatMode(appointment.mode)}

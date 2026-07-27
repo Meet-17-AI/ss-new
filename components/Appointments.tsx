@@ -29,6 +29,22 @@ interface Appointment {
   is_free?: boolean;
 }
 
+// Extract just the therapy type name from a session/resource name.
+// Strips therapist name (e.g. " with Muskan Negi"), location info, and "Session" suffix.
+// Exported for use across all booking tables (Appointments, TherapistDashboard, etc).
+export const cleanTherapyTypeName = (name: string): string => {
+  if (!name || typeof name !== 'string') return '';
+
+  const trimmed = name.trim();
+  // Strip therapist name: " with Muskan Negi" → ""
+  let result = trimmed.replace(/ with .+$/i, '').trim();
+  // Strip location suffix: " (SafeStories Office)" → ""
+  result = result.replace(/\s*\(.*\)$/i, '').trim();
+  // Strip "Session" suffix: "Individual Therapy Session" → "Individual Therapy"
+  result = result.replace(/\s+Session$/i, '').trim();
+  return result;
+};
+
 // Returns a clean session name — falls back to booking_subject if resource_name is just a location string
 const getSessionName = (apt: Appointment): string => {
   const name = (apt.booking_resource_name || '').trim();
@@ -38,18 +54,18 @@ const getSessionName = (apt: Appointment): string => {
   if (isLocationOnly) {
     // Try booking_subject first (e.g. "Individual Therapy with Indrayani")
     if (apt.booking_subject) {
-      result = apt.booking_subject.replace(/ with .+$/i, '').trim();
+      result = apt.booking_subject;
     } else {
-      // Strip the parenthetical address, e.g. "In-person (SafeStories Office...)" → "In-person Session"
+      // Location-only: synthesize from mode
       const modeOnly = name.replace(/\s*\(.*\)$/i, '').trim();
       result = modeOnly ? `${modeOnly} Session` : name;
     }
   } else {
-    // Normal case: strip " with TherapistName" suffix
-    result = name.replace(/ with .+$/i, '').trim() || name;
+    // Normal case: use resource_name as-is
+    result = name;
   }
-  // Strip " Session" suffix to show only therapy type (e.g. "Individual Therapy Session" → "Individual Therapy")
-  return result.replace(/\s+Session$/i, '').trim();
+  // Clean using shared helper
+  return cleanTherapyTypeName(result);
 };
 
 // Session-type classification (mirrors the Dashboard KPI). Deliberately based on the
