@@ -2042,8 +2042,8 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                 <table className="w-full" ref={appointmentActionsRef}>
                   <thead className="bg-gray-50 border-b">
                     <tr>
-                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Session Timings</th>
-                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Session Name</th>
+                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Date & Time</th>
+                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Therapy Type</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Client Name</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Mode</th>
                       <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Status</th>
@@ -3436,7 +3436,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                           <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Client Name</th>
                           <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Therapy Type</th>
                           <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Mode</th>
-                          <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Session Timings</th>
+                          <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Date & Time</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -3550,7 +3550,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                         <tr>
                           <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Client Name</th>
                           <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Therapy Type</th>
-                          <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Session Timings</th>
+                          <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Date & Time</th>
                           <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Mode</th>
                           <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Status</th>
                         </tr>

@@ -34,17 +34,22 @@ const getSessionName = (apt: Appointment): string => {
   const name = (apt.booking_resource_name || '').trim();
   const isLocationOnly = /^(in-person|online|offline)\s*\(/i.test(name);
 
+  let result = '';
   if (isLocationOnly) {
     // Try booking_subject first (e.g. "Individual Therapy with Indrayani")
     if (apt.booking_subject) {
-      return apt.booking_subject.replace(/ with .+$/i, '').trim();
+      result = apt.booking_subject.replace(/ with .+$/i, '').trim();
+    } else {
+      // Strip the parenthetical address, e.g. "In-person (SafeStories Office...)" → "In-person Session"
+      const modeOnly = name.replace(/\s*\(.*\)$/i, '').trim();
+      result = modeOnly ? `${modeOnly} Session` : name;
     }
-    // Strip the parenthetical address, e.g. "In-person (SafeStories Office...)" → "In-person Session"
-    const modeOnly = name.replace(/\s*\(.*\)$/i, '').trim();
-    return modeOnly ? `${modeOnly} Session` : name;
+  } else {
+    // Normal case: strip " with TherapistName" suffix
+    result = name.replace(/ with .+$/i, '').trim() || name;
   }
-  // Normal case: strip " with TherapistName" suffix
-  return name.replace(/ with .+$/i, '').trim() || name;
+  // Strip " Session" suffix to show only therapy type (e.g. "Individual Therapy Session" → "Individual Therapy")
+  return result.replace(/\s+Session$/i, '').trim();
 };
 
 // Session-type classification (mirrors the Dashboard KPI). Deliberately based on the
@@ -506,7 +511,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
   const colCount = 7 + (isFeedbackTab ? 1 : 0) + (showRating ? 1 : 0);
 
   const exportToCSV = () => {
-    const headers = ['Session Timings', 'Session Name', 'Client Name', 'Phone', 'Email', 'Therapist Name', 'Mode'];
+    const headers = ['Date & Time', 'Therapy Type', 'Client Name', 'Phone', 'Email', 'Therapist Name', 'Mode'];
     const rows = filteredAppointments.map(apt => [
       apt.booking_start_at,
       apt.booking_resource_name,
@@ -720,10 +725,10 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
                     </th>
                   )}
                   <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Client Name</th>
-                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Session Name</th>
+                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Therapy Type</th>
                   <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Therapist Name</th>
                   <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Mode</th>
-                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Session Timings</th>
+                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Date & Time</th>
                   <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Status</th>
                   {showRating && <th className="px-6 py-3 text-center text-sm font-medium text-gray-600">Feedback Score</th>}
                 </tr>
