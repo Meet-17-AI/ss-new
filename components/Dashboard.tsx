@@ -409,19 +409,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
         </div>
 
         <nav className="flex-1 px-4">
-          {user?.username !== 'Test' && (
-            <div
-              className="rounded-xl px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:opacity-90"
-              style={{ backgroundColor: '#21615D' }}
-              onClick={() => {
-                resetAllStates();
-                navigate('/admin/new-session');
-              }}
-            >
-              <Plus size={20} className="text-white" />
-              <span className="text-white">New Session</span>
-            </div>
-          )}
+          <div
+            className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 bg-gray-50 border cursor-default"
+          >
+            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            <span className="text-gray-700 font-medium">Live Sessions: {liveSessionsCount}</span>
+          </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer"
             style={{ backgroundColor: activeView === 'dashboard' ? '#F4A9365C' : 'transparent' }}
@@ -501,6 +494,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
         <header className="bg-white border-b px-8 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm">
           <div className="flex-1"></div>
           <div className="flex items-center gap-4">
+            {user?.username !== 'Test' && (
+              <button
+                className="flex items-center gap-2 rounded-lg px-4 py-2 hover:opacity-90 transition-colors shadow-sm"
+                style={{ backgroundColor: '#21615D' }}
+                onClick={() => {
+                  resetAllStates();
+                  navigate('/admin/new-session');
+                }}
+              >
+                <Plus size={18} className="text-white" />
+                <span className="text-sm font-medium text-white">New Session</span>
+              </button>
+            )}
+            
             <button
               onClick={() => navigate('/admin/tickets')}
               className="p-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors relative"
@@ -514,11 +521,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               userRole="admin"
               onViewAll={() => { resetAllStates(); navigate('/admin/notifications'); }}
             />
-            
-            <button className="flex items-center gap-2 border rounded-lg px-4 py-2 bg-white hover:bg-gray-50 transition-colors">
-              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-              <span className="text-sm font-medium text-gray-700">Live Sessions: {liveSessionsCount}</span>
-            </button>
 
             <div className="relative">
               <button
