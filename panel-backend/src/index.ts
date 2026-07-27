@@ -5947,23 +5947,22 @@ app.get('/api/refunds', async (req, res) => {
 
     let query = `
       SELECT
-        r.client_name,
-        r.session_name,
-        r.session_timings,
+        COALESCE(r.client_name, b.invitee_name) as client_name,
+        COALESCE(r.session_name, b.booking_resource_name) as session_name,
+        COALESCE(r.session_timings::text, b.booking_start_at::text, b.booking_invitee_time) as session_timings,
         b.booking_invitee_time,
         b.booking_host_name AS therapist_name,
         b.refund_status,
         COALESCE(b.invitee_phone, '') as invitee_phone,
         COALESCE(b.invitee_email, '') as invitee_email,
         COALESCE(b.refund_amount, 0) as refund_amount,
-        COALESCE(b.invitee_payment_gateway, '') as payment_gateway,
+        COALESCE(p.payment_mode, b.invitee_payment_gateway, '') as payment_gateway,
         b.refund_id,
         b.refund_initiated_at
-      FROM refund_cancellation_table r
-      LEFT JOIN bookings b ON r.session_id = b.booking_id
+      FROM bookings b
+      LEFT JOIN refund_cancellation_table r ON b.booking_id = r.session_id
+      LEFT JOIN payments p ON b.booking_id = p.booking_id
       WHERE b.booking_status IN ('cancelled', 'canceled')
-        AND b.refund_status IS NOT NULL
-        AND LOWER(b.refund_status) IN ('initiated', 'failed')
     `;
 
     const params: any[] = [];
@@ -5977,7 +5976,7 @@ app.get('/api/refunds', async (req, res) => {
       }
     }
 
-    query += ' ORDER BY r.session_timings DESC';
+    query += ' ORDER BY COALESCE(b.booking_start_at, b.created_at) DESC NULLS LAST';
 
     const result = await pool.query(query, params);
 

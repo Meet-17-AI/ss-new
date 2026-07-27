@@ -220,7 +220,11 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     : [];
 
   const filteredPayments = isPaymentTab
-    ? safePayments.filter(p => matchesPaymentSearch(p) && matchesDateRange(p))
+    ? safePayments.filter(p => {
+        const bs = ((p as any).booking_status || '').toLowerCase();
+        const isCancelled = ['cancelled', 'canceled'].includes(bs);
+        return matchesPaymentSearch(p) && matchesDateRange(p) && !isCancelled;
+      })
     : [];
 
   const totalPages = Math.max(1, Math.ceil((isPaymentTab ? filteredPayments.length : filteredRefunds.length) / itemsPerPage));
@@ -380,21 +384,23 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                           if (isRefunded) {
                             return <span className="px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">Refunded</span>;
                           }
-                          // Paid but the booking itself was cancelled — show that clearly
+                          // If the booking itself was cancelled, just show Cancelled
                           if (['cancelled', 'canceled'].includes(bs)) {
                             return (
                               <span className="px-3 py-1 rounded-full text-xs font-medium bg-gray-200 text-gray-700">
-                                {(payment.payment_status === 'Paid' || payment.payment_status === 'Completed') ? 'Paid · Cancelled' : 'Cancelled'}
+                                Cancelled
                               </span>
                             );
                           }
+                          
+                          const isPaid = bs === 'confirmed' || payment.payment_status === 'Completed' || payment.payment_status === 'Paid' || (isPaymentTab && activeTab === 'completed');
                           return (
                             <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                              (payment.payment_status === 'Completed' || payment.payment_status === 'Paid' || (isPaymentTab && activeTab === 'completed')) ? 'bg-green-100 text-green-700' :
+                              isPaid ? 'bg-green-100 text-green-700' :
                               payment.payment_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
                               'bg-red-100 text-red-700'
                             }`}>
-                              {payment.payment_status || (activeTab === 'completed' ? 'Paid' : 'Failed')}
+                              {isPaid ? 'Paid' : payment.payment_status || 'Failed'}
                             </span>
                           );
                         })()}
@@ -419,18 +425,31 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                       <td className="px-6 py-4">{refund.session_name}</td>
                       <td className="px-6 py-4">{refund.session_timings}</td>
                       <td className="px-6 py-4">
-                        <span className="px-3 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
-                          {refund.payment_gateway || 'N/A'}
-                        </span>
+                        {(() => {
+                          const isManual = ['cash', 'qr'].includes((refund.payment_gateway || '').toLowerCase());
+                          return (
+                            <span className="px-3 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                              {isManual ? 'Manual' : (refund.payment_gateway || 'N/A')}
+                            </span>
+                          );
+                        })()}
                       </td>
                       <td className="px-6 py-4">
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                          refund.refund_status === 'Completed' ? 'bg-green-100 text-green-700' :
-                          refund.refund_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
-                          'bg-red-100 text-red-700'
-                        }`}>
-                          {refund.refund_status}
-                        </span>
+                        {(() => {
+                          const isManual = ['cash', 'qr'].includes((refund.payment_gateway || '').toLowerCase());
+                          if (isManual) {
+                            return <span className="text-gray-500 font-medium">-</span>;
+                          }
+                          return (
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                              refund.refund_status === 'Completed' ? 'bg-green-100 text-green-700' :
+                              refund.refund_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
+                              'bg-red-100 text-red-700'
+                            }`}>
+                              {refund.refund_status || 'N/A'}
+                            </span>
+                          );
+                        })()}
                       </td>
                     </tr>
                   ))
