@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Search, Download, Loader } from 'lucide-react';
 import * as XLSX from 'xlsx'
+import { cleanTherapyTypeName } from './Appointments';
 
 // Render an internal timestamp in IST regardless of the viewer's browser timezone.
 const formatISTDateTime = (value?: string | null): string => {
@@ -12,6 +13,44 @@ const formatISTDateTime = (value?: string | null): string => {
     hour: 'numeric', minute: '2-digit', hour12: true,
     timeZone: 'Asia/Kolkata',
   }) + ' IST';
+};
+
+// Extract therapist name from session_name (e.g., "Individual Therapy with Muskan Negi" => "Muskan Negi")
+const extractTherapistName = (sessionName: string): string | null => {
+  const match = sessionName.match(/\bwith\s+(.+?)(?:\s*\(|$)/i);
+  return match ? match[1].trim() : null;
+};
+
+// Format session timings to "Day, Date - Time" format (e.g., "Tue, 28/07/2026 - 11:00AM")
+const formatSessionDateTime = (sessionTimings: string): string => {
+  if (!sessionTimings || sessionTimings === 'N/A') return sessionTimings || 'N/A';
+
+  // session_timings comes from the database as a pre-formatted string like:
+  // "Monday, Jul 29, 2026 at 11:00 AM - 11:50 AM IST"
+  // We need to convert it to: "(Mon), 29/07/2026 - 11:00AM"
+
+  try {
+    // Extract the date and time parts from the database format
+    const match = sessionTimings.match(/(\w+),\s+(\w+)\s+(\d+),\s+(\d+)\s+at\s+(\d+):(\d+)\s+(AM|PM)/i);
+    if (!match) return sessionTimings;
+
+    const [, dayName, monthName, dayStr, yearStr, hourStr, minStr, ampm] = match;
+
+    // Convert month name to number
+    const months = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06',
+                     Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' };
+    const monthNum = months[monthName as keyof typeof months];
+
+    // Shorten day name to 3 letters
+    const dayShort = dayName.substring(0, 3);
+
+    // Format time without minutes if they are :00
+    const timeStr = minStr === '00' ? `${hourStr}:${minStr}${ampm}` : `${hourStr}:${minStr}${ampm}`;
+
+    return `(${dayShort}), ${dayStr}/${monthNum}/${yearStr} - ${timeStr}`;
+  } catch {
+    return sessionTimings;
+  }
 };
 
 interface Refund {
@@ -445,10 +484,19 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
 
               <div>
                 <h3 className="font-semibold text-gray-500 text-xs uppercase tracking-wider mb-2">Session Details</h3>
-                <p className="font-medium text-gray-900">{selectedPayment.session_name}</p>
-                <p className="text-sm text-gray-600">{selectedPayment.session_timings}</p>
+                <p className="text-sm text-gray-600 mb-1">
+                  <span className="text-gray-500">Therapy Type:</span> <span className="font-medium text-gray-900">{cleanTherapyTypeName(selectedPayment.session_name || '')}</span>
+                </p>
+                {extractTherapistName(selectedPayment.session_name || '') && (
+                  <p className="text-sm text-gray-600 mb-1">
+                    <span className="text-gray-500">Therapist:</span> <span className="font-medium text-gray-900">{extractTherapistName(selectedPayment.session_name || '')}</span>
+                  </p>
+                )}
+                <p className="text-sm text-gray-600">
+                  <span className="text-gray-500">Date & Time:</span> <span className="font-medium text-gray-900">{formatSessionDateTime(selectedPayment.session_timings || '')}</span>
+                </p>
                 {selectedPayment.booking_joining_link && (
-                  <a href={selectedPayment.booking_joining_link} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline mt-1 flex items-center gap-1">
+                  <a href={selectedPayment.booking_joining_link} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline mt-2 flex items-center gap-1">
                     Join Session Link &rarr;
                   </a>
                 )}
