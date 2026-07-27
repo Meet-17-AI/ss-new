@@ -6106,7 +6106,7 @@ app.get('/api/payments', async (req, res) => {
         `SELECT b.*, p.payment_mode, p.utr, p.failure_reason, p.customer_details, b.invitee_payment_amount AS payment_amount
          FROM bookings b
          LEFT JOIN payments p ON b.booking_id = p.booking_id
-         WHERE (b.booking_status = 'payment_pending' OR b.payment_status = 'Pending')
+         WHERE (b.booking_status IN ('payment_pending', 'waiting_for_payment') OR b.payment_status = 'Pending')
            AND b.booking_status NOT IN ('Canceled', 'cancelled', 'canceled', 'payment_failed', 'Failed')
            AND b.invitee_payment_amount IS NOT NULL AND b.invitee_payment_amount >= 0
          ORDER BY b.invitee_created_at DESC`
@@ -6115,12 +6115,14 @@ app.get('/api/payments', async (req, res) => {
     }
 
     if (!status || status === 'all_payments' || status === 'expired') {
-      // Failed payments
+      // Failed payments (including expired payment links)
       const fRes = await pool.query(
         `SELECT b.*, p.payment_mode, p.utr, p.failure_reason, p.customer_details, b.invitee_payment_amount AS payment_amount
          FROM bookings b
          LEFT JOIN payments p ON b.booking_id = p.booking_id
-         WHERE b.booking_status = 'payment_failed' OR b.payment_status = 'Failed'
+         WHERE b.booking_status = 'payment_failed'
+           OR b.payment_status = 'Failed'
+           OR (b.booking_status = 'waiting_for_payment' AND b.invitee_created_at < NOW() - INTERVAL '30 minutes')
          ORDER BY b.invitee_created_at DESC`
       );
       rows.push(...fRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
