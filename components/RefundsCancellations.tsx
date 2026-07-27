@@ -3,7 +3,8 @@ import { Search, Download, Loader } from 'lucide-react';
 import * as XLSX from 'xlsx'
 import { cleanTherapyTypeName } from './Appointments';
 
-// Render an internal timestamp in IST regardless of the viewer's browser timezone.
+// Render the face-value timestamp directly. The DB stores IST time but it arrives as a UTC string.
+// By formatting it as UTC, we prevent the browser from adding another +5:30 shift to it.
 const formatISTDateTime = (value?: string | null): string => {
   if (!value) return 'N/A';
   const d = new Date(value);
@@ -11,7 +12,7 @@ const formatISTDateTime = (value?: string | null): string => {
   return d.toLocaleString('en-US', {
     day: 'numeric', month: 'short', year: 'numeric',
     hour: 'numeric', minute: '2-digit', hour12: true,
-    timeZone: 'Asia/Kolkata',
+    timeZone: 'UTC',
   }) + ' IST';
 };
 
@@ -64,6 +65,7 @@ interface Refund {
   payment_gateway: string;
   refund_id?: string;
   refund_initiated_at?: string;
+  therapist_name?: string;
 }
 
 interface Payment {
@@ -88,6 +90,7 @@ interface Payment {
   refund_status?: string;
   refund_amount?: number;
   booking_status?: string;
+  therapist_name?: string;
 }
 
 export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initialTab }) => {
@@ -486,11 +489,11 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                 <p className="text-sm text-gray-600 mb-1">
                   <span className="text-gray-500">Therapy Type:</span> <span className="font-medium text-gray-900">{cleanTherapyTypeName(selectedPayment.session_name || '')}</span>
                 </p>
-                {extractTherapistName(selectedPayment.session_name || '') && (
+                {(selectedPayment as any).therapist_name || extractTherapistName(selectedPayment.session_name || '') ? (
                   <p className="text-sm text-gray-600 mb-1">
-                    <span className="text-gray-500">Therapist:</span> <span className="font-medium text-gray-900">{extractTherapistName(selectedPayment.session_name || '')}</span>
+                    <span className="text-gray-500">Therapist:</span> <span className="font-medium text-gray-900">{(selectedPayment as any).therapist_name || extractTherapistName(selectedPayment.session_name || '')}</span>
                   </p>
-                )}
+                ) : null}
                 <p className="text-sm text-gray-600">
                   <span className="text-gray-500">Date & Time:</span> <span className="font-medium text-gray-900">{formatSessionDateTime(selectedPayment.session_timings || '')}</span>
                 </p>

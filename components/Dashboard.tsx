@@ -709,7 +709,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             {dashboardMetrics && user?.username !== 'Test' && (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                 {/* Collection Card */}
-                <div className="bg-white rounded-lg border-2 border-teal-700/20 shadow-sm p-8 flex flex-col">
+                <div className="bg-white rounded-2xl border-2 border-teal-700/20 shadow-sm p-8 flex flex-col">
                   <div className="mb-8">
                     <h3 className="text-lg text-gray-700 mb-2 font-medium">Collection</h3>
                     <div className="text-4xl font-extrabold text-black tracking-tight">
@@ -733,7 +733,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                 </div>
 
                 {/* Bookings Card */}
-                <div className="bg-white rounded-lg border-2 border-teal-700/20 shadow-sm p-8 flex flex-col">
+                <div className="bg-white rounded-2xl border-2 border-teal-700/20 shadow-sm p-8 flex flex-col">
                   <div className="mb-8">
                     <h3 className="text-lg text-gray-700 mb-2 font-medium">Bookings</h3>
                     <div className="text-4xl font-extrabold text-black tracking-tight">
@@ -763,7 +763,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                 </div>
 
                 {/* Session Completed Card */}
-                <div className="bg-white rounded-lg border-2 border-teal-700/20 shadow-sm p-8 flex flex-col">
+                <div className="bg-white rounded-2xl border-2 border-teal-700/20 shadow-sm p-8 flex flex-col">
                   <div className="mb-8">
                     <h3 className="text-lg text-gray-700 mb-2 font-medium">Session Completed</h3>
                     <div className="text-4xl font-extrabold text-black tracking-tight">
