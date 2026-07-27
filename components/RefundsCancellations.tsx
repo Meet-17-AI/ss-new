@@ -111,7 +111,6 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     { id: 'completed', label: 'Completed/Paid' },
     { id: 'pending', label: 'Pending' },
     { id: 'expired', label: 'Failed/Expired' },
-    { id: 'refunded', label: 'Refunded' },
     { id: 'all', label: 'Cancellation' },
     { id: 'Pending', label: 'Refund Initiated' },
     { id: 'Failed', label: 'Refund Failed' },
@@ -158,7 +157,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
 
   useEffect(() => {
     // Fetch payments for payment tabs
-    if (['all_payments', 'completed', 'pending', 'expired', 'refunded'].includes(activeTab)) {
+    if (['all_payments', 'completed', 'pending', 'expired'].includes(activeTab)) {
       fetchPayments();
     }
     // Fetch refunds for cancellation tabs
@@ -167,7 +166,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     }
   }, [activeTab, fetchPayments, fetchRefunds]);
 
-  const isPaymentTab = ['all_payments', 'completed', 'pending', 'expired', 'refunded'].includes(activeTab);
+  const isPaymentTab = ['all_payments', 'completed', 'pending', 'expired'].includes(activeTab);
   const safeRefunds = Array.isArray(refunds) ? refunds : [];
   const safePayments = Array.isArray(payments) ? payments : [];
 
@@ -227,12 +226,12 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
 
   const exportToCSV = () => {
     if (isPaymentTab) {
-      const headers = ['Client Name', 'Contact', 'Session Name', 'Session Date & Time', 'Amount', 'Payment Status'];
+      const headers = ['Client Name', 'Contact', 'Therapy Type', 'Date & Time', 'Amount', 'Payment Status'];
       const rows = filteredPayments.map(payment => [
         payment.client_name,
         payment.invitee_phone || payment.invitee_email,
-        payment.session_name,
-        payment.session_timings,
+        cleanTherapyTypeName(payment.session_name || ''),
+        formatSessionDateTime(payment.session_timings || ''),
         payment.payment_amount,
         payment.payment_status
       ]);
@@ -341,8 +340,8 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
             <thead className="bg-gray-50 border-b">
               <tr>
                 <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Client Details</th>
-                <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">{isPaymentTab ? 'Session Name' : 'Cancelled Session'}</th>
-                <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Session Date & Time</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">{isPaymentTab ? 'Therapy Type' : 'Cancelled Session'}</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Date & Time</th>
                 {isPaymentTab && <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Amount</th>}
                 {!isPaymentTab && <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Payment Gateway</th>}
                 <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">{isPaymentTab ? 'Payment Status' : 'Refund Status'}</th>
@@ -367,14 +366,14 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                         <div>{payment.client_name}</div>
                         <div className="text-xs text-gray-500">{payment.invitee_phone || payment.invitee_email}</div>
                       </td>
-                      <td className="px-6 py-4">{payment.session_name}</td>
-                      <td className="px-6 py-4">{payment.session_timings}</td>
+                      <td className="px-6 py-4">{cleanTherapyTypeName(payment.session_name || '')}</td>
+                      <td className="px-6 py-4">{formatSessionDateTime(payment.session_timings || '')}</td>
                       <td className="px-6 py-4">₹{Number(payment.payment_amount || 0).toLocaleString()}</td>
                       <td className="px-6 py-4">
                         {(() => {
                           const rs = (payment.refund_status || '').toLowerCase();
                           const bs = ((payment as any).booking_status || '').toLowerCase();
-                          const isRefunded = activeTab === 'refunded' || ['processed', 'refunded', 'completed'].includes(rs);
+                          const isRefunded = ['processed', 'refunded', 'completed'].includes(rs);
                           if (isRefunded) {
                             return <span className="px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">Refunded</span>;
                           }
