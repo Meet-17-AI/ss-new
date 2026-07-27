@@ -54,6 +54,20 @@ const formatSessionDateTime = (sessionTimings: string): string => {
   }
 };
 
+// An expired payment link is stored as booking_status='cancelled' + payment_status='Failed'
+// by startPaymentLinkExpiryCron. That pair is only ever written by the expiry cron, so it
+// reliably distinguishes an expired link from a genuinely cancelled booking.
+const isExpiredPaymentLink = (p: { booking_status?: string; payment_status?: string }): boolean => {
+  const bs = (p.booking_status || '').toLowerCase();
+  return ['cancelled', 'canceled'].includes(bs) && (p.payment_status || '') === 'Failed';
+};
+
+// A real cancellation: cancelled, but not merely an expired payment link.
+const isCancelledBooking = (p: { booking_status?: string; payment_status?: string }): boolean => {
+  const bs = (p.booking_status || '').toLowerCase();
+  return ['cancelled', 'canceled'].includes(bs) && !isExpiredPaymentLink(p);
+};
+
 interface Refund {
   client_name: string;
   session_name: string;
@@ -66,7 +80,27 @@ interface Refund {
   refund_id?: string;
   refund_initiated_at?: string;
   therapist_name?: string;
+  razorpay_order_id?: string;
+  payment_id?: string;
+  payment_amount?: number;
+  payment_status?: string;
+  booking_status?: string;
+  created_at?: string;
+  booking_updated_at?: string;
+  cancelled_at?: string;
 }
+
+// Refund status as stored by the DB is a lowercase verb ('initiated'), not the
+// title-case values the badge used to compare against — so every real status
+// fell through to the red "error" style. Map each known state explicitly.
+const REFUND_STATUS_STYLES: Record<string, { label: string; className: string }> = {
+  initiated: { label: 'Initiated', className: 'bg-yellow-100 text-yellow-700' },
+  pending: { label: 'Pending', className: 'bg-yellow-100 text-yellow-700' },
+  processed: { label: 'Processed', className: 'bg-green-100 text-green-700' },
+  completed: { label: 'Completed', className: 'bg-green-100 text-green-700' },
+  refunded: { label: 'Refunded', className: 'bg-green-100 text-green-700' },
+  failed: { label: 'Failed', className: 'bg-red-100 text-red-700' },
+};
 
 interface Payment {
   client_name: string;
@@ -221,9 +255,11 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
 
   const filteredPayments = isPaymentTab
     ? safePayments.filter(p => {
-        const bs = ((p as any).booking_status || '').toLowerCase();
-        const isCancelled = ['cancelled', 'canceled'].includes(bs);
-        return matchesPaymentSearch(p) && matchesDateRange(p) && !isCancelled;
+        // Cancelled bookings belong on the Cancellation/Refund tabs, not the payment tabs —
+        // except expired payment links. The expiry cron marks those cancelled + Failed, so
+        // that pair means "payment link expired", not "someone cancelled a real booking".
+        // Excluding them hid every expired payment from the Failed/Expired tab.
+        return matchesPaymentSearch(p) && matchesDateRange(p) && !isCancelledBooking(p);
       })
     : [];
 
@@ -247,13 +283,16 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
       XLSX.utils.book_append_sheet(wb, ws, 'Payments')
       XLSX.writeFile(wb, `payments_export_${new Date().toISOString().split('T')[0]}.xlsx`)
     } else {
-      const headers = ['Client Name', 'Contact', 'Cancelled Session', 'Session Date & Time', 'Refund Status'];
+      const headers = ['Client Name', 'Contact', 'Therapy Type', 'Date & Time', 'Order ID', 'Payment Gateway', 'Amount', 'Refund Status'];
       const rows = filteredRefunds.map(refund => [
         refund.client_name,
         refund.invitee_phone || refund.invitee_email,
-        refund.session_name,
-        refund.session_timings,
-        refund.refund_status
+        cleanTherapyTypeName(refund.session_name || ''),
+        formatSessionDateTime(refund.session_timings || ''),
+        refund.razorpay_order_id || '',
+        refund.payment_gateway || '',
+        refund.payment_amount ?? '',
+        refund.refund_status || 'Not initiated'
       ]);
       const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
       const wb = XLSX.utils.book_new()
@@ -384,6 +423,14 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                           if (isRefunded) {
                             return <span className="px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">Refunded</span>;
                           }
+                          // Payment link ran past its 30-minute window — show that, not "Cancelled"
+                          if (isExpiredPaymentLink(payment)) {
+                            return (
+                              <span className="px-3 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-700">
+                                Expired
+                              </span>
+                            );
+                          }
                           // If the booking itself was cancelled, just show Cancelled
                           if (['cancelled', 'canceled'].includes(bs)) {
                             return (
@@ -422,31 +469,39 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                         <div>{refund.client_name}</div>
                         <div className="text-xs text-gray-500">{refund.invitee_phone || refund.invitee_email}</div>
                       </td>
-                      <td className="px-6 py-4">{refund.session_name}</td>
-                      <td className="px-6 py-4">{refund.session_timings}</td>
+                      <td className="px-6 py-4">{cleanTherapyTypeName(refund.session_name || '')}</td>
+                      <td className="px-6 py-4">{formatSessionDateTime(refund.session_timings || '')}</td>
                       <td className="px-6 py-4">
                         {(() => {
-                          const isManual = ['cash', 'qr'].includes((refund.payment_gateway || '').toLowerCase());
+                          const gw = (refund.payment_gateway || '').trim();
+                          if (!gw) return <span className="text-gray-400">—</span>;
+                          const isManual = ['cash', 'qr'].includes(gw.toLowerCase());
                           return (
-                            <span className="px-3 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
-                              {isManual ? 'Manual' : (refund.payment_gateway || 'N/A')}
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                              isManual ? 'bg-amber-100 text-amber-700' : 'bg-purple-100 text-purple-700'
+                            }`}>
+                              {gw}
                             </span>
                           );
                         })()}
                       </td>
                       <td className="px-6 py-4">
                         {(() => {
+                          // Cash/QR never went through a gateway, so there is no
+                          // gateway refund to report a status for.
                           const isManual = ['cash', 'qr'].includes((refund.payment_gateway || '').toLowerCase());
                           if (isManual) {
                             return <span className="text-gray-500 font-medium">-</span>;
                           }
+                          const rs = (refund.refund_status || '').toLowerCase().trim();
+                          if (!rs) {
+                            return <span className="text-gray-400">Not initiated</span>;
+                          }
+                          const style = REFUND_STATUS_STYLES[rs]
+                            || { label: refund.refund_status, className: 'bg-gray-100 text-gray-700' };
                           return (
-                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                              refund.refund_status === 'Completed' ? 'bg-green-100 text-green-700' :
-                              refund.refund_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
-                              'bg-red-100 text-red-700'
-                            }`}>
-                              {refund.refund_status || 'N/A'}
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${style.className}`}>
+                              {style.label}
                             </span>
                           );
                         })()}
@@ -525,18 +580,28 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
 
               <div>
                 <h3 className="font-semibold text-gray-500 text-xs uppercase tracking-wider mb-2">Payment Info</h3>
-                <p className="text-sm"><span className="text-gray-500 inline-block w-16">Amount:</span> <span className="font-medium">₹{Number(selectedPayment.payment_amount).toLocaleString()}</span></p>
-                <p className="text-sm mt-1 flex items-center"><span className="text-gray-500 inline-block w-16">Status:</span> 
-                  <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                    selectedPayment.payment_status === 'Completed' || selectedPayment.payment_status === 'Paid' ? 'bg-green-100 text-green-700' :
-                    selectedPayment.payment_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
-                    'bg-red-100 text-red-700'
-                  }`}>
-                    {selectedPayment.payment_status}
-                  </span>
+                <p className="text-sm"><span className="text-gray-500 inline-block w-16">Amount:</span> <span className="font-medium">{selectedPayment.payment_amount != null ? `₹${Number(selectedPayment.payment_amount).toLocaleString()}` : '—'}</span></p>
+                <p className="text-sm mt-1 flex items-center"><span className="text-gray-500 inline-block w-16">Status:</span>
+                  {/* Legacy cancellations carry no payment_status at all — render a
+                      neutral dash rather than an empty red badge. */}
+                  {!selectedPayment.payment_status && !isExpiredPaymentLink(selectedPayment) ? (
+                    <span className="text-gray-400">—</span>
+                  ) : (
+                    <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                      selectedPayment.payment_status === 'Completed' || selectedPayment.payment_status === 'Paid' ? 'bg-green-100 text-green-700' :
+                      selectedPayment.payment_status === 'Pending' ? 'bg-yellow-100 text-yellow-700' :
+                      isExpiredPaymentLink(selectedPayment) ? 'bg-orange-100 text-orange-700' :
+                      'bg-red-100 text-red-700'
+                    }`}>
+                      {isExpiredPaymentLink(selectedPayment) ? 'Expired' : selectedPayment.payment_status}
+                    </span>
+                  )}
                 </p>
                 {selectedPayment.payment_mode && (
                   <p className="text-sm mt-1"><span className="text-gray-500 inline-block w-16">Mode:</span> <span className="font-medium uppercase">{selectedPayment.payment_mode}</span></p>
+                )}
+                {(selectedPayment as any).payment_gateway && (
+                  <p className="text-sm mt-1"><span className="text-gray-500 inline-block w-16">Gateway:</span> <span className="font-medium">{(selectedPayment as any).payment_gateway}</span></p>
                 )}
               </div>
 
@@ -553,12 +618,23 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                 <h3 className="font-semibold text-gray-500 text-xs uppercase tracking-wider mb-2">Timestamps</h3>
                 <div className="flex justify-between bg-gray-50 p-4 rounded-lg border">
                   <div>
-                    <p className="text-xs text-gray-500 uppercase">Initiated At</p>
+                    <p className="text-xs text-gray-500 uppercase">{isCancelledBooking(selectedPayment) ? 'Booked At' : 'Initiated At'}</p>
                     <p className="text-sm font-medium text-gray-800">{formatISTDateTime(selectedPayment.created_at)}</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-xs text-gray-500 uppercase">{selectedPayment.payment_status === 'Failed' ? 'Failed At' : 'Completed At'}</p>
-                    <p className="text-sm font-medium text-gray-800">{formatISTDateTime(selectedPayment.booking_updated_at)}</p>
+                    <p className="text-xs text-gray-500 uppercase">
+                      {isExpiredPaymentLink(selectedPayment) ? 'Expired At'
+                        : isCancelledBooking(selectedPayment) ? 'Cancelled At'
+                        : selectedPayment.payment_status === 'Failed' ? 'Failed At'
+                        : 'Completed At'}
+                    </p>
+                    <p className="text-sm font-medium text-gray-800">
+                      {formatISTDateTime(
+                        isCancelledBooking(selectedPayment)
+                          ? ((selectedPayment as any).cancelled_at || selectedPayment.booking_updated_at)
+                          : selectedPayment.booking_updated_at
+                      )}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -582,12 +658,18 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                       <p className="text-xs text-purple-600 uppercase">Refund Status</p>
                       <p className="text-sm font-medium text-gray-800 capitalize">{(selectedPayment as any).refund_status || 'Initiated'}</p>
                     </div>
-                    {selectedPayment.refund_initiated_at && (
-                      <div>
-                        <p className="text-xs text-purple-600 uppercase">Initiated At</p>
-                        <p className="text-sm font-medium text-gray-800">{formatISTDateTime(selectedPayment.refund_initiated_at)}</p>
-                      </div>
-                    )}
+                    <div>
+                      <p className="text-xs text-purple-600 uppercase">Refund Amount</p>
+                      <p className="text-sm font-medium text-gray-800">
+                        {Number((selectedPayment as any).refund_amount) > 0
+                          ? `₹${Number((selectedPayment as any).refund_amount).toLocaleString()}`
+                          : '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-purple-600 uppercase">Initiated At</p>
+                      <p className="text-sm font-medium text-gray-800">{formatISTDateTime(selectedPayment.refund_initiated_at)}</p>
+                    </div>
                   </div>
                 </div>
               )}

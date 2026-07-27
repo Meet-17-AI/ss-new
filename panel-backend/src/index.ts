@@ -5964,13 +5964,43 @@ app.get('/api/refunds', async (req, res) => {
         COALESCE(b.invitee_phone, '') as invitee_phone,
         COALESCE(b.invitee_email, '') as invitee_email,
         COALESCE(b.refund_amount, 0) as refund_amount,
-        COALESCE(p.payment_mode, b.invitee_payment_gateway, '') as payment_gateway,
+        b.invitee_payment_amount AS payment_amount,
+        b.payment_status,
+        -- Gateway: payments.payment_gateway_name is the real gateway column
+        -- (payment_mode is the instrument — card/upi — and is NULL on every
+        -- cancelled row, so the old COALESCE always fell through to the raw
+        -- invitee value). Fall back through both before giving up.
+        COALESCE(p.payment_gateway_name, b.invitee_payment_gateway, p.payment_mode) as payment_gateway,
+        -- Razorpay order id: organic bookings store it on
+        -- bookings.invitee_payment_reference_id ('order_...'); only the admin
+        -- payment-link flow populates bookings.razorpay_order_id.
+        COALESCE(b.razorpay_order_id, p.razorpay_order_id, b.invitee_payment_reference_id, p.payment_reference_id) as razorpay_order_id,
+        COALESCE(b.payment_id, p.razorpay_payment_id) as payment_id,
+        -- Fields the shared payment-details modal renders. Without them a row
+        -- opened from the Cancellation tab showed N/A for mode and timestamps.
+        p.payment_mode,
+        p.utr,
+        p.failure_reason,
+        -- Legacy cancellations have no payments row and no invitee_created_at,
+        -- so fall through to the payment record's own timestamps.
+        COALESCE(b.invitee_created_at, p.payment_date, p.created_at) AS created_at,
+        -- The moment the booking was actually cancelled. booking_updated_at is
+        -- only set by newer flows (9/34), while invitee_cancelled_at is present
+        -- on 29/34 — and on all 12 refund-initiated rows.
+        COALESCE(b.invitee_cancelled_at, b.booking_updated_at) AS cancelled_at,
+        COALESCE(b.booking_updated_at, b.invitee_cancelled_at) AS booking_updated_at,
+        b.booking_joining_link,
+        b.booking_status,
         b.refund_id,
-        b.refund_initiated_at
+        COALESCE(b.refund_initiated_at, p.refund_initiation_date) AS refund_initiated_at
       FROM bookings b
       LEFT JOIN refund_cancellation_table r ON b.booking_id = r.session_id
       LEFT JOIN payments p ON b.booking_id = p.booking_id
       WHERE b.booking_status IN ('cancelled', 'canceled')
+        -- Expired/failed payment links are ALSO stored as 'cancelled' by
+        -- startPaymentLinkExpiryCron. They are not real cancellations and
+        -- belong on the Failed/Expired tab, so keep them out of here.
+        AND COALESCE(b.payment_status, '') <> 'Failed'
     `;
 
     const params: any[] = [];
@@ -5984,7 +6014,10 @@ app.get('/api/refunds', async (req, res) => {
       }
     }
 
-    query += ' ORDER BY COALESCE(b.booking_start_at, b.created_at) DESC NULLS LAST';
+    // NOTE: bookings has no `created_at` column — its creation timestamp is
+    // `invitee_created_at`. Referencing b.created_at made this query throw and
+    // 500'd every refund/cancellation tab.
+    query += ' ORDER BY COALESCE(b.booking_start_at, b.invitee_created_at) DESC NULLS LAST';
 
     const result = await pool.query(query, params);
 
@@ -6006,9 +6039,25 @@ app.get('/api/refunds', async (req, res) => {
         formattedTimings = `${weekday}, ${month} ${day}, ${year} at ${fmt(date)} - ${fmt(endDate)} IST`;
       }
 
+      // The gateway is stored with inconsistent casing across flows
+      // ('razorpay' vs 'Razorpay'), which made the same gateway render as two
+      // different values. Normalise to one canonical label per gateway.
+      const rawGateway = String(row.payment_gateway || '').trim();
+      const gatewayLabels: Record<string, string> = {
+        razorpay: 'Razorpay',
+        'payment link': 'Razorpay',
+        cash: 'Cash',
+        qr: 'QR',
+        upi: 'UPI',
+      };
+      const payment_gateway = rawGateway
+        ? (gatewayLabels[rawGateway.toLowerCase()] || rawGateway)
+        : null;
+
       return {
         ...row,
         session_timings: formattedTimings,
+        payment_gateway,
         refund_status: row.refund_status
       };
     });
@@ -6115,14 +6164,16 @@ app.get('/api/payments', async (req, res) => {
     }
 
     if (!status || status === 'all_payments' || status === 'expired') {
-      // Failed payments (including expired payment links)
+      // Failed payments (including expired payment links).
+      // An expired link is NOT left as 'waiting_for_payment': startPaymentLinkExpiryCron
+      // rewrites it to booking_status='cancelled' + payment_status='Failed' within 60s of
+      // the 30-minute deadline, so `payment_status = 'Failed'` is what actually catches it.
       const fRes = await pool.query(
         `SELECT b.*, p.payment_mode, p.utr, p.failure_reason, p.customer_details, b.invitee_payment_amount AS payment_amount
          FROM bookings b
          LEFT JOIN payments p ON b.booking_id = p.booking_id
          WHERE b.booking_status = 'payment_failed'
            OR b.payment_status = 'Failed'
-           OR (b.booking_status = 'waiting_for_payment' AND b.invitee_created_at < NOW() - INTERVAL '30 minutes')
          ORDER BY b.invitee_created_at DESC`
       );
       rows.push(...fRes.rows.map(r => formatRow(r, 'booking_start_at', 'booking_end_at')));
