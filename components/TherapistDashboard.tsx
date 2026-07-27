@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, Calendar, LogOut, PieChart, ChevronUp, ChevronDown, ChevronRight, Copy, Send, Search, FileText, Bell, X, User, CalendarIcon, ArrowLeft, Mail, Eye, EyeOff, Edit, Download, MessageCircle, Headset } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, LogOut, PieChart, ChevronUp, ChevronDown, ChevronRight, Copy, Send, Search, FileText, X, User, CalendarIcon, ArrowLeft, Mail, Eye, EyeOff, Edit, Download, MessageCircle, Headset } from 'lucide-react';
 import { Logo } from './Logo';
 import { Notifications } from './Notifications';
 import { Toast } from './Toast';
@@ -85,7 +85,6 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     { title: 'Avg Rating', value: '—', lastMonth: '0', clickable: false, targetView: '', targetTab: '' },
   ]);
   const [bookings, setBookings] = useState<any[]>([]);
-  const [notifications, setNotifications] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
   const [appointments, setAppointments] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -821,12 +820,6 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
         ]);
 
         setBookings(data.upcomingBookings || []);
-
-        const notificationsRes = await fetch(`/api/notifications?user_id=${user.id}&user_role=therapist`);
-        if (notificationsRes.ok) {
-          const notificationsData = await notificationsRes.json();
-          setNotifications(notificationsData.slice(0, 2));
-        }
 
         // Fetch all appointments to get pending notes
         const appointmentsRes = await fetch(`/api/therapist-appointments?therapist_id=${user.id}`);
@@ -2428,14 +2421,16 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: activeView === 'notifications' ? '#F4A9365C' : 'transparent' }}
+            style={{ backgroundColor: showCalendarView ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
+              // resetAllStates() clears showCalendarView, so re-enable it afterwards.
               resetAllStates();
-              setActiveView('notifications');
+              setActiveView('dashboard');
+              setShowCalendarView(true);
             }}
           >
-            <Bell size={20} className={activeView === 'notifications' ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={activeView === 'notifications' ? 'text-teal-700' : 'text-gray-700'}>Notifications</span>
+            <CalendarIcon size={20} className={showCalendarView ? 'text-teal-700' : 'text-gray-700'} />
+            <span className={showCalendarView ? 'text-teal-700' : 'text-gray-700'}>My Calendar</span>
           </div>
 
         </nav>
@@ -3254,19 +3249,8 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                       <p className="text-gray-600">Welcome Back, {user.name || user.full_name || user.username}!</p>
                     </div>
                   </div>
+                  {/* Notifications live only in the global header; My Calendar moved to the sidebar. */}
                   <div className="flex items-center gap-4">
-                    <NotificationBell
-                      userId={user?.id}
-                      userRole="therapist"
-                      onViewAll={() => setActiveView('notifications')}
-                    />
-                    <button
-                      onClick={() => setShowCalendarView(!showCalendarView)}
-                      className="flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
-                    >
-                      <CalendarIcon size={16} />
-                      My Calendar
-                    </button>
                     <div className="relative" ref={dropdownRef}>
                       <button
                         onClick={() => setIsDateDropdownOpen(!isDateDropdownOpen)}

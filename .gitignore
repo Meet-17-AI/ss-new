@@ -26,3 +26,6 @@ dist-ssr
 # Internal audit reports (document live weaknesses - keep out of the repo)
 SECURITY_AUDIT_REPORT_*.md
 LOGIC_BUGS_REPORT_*.md
+
+# DB deletion backups (contain client PII - never commit)
+backups/
