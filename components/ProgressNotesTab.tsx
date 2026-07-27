@@ -10,6 +10,7 @@ interface ProgressNotesTabProps {
 export const ProgressNotesTab: React.FC<ProgressNotesTabProps> = ({ clientId, onViewNote, hasFreeConsultation = false }) => {
   const [notes, setNotes] = useState<any[]>([]);
   const [freeConsultNotes, setFreeConsultNotes] = useState<any[]>([]);
+  const [drafts, setDrafts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedSessionNote, setExpandedSessionNote] = useState<number | null>(null);
@@ -48,10 +49,23 @@ export const ProgressNotesTab: React.FC<ProgressNotesTabProps> = ({ clientId, on
 
   useEffect(() => {
     fetchProgressNotes();
+    fetchDrafts();
     if (hasFreeConsultation) {
       fetchFreeConsultationNotes();
     }
   }, [clientId, hasFreeConsultation]);
+
+  // In-progress (unsubmitted) note drafts. Best-effort: a failure here must never
+  // affect the submitted notes list.
+  const fetchDrafts = async () => {
+    try {
+      const response = await fetch(`/api/progress-note-drafts?client_id=${encodeURIComponent(clientId)}`);
+      const data = await response.json();
+      if (data.success) setDrafts(data.data || []);
+    } catch (error) {
+      console.error('Error fetching note drafts:', error);
+    }
+  };
 
   const fetchProgressNotes = async () => {
     try {
@@ -121,7 +135,20 @@ export const ProgressNotesTab: React.FC<ProgressNotesTabProps> = ({ clientId, on
            note.other_notes?.toLowerCase().includes(searchTerm.toLowerCase())
   });
 
-  const allNotes = [...filteredFreeConsultNotes.map(n => ({ ...n, isFreeConsultation: true })), ...filteredNotes];
+  const filteredDrafts = drafts.filter(d => {
+    if (!searchTerm) return true;
+    const s = searchTerm.toLowerCase();
+    return d.preview?.toLowerCase().includes(s) ||
+           d.session_name?.toLowerCase().includes(s) ||
+           d.therapist_name?.toLowerCase().includes(s);
+  });
+
+  // Drafts sit at the top: they're the items still needing action.
+  const allNotes = [
+    ...filteredDrafts.map(d => ({ ...d, isDraft: true })),
+    ...filteredFreeConsultNotes.map(n => ({ ...n, isFreeConsultation: true })),
+    ...filteredNotes,
+  ];
 
   if (loading) {
     return (
@@ -158,7 +185,58 @@ export const ProgressNotesTab: React.FC<ProgressNotesTabProps> = ({ clientId, on
       {/* Notes List */}
       <div className="space-y-3">
         {allNotes.map((note) => {
-          if (note.isFreeConsultation) {
+          if (note.isDraft) {
+            // ── Unsubmitted draft ── grey, distinct from the green submitted notes.
+            // Opening it resumes the same form (prefilled); the session only counts as
+            // documented once the therapist signs and submits.
+            const savedAt = note.updated_at ? new Date(note.updated_at) : null;
+            return (
+              <div
+                key={`draft-${note.booking_id}`}
+                className="rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 hover:border-gray-400 hover:bg-gray-100 transition-colors cursor-pointer"
+                onClick={() => window.open(`/session-notes/${note.booking_id}`, '_blank')}
+              >
+                <div className="p-4">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-1 flex-wrap">
+                        <span className="px-3 py-1 bg-gray-500 text-white text-xs font-medium rounded-full">
+                          DRAFT — NOT SUBMITTED
+                        </span>
+                        <span className="text-sm text-gray-500">
+                          {note.booking_invitee_time || formatHeaderDate(note.booking_start_at)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-gray-500 mt-2 flex-wrap">
+                        {note.session_name && <span>{note.session_name}</span>}
+                        {note.therapist_name && <><span>•</span><span>{note.therapist_name}</span></>}
+                        {note.filled_count > 0 && (
+                          <><span>•</span><span>{note.filled_count} field{note.filled_count === 1 ? '' : 's'} filled</span></>
+                        )}
+                      </div>
+                    </div>
+                    <ChevronRight size={20} className="text-gray-400 shrink-0" />
+                  </div>
+
+                  {note.preview && (
+                    <div>
+                      <span className="text-xs font-medium text-gray-500">In progress:</span>
+                      <p className="text-sm text-gray-600 line-clamp-2 mt-0.5 italic">{note.preview}</p>
+                    </div>
+                  )}
+
+                  <div className="mt-3 pt-3 border-t border-gray-200 flex items-center justify-between">
+                    <span className="text-xs text-gray-400">
+                      {savedAt ? `Last saved ${savedAt.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}
+                    </span>
+                    <span className="text-xs font-medium text-gray-600 underline">
+                      Open &amp; complete →
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          } else if (note.isFreeConsultation) {
             // Free Consultation Note
             return (
               <div

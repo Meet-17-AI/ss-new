@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { SessionNotesForm } from './SessionNotesForm';
 import { ConsultationNotesForm } from './ConsultationNotesForm';
 import { Loader } from './Loader';
+import { loadDraft } from './sessionDraft';
 
 interface SessionNotesPageProps {
   bookingId: string;
@@ -9,19 +10,21 @@ interface SessionNotesPageProps {
 
 export function SessionNotesPage({ bookingId }: SessionNotesPageProps) {
   const [sessionInfo, setSessionInfo] = useState<any>(null);
+  const [initialDraft, setInitialDraft] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/session-notes-info?booking_id=${bookingId}`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.error) setError(data.error);
-        else setSessionInfo(data);
-      })
-      .catch(() => setError('Failed to load session details.'))
-      .finally(() => setLoading(false));
+    // Load the session info and any autosaved draft in parallel. The draft is a pure
+    // best-effort enhancement — if it fails we simply render an empty form as before.
+    Promise.all([
+      fetch(`/api/session-notes-info?booking_id=${bookingId}`)
+        .then(r => r.json())
+        .then(data => { if (data.error) setError(data.error); else setSessionInfo(data); })
+        .catch(() => setError('Failed to load session details.')),
+      loadDraft(bookingId).then(d => setInitialDraft(d)).catch(() => {}),
+    ]).finally(() => setLoading(false));
   }, [bookingId]);
 
   const handleSubmit = async (formData: any) => {
@@ -76,6 +79,7 @@ export function SessionNotesPage({ bookingId }: SessionNotesPageProps) {
     return (
       <ConsultationNotesForm
         sessionInfo={sessionInfo}
+        initialDraft={initialDraft}
         onClose={() => window.close()}
         onSubmit={handleSubmit}
       />
@@ -85,6 +89,7 @@ export function SessionNotesPage({ bookingId }: SessionNotesPageProps) {
   return (
     <SessionNotesForm
       sessionInfo={sessionInfo}
+      initialDraft={initialDraft}
       onClose={() => window.close()}
       onSubmit={handleSubmit}
     />

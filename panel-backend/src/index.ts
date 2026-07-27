@@ -3295,21 +3295,36 @@ app.get('/api/clients', async (req, res) => {
 app.get('/api/client-booking-history/:clientId', async (req, res) => {
   try {
     const clientId = req.params.clientId;
+    // Prefer phone/email passed by the caller — invitee_id is NULL on many (esp. recent)
+    // bookings, so keying history off it alone silently returns "0 bookings" for real
+    // repeat clients. Phone/email are the reliable link across a client's bookings.
+    const qPhone = (req.query.phone || '').toString().trim();
+    const qEmail = (req.query.email || '').toString().trim();
 
-    // First get the client's phone and email to find all their bookings
-    const clientRes = await pool.query(
-      `SELECT invitee_phone, invitee_email, invitee_name FROM bookings WHERE invitee_id = $1 LIMIT 1`,
-      [clientId]
-    );
-
-    let phone = null;
-    let email = null;
+    let phone: string | null = qPhone || null;
+    let email: string | null = qEmail || null;
     let clientName = '';
 
-    if (clientRes.rows.length > 0) {
-      phone = clientRes.rows[0].invitee_phone;
-      email = clientRes.rows[0].invitee_email;
-      clientName = clientRes.rows[0].invitee_name || '';
+    if (phone || email) {
+      // Resolve a display name from any booking that matches the supplied phone/email.
+      const nameRes = await pool.query(
+        `SELECT invitee_name FROM bookings
+         WHERE (invitee_phone = $1 AND $1 <> '') OR (invitee_email = $2 AND $2 <> '')
+         ORDER BY booking_start_at DESC NULLS LAST LIMIT 1`,
+        [phone || '', email || '']
+      );
+      if (nameRes.rows.length > 0) clientName = nameRes.rows[0].invitee_name || '';
+    } else {
+      // Fallback: resolve phone/email from a booking carrying this invitee_id.
+      const clientRes = await pool.query(
+        `SELECT invitee_phone, invitee_email, invitee_name FROM bookings WHERE invitee_id = $1 LIMIT 1`,
+        [clientId]
+      );
+      if (clientRes.rows.length > 0) {
+        phone = clientRes.rows[0].invitee_phone;
+        email = clientRes.rows[0].invitee_email;
+        clientName = clientRes.rows[0].invitee_name || '';
+      }
     }
 
     const result = await pool.query(`
@@ -4246,6 +4261,18 @@ async function insertClientCalendarEvent(calendar: any, opts: {
     console.error('[calendar] insert with masked email failed — retrying name-only:', e?.message || e);
     return await doInsert(false);
   }
+}
+
+// Canonical therapy label stored on the booking and shown on the Google Calendar event.
+// A booking's therapy TYPE always renders as "<Type> Therapy Session" (e.g. "Individual
+// Therapy Session"), independent of therapist. Free Consultation and anything unrecognised
+// are left untouched. Keeps panel display, DB, and calendar titles consistent.
+function canonicalTherapyLabel(raw: string | null | undefined): string {
+  const s = String(raw || '').trim();
+  if (/adolescent/i.test(s)) return 'Adolescent Therapy Session';
+  if (/couples?/i.test(s)) return 'Couples Therapy Session';
+  if (/individual/i.test(s)) return 'Individual Therapy Session';
+  return s;
 }
 
 app.get('/api/appointments', async (req, res) => {
@@ -7921,7 +7948,7 @@ app.post('/api/create-booking', async (req, res) => {
 
         console.log(`[Create Booking] Inserting event into calendar for ${therapist.name}...`);
         const ev = await insertClientCalendarEvent(calendar, {
-          therapyLabel: payload.therapyName || 'Session',
+          therapyLabel: payload.isFreeConsultation ? (payload.therapyName || 'Free Consultation') : canonicalTherapyLabel(payload.therapyName),
           clientName: payload.clientName,
           mode: payload.sessionMode || 'online',
           notes: payload.notes || 'None',
@@ -7963,7 +7990,7 @@ app.post('/api/create-booking', async (req, res) => {
         payload.clientEmail,
         payload.clientWhatsApp,
         payload.timezone || 'Asia/Kolkata',
-        payload.therapyName || 'Session',
+        payload.isFreeConsultation ? (payload.therapyName || 'Free Consultation') : canonicalTherapyLabel(payload.therapyName),
         startAt.toISOString(),
         endAt.toISOString(),
         inviteeTime,
@@ -8119,7 +8146,7 @@ app.post('/api/create-booking', async (req, res) => {
 });
 
 // Create a minimal "pending" booking record before Razorpay opens.
-// Holds the slot in DB (payment_pending) for up to 15 minutes; confirmed by verify-payment.
+// Holds the slot in DB (payment_pending) for up to 30 minutes; confirmed by verify-payment.
 app.post('/api/create-pending-booking', async (req, res) => {
   try {
     const payload = req.body;
@@ -8198,7 +8225,7 @@ app.post('/api/create-pending-booking', async (req, res) => {
         payload.clientEmail,
         payload.clientWhatsApp,
         payload.timezone || 'Asia/Kolkata',
-        payload.therapyName || 'Session',
+        payload.isFreeConsultation ? (payload.therapyName || 'Free Consultation') : canonicalTherapyLabel(payload.therapyName),
         startAt.toISOString(), endAt.toISOString(),
         payload.amount || 0, 'INR',
         'payment_pending', 'Pending', 'Razorpay',
@@ -9048,6 +9075,13 @@ app.post('/api/session-documentation', async (req, res) => {
       });
     }
 
+    // The submit succeeded — discard any autosaved draft for this booking so a re-open
+    // shows a clean form, not stale draft data. Best-effort; never blocks the response.
+    if (booking_id) {
+      pool.query('DELETE FROM session_notes_drafts WHERE booking_id = $1', [booking_id])
+        .catch(e => console.error('[session-documentation] draft cleanup failed:', e?.message || e));
+    }
+
     res.json({
       success: true,
       message: 'Session documentation stored successfully',
@@ -9056,6 +9090,133 @@ app.post('/api/session-documentation', async (req, res) => {
   } catch (error: any) {
     console.error('❌ Error storing session documentation:', error);
     res.status(500).json({ success: false, error: error?.message || 'Failed to store session documentation' });
+  }
+});
+
+// ── Session-notes DRAFT (autosave failsafe) ─────────────────────────────────
+// A fully isolated store: the therapist's in-progress form is saved here continuously
+// so a failed submit / closed tab never loses data. NOTHING else reads this table, so
+// drafts can't affect has_session_notes, KPIs, booking status, or the appointments list.
+// The signature is intentionally NOT stored — the therapist re-signs on submit.
+app.post('/api/session-notes-draft', async (req, res) => {
+  try {
+    const { booking_id, form_type, form_data } = req.body || {};
+    if (!booking_id || form_data === undefined || form_data === null) {
+      return res.status(400).json({ error: 'booking_id and form_data are required' });
+    }
+    await pool.query(
+      `INSERT INTO session_notes_drafts (booking_id, form_type, form_data, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (booking_id) DO UPDATE SET
+         form_type = EXCLUDED.form_type,
+         form_data = EXCLUDED.form_data,
+         updated_at = NOW()`,
+      [String(booking_id), form_type || null, JSON.stringify(form_data)]
+    );
+    res.json({ success: true });
+  } catch (error: any) {
+    // Autosave is best-effort — surface a 500 but the form keeps working regardless.
+    console.error('[session-notes-draft] save failed:', error?.message || error);
+    res.status(500).json({ success: false, error: 'Failed to save draft' });
+  }
+});
+
+app.get('/api/session-notes-draft', async (req, res) => {
+  try {
+    const { booking_id } = req.query;
+    if (!booking_id) return res.status(400).json({ error: 'booking_id is required' });
+    const r = await pool.query(
+      'SELECT form_type, form_data, updated_at FROM session_notes_drafts WHERE booking_id = $1',
+      [String(booking_id)]
+    );
+    res.json({ draft: r.rows.length ? r.rows[0] : null });
+  } catch (error: any) {
+    console.error('[session-notes-draft] load failed:', error?.message || error);
+    res.status(500).json({ error: 'Failed to load draft' });
+  }
+});
+
+// Lists a client's IN-PROGRESS (unsubmitted) note drafts so the client profile can show
+// them alongside submitted notes. Resolves client → bookings with the SAME normalized
+// phone/email logic as /api/progress-notes so the two lists always agree on identity.
+// Read-only: this never affects note/KPI/status derivation anywhere.
+app.get('/api/progress-note-drafts', async (req, res) => {
+  try {
+    const { client_id } = req.query;
+    if (!client_id) return res.status(400).json({ error: 'client_id is required' });
+
+    const result = await pool.query(
+      `SELECT d.booking_id, d.form_type, d.updated_at, d.form_data,
+              b.booking_invitee_time, b.booking_start_at, b.booking_status,
+              b.booking_host_name AS therapist_name,
+              b.booking_resource_name AS session_name,
+              b.invitee_name AS client_name
+       FROM session_notes_drafts d
+       JOIN bookings b ON b.booking_id::text = d.booking_id::text
+       WHERE NOT EXISTS (SELECT 1 FROM client_progress_notes  x WHERE x.booking_id::text = d.booking_id::text)
+         AND NOT EXISTS (SELECT 1 FROM client_case_history    x WHERE x.booking_id::text = d.booking_id::text)
+         AND NOT EXISTS (SELECT 1 FROM pretherapy_call_forms  x WHERE x.booking_id::text = d.booking_id::text)
+         AND NOT EXISTS (SELECT 1 FROM client_session_notes   x WHERE x.booking_id::text = d.booking_id::text)
+         AND (b.invitee_email = $1
+          OR regexp_replace(b.invitee_phone, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+          OR (b.invitee_email IS NOT NULL AND b.invitee_email IN (
+                SELECT invitee_email FROM bookings
+                WHERE regexp_replace(invitee_phone, '[^0-9]', '', 'g') = regexp_replace($1, '[^0-9]', '', 'g')
+                  AND invitee_email IS NOT NULL)))
+       ORDER BY d.updated_at DESC`,
+      [client_id]
+    );
+
+    // Surface a short preview so the card can show what was written so far, without
+    // shipping the whole form payload to the browser.
+    const PREVIEW_KEYS = [
+      'clientReport', 'presentingConcerns', 'themesPatterns', 'techniquesUsed',
+      'clinical_concerns_observed', 'concerns_other', 'client_questions',
+    ];
+    const data = result.rows.map(r => {
+      const fd = r.form_data || {};
+      let preview = '';
+      for (const k of PREVIEW_KEYS) {
+        if (typeof fd[k] === 'string' && fd[k].trim()) { preview = fd[k].trim(); break; }
+      }
+      // Rough completeness signal: how many fields actually carry content.
+      const filledCount = Object.entries(fd).filter(([k, v]) =>
+        !['step', 'sessionType', 'signatureDate'].includes(k) &&
+        v !== null && v !== undefined &&
+        (typeof v === 'string' ? v.trim() !== '' : (Array.isArray(v) ? v.length > 0 : true))
+      ).length;
+      return {
+        booking_id: r.booking_id,
+        form_type: r.form_type,
+        updated_at: r.updated_at,
+        booking_invitee_time: r.booking_invitee_time,
+        booking_start_at: r.booking_start_at,
+        booking_status: r.booking_status,
+        therapist_name: r.therapist_name,
+        session_name: r.session_name,
+        client_name: r.client_name,
+        preview,
+        filled_count: filledCount,
+        is_draft: true,
+      };
+    });
+
+    res.json({ success: true, data });
+  } catch (error: any) {
+    console.error('[progress-note-drafts] fetch failed:', error?.message || error);
+    res.status(500).json({ error: 'Failed to fetch note drafts' });
+  }
+});
+
+app.delete('/api/session-notes-draft', async (req, res) => {
+  try {
+    const booking_id = (req.query.booking_id || (req.body && req.body.booking_id)) as string;
+    if (!booking_id) return res.status(400).json({ error: 'booking_id is required' });
+    await pool.query('DELETE FROM session_notes_drafts WHERE booking_id = $1', [String(booking_id)]);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('[session-notes-draft] delete failed:', error?.message || error);
+    res.status(500).json({ error: 'Failed to delete draft' });
   }
 });
 
@@ -9913,6 +10074,27 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
     const sessionDurationMinutes = serviceType === 'Free Consultation' ? 15 : 50;
     const endObj = new Date(startObj.getTime() + sessionDurationMinutes * 60000);
 
+    // ── Double-booking prevention ──
+    // Mirrors /api/create-booking. Both paths now sit behind one button, so without this
+    // the same slot could be held by a payment link while another admin books it outright.
+    // An unpaid hold ('waiting_for_payment') still occupies the slot until it is paid or
+    // expired by the cron, so it must count as a conflict here.
+    if (resolvedTherapistId) {
+      const conflictRes = await pool.query(
+        `SELECT booking_id FROM bookings
+         WHERE therapist_id = $1
+           AND booking_status NOT IN ('cancelled', 'canceled', 'payment_failed')
+           AND booking_start_at < $3
+           AND booking_end_at > $2
+         LIMIT 1`,
+        [resolvedTherapistId, startObj.toISOString(), endObj.toISOString()]
+      );
+      if (conflictRes.rows.length > 0) {
+        console.warn(`[generate-payment-link] Slot conflict for therapist ${resolvedTherapistId} at ${startObj.toISOString()}`);
+        return res.status(409).json({ error: 'This time slot is no longer available. Please choose another slot.', conflict: 'system' });
+      }
+    }
+
     const formatTime = (dateObj: Date) => dateObj.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
     const dayName = startObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' });
     const monthName = startObj.toLocaleDateString('en-US', { month: 'short', timeZone: 'Asia/Kolkata' });
@@ -9959,7 +10141,8 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
       [
         bookingId, resolvedTherapistId, clientName, clientEmail, clientPhone,
         startObj.toISOString(), endObj.toISOString(), 'waiting_for_payment', 'Pending', amount,
-        serviceType, bookingMode, clientTz, inviteeTime, hostTime, therapistName, maskId
+        (/free consultation/i.test(serviceType || '') ? serviceType : canonicalTherapyLabel(serviceType)),
+        bookingMode, clientTz, inviteeTime, hostTime, therapistName, maskId
       ]
     );
 
@@ -10037,19 +10220,28 @@ app.post('/api/admin/generate-payment-link', async (req, res) => {
       hour12: true
     }).format(startObj);
 
+    // The link goes out on WhatsApp AND email. Both sends are best-effort: the slot is
+    // already held and the link already exists, so a messaging failure must not fail the
+    // request (that would strand a blocked slot and show the admin an error for a booking
+    // that was in fact created).
     if (clientPhone) {
-      await sendAiSensyMessage(
-        bookingId,
-        "send_paymentlink_client_n8n",
-        clientPhone,
-        clientName || "Client",
-        [
+      try {
+        await sendAiSensyMessage(
+          bookingId,
+          "send_paymentlink_client_n8n",
+          clientPhone,
           clientName || "Client",
-          serviceType || "Therapy Session",
-          formattedDate,
-          paymentLink
-        ]
-      );
+          [
+            clientName || "Client",
+            serviceType || "Therapy Session",
+            formattedDate,
+            paymentLink
+          ]
+        );
+        console.log(`[generate-payment-link] Sent payment link WhatsApp to ${clientPhone}`);
+      } catch (waErr: any) {
+        console.error(`[generate-payment-link] Failed to send payment link WhatsApp to ${clientPhone}:`, waErr?.message || waErr);
+      }
     }
 
     if (clientEmail) {
@@ -10558,6 +10750,17 @@ async function runStartupMigrations() {
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_webhook_api_logs_type_created
       ON webhook_api_logs(log_type, created_at DESC)
+    `);
+
+    // Session-notes drafts (autosave failsafe). Isolated store: one row per booking,
+    // read only by the draft endpoints + the client-profile drafts list.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS session_notes_drafts (
+        booking_id TEXT PRIMARY KEY,
+        form_type  TEXT,
+        form_data  JSONB NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+      )
     `);
 
     // Heal existing bookings where invitee_created_at is null so they can be processed by expiry cron

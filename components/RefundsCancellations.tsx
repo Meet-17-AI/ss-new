@@ -223,7 +223,6 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
       <div className="flex justify-between items-start mb-6">
         <div>
           <h1 className="text-3xl font-bold mb-1">Payments</h1>
-          <p className="text-gray-600">View all payments and Cancellations and refunds</p>
           <p className="text-sm italic mt-1" style={{ color: '#21615D' }}>Razorpay gateway currently only displays "Initiated" or "Failed" statuses. A "Completed" status will not be shown</p>
         </div>
         <div className="flex gap-4 items-center flex-wrap justify-end">

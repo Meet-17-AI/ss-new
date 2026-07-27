@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react';
 import { Logo } from './Logo';
+import { saveDraft, saveDraftBeacon, hasDraftContent } from './sessionDraft';
 
 interface SessionInfo {
   clientName: string;
@@ -17,6 +18,7 @@ interface SessionInfo {
 
 interface ConsultationNotesFormProps {
   sessionInfo: SessionInfo;
+  initialDraft?: any;
   onClose: () => void;
   onSubmit: (data: any) => void;
 }
@@ -92,7 +94,7 @@ const SectionTitle = ({ number, title }: { number: number; title: string }) => (
   </h3>
 );
 
-export function ConsultationNotesForm({ sessionInfo, onClose, onSubmit }: ConsultationNotesFormProps) {
+export function ConsultationNotesForm({ sessionInfo, initialDraft, onClose, onSubmit }: ConsultationNotesFormProps) {
   const [step, setStep] = useState(0);
 
   // Form State matching PreTherapyFormData
@@ -130,6 +132,70 @@ export function ConsultationNotesForm({ sessionInfo, onClose, onSubmit }: Consul
   const [close_reason, setCloseReason] = useState('');
 
   const [showError, setShowError] = useState(false);
+
+  // ── Draft failsafe (autosave + prefill) ──────────────────────────────────
+  // All autosave is best-effort and never blocks the form. Stored in an isolated
+  // table that no other query reads, so it can't affect any existing behaviour.
+  const bookingId = sessionInfo.bookingId;
+  const [hydrated, setHydrated] = useState(!initialDraft);
+
+  useEffect(() => {
+    if (!initialDraft) return;
+    const d = initialDraft;
+    const s = (v: any, def: any = '') => (v === undefined || v === null ? def : v);
+    const arr = (v: any) => (Array.isArray(v) ? v : []);
+    if (typeof d.step === 'number') setStep(d.step);
+    setAge(s(d.age)); setLanguage(arr(d.language)); setLanguageOther(s(d.language_other));
+    setLocation(s(d.location)); setLocationManual(s(d.location_manual)); setModeOfSession(arr(d.mode_of_session));
+    setPreviousTherapy(s(d.previous_therapy)); setConcerns(arr(d.concerns)); setConcernsOther(s(d.concerns_other));
+    setClinicalConcernsObserved(s(d.clinical_concerns_observed)); setClinicalConcerns(arr(d.clinical_concerns));
+    setPsychiatricTreatment(s(d.psychiatric_treatment));
+    setSuicidalThoughts(s(d.suicidal_thoughts)); setSuicidalCurrent(s(d.suicidal_current));
+    setSuicidalIdeation1m(s(d.suicidal_ideation_1m)); setSuicidalAttempt1m(s(d.suicidal_attempt_1m));
+    setPreferredApproach(s(d.preferred_therapy_approach)); setPreferredApproachText(s(d.preferred_therapy_text));
+    setConsentExplained(s(d.consent_explained)); setConsentNoReason(s(d.consent_no_reason)); setScopeExplained(s(d.scope_explained));
+    setPreferredPrice(s(d.preferred_price)); setPreferredPriceOther(s(d.preferred_price_other));
+    setReadiness(arr(d.readiness)); setReadinessOther(s(d.readiness_other));
+    setConsentedFollowup(s(d.consented_followup)); setFollowupMode(s(d.followup_mode));
+    setClientQuestions(s(d.client_questions)); setSource(s(d.source)); setSourceOther(s(d.source_other));
+    setConsultationOutcome(s(d.consultation_outcome)); setCloseReason(s(d.close_reason));
+    setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const draftData = {
+    step, age, language, language_other, location, location_manual, mode_of_session,
+    previous_therapy, concerns, concerns_other, clinical_concerns_observed, clinical_concerns,
+    psychiatric_treatment, suicidal_thoughts, suicidal_current, suicidal_ideation_1m, suicidal_attempt_1m,
+    preferred_therapy_approach, preferred_therapy_text, consent_explained, consent_no_reason, scope_explained,
+    preferred_price, preferred_price_other, readiness, readiness_other, consented_followup, followup_mode,
+    client_questions, source, source_other, consultation_outcome, close_reason,
+  };
+  const draftJson = JSON.stringify(draftData);
+
+  // 'step' is auto-populated on mount, so it alone doesn't make a form "started".
+  const draftHasContent = hasDraftContent(draftData, ['step']);
+
+  // Autosave on EVERY field change (short debounce only coalesces keystrokes).
+  useEffect(() => {
+    if (!hydrated || !bookingId || !draftHasContent) return;
+    const t = setTimeout(() => { saveDraft(bookingId, 'consultation', draftData); }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftJson, hydrated, bookingId, draftHasContent]);
+
+  useEffect(() => {
+    if (!bookingId) return;
+    const flush = () => { if (draftHasContent) saveDraftBeacon(bookingId, 'consultation', draftData); };
+    const onHide = () => { if (document.visibilityState === 'hidden') flush(); };
+    window.addEventListener('beforeunload', flush);
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      document.removeEventListener('visibilitychange', onHide);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftJson, bookingId, draftHasContent]);
 
   const handleNext = () => setStep(s => s + 1);
   const handleBack = () => setStep(s => s - 1);

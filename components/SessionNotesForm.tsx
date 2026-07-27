@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react';
 import { Logo } from './Logo';
+import { saveDraft, saveDraftBeacon, hasDraftContent } from './sessionDraft';
 
 interface SessionInfo {
   clientName: string;
@@ -17,6 +18,7 @@ interface SessionInfo {
 
 interface SessionNotesFormProps {
   sessionInfo: SessionInfo;
+  initialDraft?: any;
   onClose: () => void;
   onSubmit: (data: any) => void;
 }
@@ -124,7 +126,7 @@ const SectionTitle = ({ number, title }: { number: number; title: string }) => (
   </h3>
 );
 
-export function SessionNotesForm({ sessionInfo, onClose, onSubmit }: SessionNotesFormProps) {
+export function SessionNotesForm({ sessionInfo, initialDraft, onClose, onSubmit }: SessionNotesFormProps) {
   const [step, setStep] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
@@ -213,6 +215,87 @@ export function SessionNotesForm({ sessionInfo, onClose, onSubmit }: SessionNote
   // Step 5 - Declaration
   const [signatureDate, setSignatureDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [selfDeclaration, setSelfDeclaration] = useState(false);
+
+  // ── Draft failsafe (autosave + prefill) ──────────────────────────────────
+  // Signature and the File upload are intentionally excluded (re-signed on submit;
+  // Files can't be serialized). All autosave is best-effort and never blocks the form.
+  const bookingId = sessionInfo.bookingId;
+  const [hydrated, setHydrated] = useState(!initialDraft);
+
+  useEffect(() => {
+    if (!initialDraft) return;
+    const d = initialDraft;
+    const s = (v: any, def: any = '') => (v === undefined || v === null ? def : v);
+    if (typeof d.step === 'number') setStep(d.step);
+    if (d.sessionType) setSessionType(d.sessionType);        // guard: don't override auto-select with empty
+    setSessionStatus(s(d.sessionStatus));
+    setKnowAge(d.knowAge ?? null);
+    setExactAge(s(d.exactAge)); setAgeRange(s(d.ageRange));
+    setGenderIdentity(s(d.genderIdentity)); setEducation(s(d.education)); setOccupation(s(d.occupation));
+    setMaritalStatus(s(d.maritalStatus)); setChildren(s(d.children)); setReligion(s(d.religion));
+    setSocioEconomicStatus(s(d.socioEconomicStatus)); setCityState(s(d.cityState));
+    setPresentingConcerns(s(d.presentingConcerns)); setDurationOnset(s(d.durationOnset)); setTriggerFactors(s(d.triggerFactors));
+    setSleep(s(d.sleep)); setWeightChanges(s(d.weightChanges)); setAppetite(s(d.appetite)); setEnergyLevels(s(d.energyLevels));
+    setLibido(s(d.libido)); setMenstrualHistory(s(d.menstrualHistory));
+    setDevelopmentalHistory(s(d.developmentalHistory)); setMedicalHistory(s(d.medicalHistory));
+    setMedications(s(d.medications)); setPreviousMentalHealth(s(d.previousMentalHealth));
+    setInsight(Array.isArray(d.insight) ? d.insight : []);
+    setTherapyGoals(s(d.therapyGoals)); setGoalStage(s(d.goalStage));
+    setClientReport(s(d.clientReport)); setDirectQuotes(s(d.directQuotes));
+    setClientPresentation(Array.isArray(d.clientPresentation) ? d.clientPresentation : []);
+    setTechniquesUsed(s(d.techniquesUsed)); setHomeworkAssigned(s(d.homeworkAssigned));
+    setClientReaction(s(d.clientReaction)); setEngagementNotes(s(d.engagementNotes));
+    setThemesPatterns(s(d.themesPatterns)); setClinicalConcerns(s(d.clinicalConcerns));
+    setSelfHarmMention(d.selfHarmMention ?? null); setSelfHarmDetails(s(d.selfHarmDetails));
+    setRiskLevel(s(d.riskLevel)); setRiskFactors(s(d.riskFactors)); setProtectiveFactors(s(d.protectiveFactors));
+    setSafetyPlan(d.safetyPlan ?? null); setFutureInterventions(s(d.futureInterventions)); setSessionFrequency(s(d.sessionFrequency));
+    if (d.signatureDate) setSignatureDate(d.signatureDate);
+    setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const draftData = {
+    step, sessionType, sessionStatus,
+    knowAge, exactAge, ageRange, genderIdentity, education, occupation, maritalStatus, children, religion,
+    socioEconomicStatus, cityState, presentingConcerns, durationOnset, triggerFactors,
+    sleep, weightChanges, appetite, energyLevels, libido, menstrualHistory, developmentalHistory,
+    medicalHistory, medications, previousMentalHealth, insight,
+    therapyGoals, goalStage,
+    clientReport, directQuotes, clientPresentation, techniquesUsed, homeworkAssigned, clientReaction,
+    engagementNotes, themesPatterns, clinicalConcerns, selfHarmMention, selfHarmDetails, riskLevel,
+    riskFactors, protectiveFactors, safetyPlan, futureInterventions, sessionFrequency, signatureDate,
+  };
+  const draftJson = JSON.stringify(draftData);
+
+  // Fields that are auto-populated on mount and therefore don't make a form "started".
+  const DRAFT_IGNORE = ['step', 'sessionType', 'signatureDate'];
+  const draftHasContent = hasDraftContent(draftData, DRAFT_IGNORE);
+
+  // Autosave on EVERY field change. The short debounce only coalesces individual
+  // keystrokes — each edit still lands in the DB within ~600ms. Gated on hydration so
+  // we never overwrite a saved draft with the initial empty state, and on actual
+  // content so simply opening a form never creates a draft.
+  useEffect(() => {
+    if (!hydrated || !bookingId || !draftHasContent) return;
+    const t = setTimeout(() => { saveDraft(bookingId, 'session', draftData); }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftJson, hydrated, bookingId, draftHasContent]);
+
+  // Capture the latest state if the therapist closes the tab, navigates away, or
+  // backgrounds it (visibilitychange fires on mobile/tab-switch where unload may not).
+  useEffect(() => {
+    if (!bookingId) return;
+    const flush = () => { if (draftHasContent) saveDraftBeacon(bookingId, 'session', draftData); };
+    const onHide = () => { if (document.visibilityState === 'hidden') flush(); };
+    window.addEventListener('beforeunload', flush);
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      document.removeEventListener('visibilitychange', onHide);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftJson, bookingId, draftHasContent]);
 
   // Canvas signature helpers
   const startDraw = (e: React.MouseEvent<HTMLCanvasElement>) => {

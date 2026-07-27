@@ -531,7 +531,6 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
       <div className="flex justify-between items-start mb-6">
         <div>
           <h1 className="text-3xl font-bold mb-1">All Clients</h1>
-          <p className="text-gray-600">View Client Details, Sessions and more...</p>
         </div>
         <button
           onClick={toggleEditMode}

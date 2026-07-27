@@ -6,10 +6,9 @@ import paymentSentAnimation from '../payment-sent.json';
 
 interface CreateBookingProps {
   onBack: () => void;
-  isDirectBooking?: boolean;
 }
 
-export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBooking = false }) => {
+export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
   const [clientName, setClientName] = useState('');
   const [clientEmail, setClientEmail] = useState('');
   const [clientWhatsApp, setClientWhatsApp] = useState('');
@@ -40,6 +39,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   const dateContainerRef = useRef<HTMLDivElement>(null);
   const clientDropdownRef = useRef<HTMLDivElement>(null);
   const [clients, setClients] = useState<any[]>([]);
+  const [services, setServices] = useState<any[]>([]);
   const [showClientDropdown, setShowClientDropdown] = useState(false);
   const [filteredClients, setFilteredClients] = useState<any[]>([]);
   const [generatedPaymentLink, setGeneratedPaymentLink] = useState('');
@@ -55,11 +55,62 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   const [allowedTherapists, setAllowedTherapists] = useState<string[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [hasRestrictions, setHasRestrictions] = useState(false);
-  const [paymentMode, setPaymentMode] = useState<'link' | 'qr' | 'cash' | ''>(isDirectBooking ? '' : 'link');
+  const [paymentMode, setPaymentMode] = useState<'link' | 'qr' | 'cash' | ''>('');
   const [customAmount, setCustomAmount] = useState<string>('');
   const [currency, setCurrency] = useState<string>('INR');
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
   const [clientType, setClientType] = useState<string>('Indian');
+
+  // Guard against selecting a past date — the date picker's earliest allowed day is today.
+  const todayStr = (() => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  })();
+
+  // Reduce a full therapy name (e.g. "Individual Therapy with Muskan Negi") to just its
+  // type — "Individual" or "Adolescent" — for compact previews. Falls back to the raw name.
+  const shortTherapyLabel = (raw?: string) => {
+    if (!raw) return '';
+    if (/adolescent/i.test(raw)) return 'Adolescent';
+    if (/individual/i.test(raw)) return 'Individual';
+    if (/couples?/i.test(raw)) return 'Couples';
+    return raw.split(/\s+with\s+/i)[0].trim();
+  };
+
+  // Strip a trailing " with <therapist>" from a stored therapy name so the dropdown shows
+  // just "Individual Therapy Session" instead of "…Session with Muskan Negi". The cleaned
+  // value still resolves charges/slots (backend matches by substring ILIKE) and is
+  // normalized to the canonical label on booking creation.
+  const cleanTherapyName = (raw?: string) => {
+    if (!raw) return '';
+    return raw.split(/\s+with\s+/i)[0].trim();
+  };
+
+  // Resolve the session charge for a therapy+therapist pair straight from the services
+  // list, so the Amount field can prefill immediately — before a date/slot is chosen.
+  const resolveCharge = (therapy: string, therapist: string): number | null => {
+    if (!therapy || !therapist || services.length === 0) return null;
+    const firstWord = therapist.trim().toLowerCase().split(/\s+/)[0];
+    const therapyLc = cleanTherapyName(therapy).toLowerCase();
+    const active = services.filter((s: any) => s.is_active !== false);
+    // Most specific: therapist first name + therapy title substring.
+    let match = active.find((s: any) =>
+      (s.therapist_name || '').toLowerCase().includes(firstWord) &&
+      (s.title || '').toLowerCase().includes(therapyLc)
+    );
+    // Fallback: therapist first name only.
+    if (!match) match = active.find((s: any) => (s.therapist_name || '').toLowerCase().includes(firstWord));
+    if (!match) return null;
+    const n = parseInt(String(match.charges || '').replace(/[^0-9]/g, ''), 10);
+    return isNaN(n) || n <= 0 ? null : n;
+  };
+
+  // Suppresses the client dropdown from re-opening immediately after a selection,
+  // so picking a client takes a single click.
+  const suppressClientDropdownRef = useRef(false);
 
   const timezones = [
     { name: 'Asia/Kolkata', offset: 'GMT+5:30' },
@@ -189,15 +240,9 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   ];
 
   useEffect(() => {
-    setPaymentMode(isDirectBooking ? '' : 'link');
-    if (!isDirectBooking) {
-      setCurrency('INR');
-    }
-  }, [isDirectBooking]);
-
-  useEffect(() => {
     fetchTherapies();
     fetchClients();
+    fetchServices();
 
     const handleClickOutside = (event: MouseEvent) => {
       if (dateContainerRef.current && !dateContainerRef.current.contains(event.target as Node)) {
@@ -218,8 +263,15 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   }, []);
 
   useEffect(() => {
+    // If the name just changed because a client was picked from the list, keep the
+    // dropdown closed instead of re-filtering it open (avoids needing a second click).
+    if (suppressClientDropdownRef.current) {
+      suppressClientDropdownRef.current = false;
+      setShowClientDropdown(false);
+      return;
+    }
     if (clientName.length > 0) {
-      const filtered = clients.filter(client => 
+      const filtered = clients.filter(client =>
         client.invitee_name?.toLowerCase().includes(clientName.toLowerCase()) ||
         client.invitee_phone?.includes(clientName) ||
         client.invitee_email?.toLowerCase().includes(clientName.toLowerCase())
@@ -260,10 +312,28 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
     }
   };
 
+  const fetchServices = async () => {
+    try {
+      const response = await fetch('/api/services');
+      if (response.ok) {
+        const data = await response.json();
+        setServices(Array.isArray(data) ? data : []);
+      }
+    } catch (error) {
+      console.error('Error fetching services:', error);
+    }
+  };
+
   const handleExistingClientSelect = async (client: any) => {
     try {
       setIsLoadingHistory(true);
-      const response = await fetch(`/api/client-booking-history/${client.invitee_id}`);
+      // Pass phone/email — invitee_id is NULL on many bookings, so the server keys history
+      // off these to reliably find a repeat client's past (non-cancelled) bookings.
+      const params = new URLSearchParams();
+      if (client.invitee_phone) params.set('phone', client.invitee_phone);
+      if (client.invitee_email) params.set('email', client.invitee_email);
+      const clientKey = encodeURIComponent(client.invitee_id || 'unknown');
+      const response = await fetch(`/api/client-booking-history/${clientKey}?${params.toString()}`);
       const history = await response.json();
 
       setClientBookingHistory(history);
@@ -275,13 +345,15 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
         history.lastBooking.therapist &&
         history.lastBooking.therapy !== 'Free Consultation'
       ) {
-        // Show the last booking's therapy and therapist (not changeable)
-        setAllowedTherapies([history.lastBooking.therapy]);
+        // Show the last booking's therapy and therapist (not changeable). Display the
+        // therapy without the trailing "with <therapist>" — just "Individual Therapy Session".
+        const cleanTherapy = cleanTherapyName(history.lastBooking.therapy);
+        setAllowedTherapies([cleanTherapy]);
         setAllowedTherapists([history.lastBooking.therapist]);
         setHasRestrictions(true);
 
         // Auto-select from last booking
-        setSelectedTherapy(history.lastBooking.therapy);
+        setSelectedTherapy(cleanTherapy);
         setAutoFilledFields(prev => ({ ...prev, therapy: true }));
 
         setSelectedTherapist(history.lastBooking.therapist);
@@ -309,6 +381,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
   };
 
   const handleClientSelect = (client: any) => {
+    suppressClientDropdownRef.current = true;
     setClientName(client.invitee_name);
     setSelectedClientId(client.invitee_id || client.id);
     setIsNewClient(false);
@@ -408,6 +481,19 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
     }
   }, [selectedTherapy, selectedTherapist, selectedDate, isFreeConsultation]);
 
+  // Prefill the Amount immediately when a therapy + therapist are chosen (or a client is
+  // selected, which auto-fills both) — without waiting for a date/slot fetch.
+  useEffect(() => {
+    if (isFreeConsultation) return;
+    if (selectedTherapy && selectedTherapist) {
+      const charge = resolveCharge(selectedTherapy, selectedTherapist);
+      if (charge) {
+        setSessionCharges(charge);
+        setCustomAmount(String(charge));
+      }
+    }
+  }, [selectedTherapy, selectedTherapist, services, isFreeConsultation]);
+
   const fetchAvailableSlots = async () => {
     setIsLoadingSlots(true);
     
@@ -417,7 +503,8 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
       selectedDate,
       isFreeConsultation,
       timezone: selectedTimezone,
-      isDirectBooking,
+      // Kept for payload compatibility only — /api/fetch-slots does not read this field.
+      isDirectBooking: paymentMode !== 'link',
       isAdmin: true
     };
     
@@ -469,15 +556,13 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
           const effectiveModes = modes.length > 0 ? modes : ['online', 'in-person'];
           setAvailableModes(effectiveModes);
 
-          // Auto-select when only one mode is available; otherwise force an explicit choice.
-          if (effectiveModes.length === 1) {
-            setSessionMode(effectiveModes[0] as 'online' | 'in-person');
-          } else {
-            setSessionMode(prevMode => {
-               if (prevMode && effectiveModes.includes(prevMode)) return prevMode;
-               return '';
-            });
-          }
+          // Respect a mode already chosen from the client's history or by the admin —
+          // the admin can always switch it. Only auto-select when nothing is chosen yet.
+          setSessionMode(prevMode => {
+            if (prevMode) return prevMode;
+            if (effectiveModes.length === 1) return effectiveModes[0] as 'online' | 'in-person';
+            return '';
+          });
           
           if (availableSlots.length > 0) {
             const formattedSlots = availableSlots.map((slot: string) => {
@@ -664,7 +749,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
               {generatedPaymentLink ? (
                 <>
                   <p className="mb-4">
-                    The calendar slot has been blocked for 15 minutes. Please copy and share this payment link with the client:
+                    The calendar slot has been blocked for 30 minutes. Please copy and share this payment link with the client:
                   </p>
                   <div className="flex items-center gap-2 mb-2">
                     <input 
@@ -684,7 +769,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                     Copy Link
                   </button>
                   <p className="mt-4 text-xs text-red-500 font-medium">
-                    If payment is not received within 15 minutes, the slot will become available again automatically.
+                    If payment is not received within 30 minutes, the slot will become available again automatically.
                   </p>
                 </>
               ) : (
@@ -706,7 +791,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
         <button onClick={onBack} className="text-2xl text-gray-600 hover:text-gray-900">
           ←
         </button>
-        <h1 className="text-3xl font-bold">{isDirectBooking ? 'Create New Booking' : 'Book a Session for Client'}</h1>
+        <h1 className="text-3xl font-bold">New Session</h1>
       </div>
 
       {/* Form Content */}
@@ -803,6 +888,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 ref={dateInputRef}
                 type="date"
                 value={selectedDate}
+                min={todayStr}
                 onChange={handleDateChange}
                 className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white pr-12"
               />
@@ -896,23 +982,6 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                       )}
                     </div>
                   ))}
-                  <div
-                    onClick={() => {
-                      setShowClientDropdown(false);
-                      // Reset booking history for new client
-                      setClientBookingHistory(null);
-                      setAllowedTherapies([]);
-                      setAllowedTherapists([]);
-                      setSelectedTherapy('');
-                      setSelectedTherapist('');
-                      setSessionMode('');
-                      setAutoFilledFields({ therapy: false, therapist: false, mode: false });
-                    }}
-                    className="px-4 py-3 hover:bg-gray-100 cursor-pointer border-t font-medium text-center"
-                    style={{ backgroundColor: '#21615D', color: 'white' }}
-                  >
-                    + New client
-                  </div>
                 </div>
               )}
             </div>
@@ -923,7 +992,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
             {clientBookingHistory && (
               <div className="col-span-2 rounded-lg p-3 text-sm" style={{ backgroundColor: '#21615D', borderColor: '#21615D' }}>
                 <div className="font-semibold text-white">
-                  ✓ {clientBookingHistory.clientName} {clientBookingHistory.lastBooking ? `previously booked ${clientBookingHistory.lastBooking.therapy}${clientBookingHistory.lastBooking.therapist && !clientBookingHistory.lastBooking.therapy?.toLowerCase().includes('with') ? ` with ${clientBookingHistory.lastBooking.therapist}` : ''}` : `has ${clientBookingHistory.totalBookings} booking(s)`}
+                  ✓ {clientBookingHistory.clientName} {clientBookingHistory.lastBooking ? `previously booked ${shortTherapyLabel(clientBookingHistory.lastBooking.therapy)}` : `has ${clientBookingHistory.totalBookings} booking(s)`}
                 </div>
               </div>
             )}
@@ -976,24 +1045,19 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
                 <input
                   type="checkbox"
                   checked={sessionMode === 'online'}
-                  onChange={(e) => {
-                    if (availableModes.length === 1 && availableModes[0] === 'online') return;
-                    setSessionMode(e.target.checked ? 'online' : '');
-                  }}
-                  disabled={!availableModes.includes('online')}
-                  className="w-4 h-4 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onChange={(e) => setSessionMode(e.target.checked ? 'online' : '')}
+                  className="w-4 h-4"
                 />
-                <span className={`text-sm ${!availableModes.includes('online') ? 'text-gray-400' : ''}`}>Google Meet</span>
+                <span className="text-sm">Google Meet</span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={sessionMode === 'in-person'}
                   onChange={(e) => setSessionMode(e.target.checked ? 'in-person' : '')}
-                  disabled={!availableModes.includes('in-person')}
-                  className="w-4 h-4 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-4 h-4"
                 />
-                <span className={`text-sm ${!availableModes.includes('in-person') ? 'text-gray-400' : ''}`}>In-person</span>
+                <span className="text-sm">In-person</span>
               </label>
             </div>
             
@@ -1019,50 +1083,47 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
             {!isFreeConsultation && (
               <div className="flex flex-col gap-6 mb-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {isDirectBooking && (
-                    <div>
-                      <label className="block text-sm font-medium mb-2">
-                        Payment Method<span className="text-red-500">*</span>
-                      </label>
-                      <div className="relative">
-                        <select
-                          value={paymentMode}
-                          onChange={(e) => setPaymentMode(e.target.value as any)}
-                          className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white pr-10"
-                        >
-                          <option value="">Select Payment Method</option>
-                          <option value="qr">QR (Paid)</option>
-                          <option value="cash">Cash (Paid)</option>
-                        </select>
-                        <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
-                          ▼
-                        </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-2">
+                      Payment Method<span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={paymentMode}
+                        onChange={(e) => setPaymentMode(e.target.value as any)}
+                        className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white pr-10"
+                      >
+                        <option value="">Select Payment Method</option>
+                        <option value="cash">Cash (Paid)</option>
+                        <option value="qr">QR (Paid)</option>
+                        <option value="link">Send Payment Link</option>
+                      </select>
+                      <div className="absolute right-4 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
+                        ▼
                       </div>
                     </div>
-                  )}
-                  <div className={`flex gap-4 ${!isDirectBooking ? 'md:col-span-2' : ''}`}>
-                    {isDirectBooking && (
-                      <div className="w-1/3">
-                        <label className="block text-sm font-medium mb-2">
-                          Currency
-                        </label>
-                        <div className="relative">
-                          <select
-                            value={currency}
-                            onChange={(e) => setCurrency(e.target.value)}
-                            className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white pr-8"
-                          >
-                            <option value="INR">₹ INR</option>
-                            <option value="USD">$ USD</option>
-                            <option value="EUR">€ EUR</option>
-                          </select>
-                          <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none text-gray-400">
-                            ▼
-                          </div>
-                        </div>
-                      </div>
+                    {paymentMode === 'link' && (
+                      <p className="text-xs text-gray-500 mt-2">
+                        The slot is held until payment completes, and released automatically if the link expires (30 minutes).
+                      </p>
                     )}
-                    <div className={isDirectBooking ? "w-2/3" : "w-full"}>
+                  </div>
+                  <div className="flex gap-4">
+                    <div className="w-1/3">
+                      <label className="block text-sm font-medium mb-2">
+                        Currency
+                      </label>
+                      {/* Locked to INR: the Razorpay account settles in INR, and the payment-link
+                          flow bills in INR regardless of what is chosen here. */}
+                      <input
+                        type="text"
+                        value="₹ INR"
+                        readOnly
+                        disabled
+                        className="w-full px-4 py-3 border rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
+                      />
+                    </div>
+                    <div className="w-2/3">
                       <label className="block text-sm font-medium mb-2">
                         Amount<span className="text-red-500">*</span>
                       </label>
@@ -1098,11 +1159,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack, isDirectBo
               disabled={!isPaymentLinkEnabled() || isSubmitting}
               className="w-full bg-teal-700 text-white px-6 py-3 rounded-lg hover:bg-teal-800 font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
-              {isSubmitting 
-                ? 'Processing...' 
+              {isSubmitting
+                ? 'Processing...'
                 : (!isFreeConsultation
-                    ? (paymentMode === 'link' ? 'Generate Payment Link' : (paymentMode ? 'Book & Record Payment' : 'Select Payment Mode')) 
-                    : 'Book Session'
+                    ? (paymentMode === 'link' ? 'Send Payment Link' : (paymentMode ? 'Create Booking' : 'Select Payment Mode'))
+                    : 'Create Booking'
                   )
               }
             </button>

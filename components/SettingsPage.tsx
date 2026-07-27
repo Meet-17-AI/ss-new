@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
-import { ReportIssuePage } from './ReportIssuePage';
 import { AuditLogs } from './AuditLogs';
-import { TherapiesManagementPage } from './TherapiesManagementPage';
 import { PaymentSettings } from './PaymentSettings';
 import { TherapyCalendars } from './TherapyCalendars';
 import { TherapyCalendarDetails } from './TherapyCalendarDetails';
-import { ArrowLeft, AlertCircle, FileText, Calendar, Heart, Search, RefreshCw, CreditCard } from 'lucide-react';
+import { NewTherapist } from './NewTherapist';
+import { ArrowLeft, Calendar, Search, RefreshCw } from 'lucide-react';
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -234,14 +233,19 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, user }) => {
     }
   }, [location.pathname, navigate]);
 
-  const activeTab = location.pathname.split('/').pop() || '';
-
   const tabs = [
     { id: 'therapy-calendars', label: 'Therapy Calendars' },
+    { id: 'new-therapist', label: 'Add Therapist' },
     { id: 'calendars', label: 'Calendar Connection' },
     { id: 'payments', label: 'Payment Gateway' },
     { id: 'audit', label: 'Audit Logs' }
   ];
+
+  // Match the tab by the first path segment after /appSettings, so nested routes
+  // (therapy-calendars/new, therapy-calendars/:id) keep their parent tab highlighted
+  // instead of falling through to a hardcoded default.
+  const settingsPath = location.pathname.split('/admin/appSettings/')[1] || '';
+  const activeTab = settingsPath.split('/')[0];
 
   return (
     <div className="p-8 h-full flex flex-col bg-gray-50">
@@ -258,7 +262,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, user }) => {
             key={tab.id}
             onClick={() => navigate(`/admin/appSettings/${tab.id}`)}
             className={`pb-3 px-4 font-medium transition-colors ${
-              activeTab === tab.id || (activeTab === 'new' && tab.id === 'therapy-calendars') || (activeTab !== 'menu' && !tabs.find(t=>t.id===activeTab) && tab.id === 'therapy-calendars')
+              activeTab === tab.id
                 ? 'text-teal-700 border-b-2 border-teal-700'
                 : 'text-gray-500 hover:text-gray-700'
             }`}
@@ -274,9 +278,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({ onBack, user }) => {
             <Route path="audit" element={<AuditLogs hideHeader={true} />} />
             <Route path="calendars" element={<CalendarConnectionsAdmin />} />
             <Route path="payments" element={<PaymentSettings />} />
+            <Route path="new-therapist" element={<NewTherapist onBack={() => navigate('/admin/therapists')} />} />
             <Route path="therapy-calendars" element={<TherapyCalendars />} />
             <Route path="therapy-calendars/new" element={<TherapyCalendarDetails />} />
             <Route path="therapy-calendars/:id" element={<TherapyCalendarDetails />} />
+            {/* Unknown settings sub-path: land on the first tab instead of a blank panel */}
+            <Route path="*" element={<Navigate to="/admin/appSettings/therapy-calendars" replace />} />
           </Routes>
         </div>
       </div>

@@ -548,7 +548,6 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
       <div className="flex justify-between items-start mb-6">
         <div>
           <h1 className="text-3xl font-bold mb-1">Bookings</h1>
-          <p className="text-gray-600">View Recently Book Session, Send Invite and more...</p>
         </div>
       </div>
 

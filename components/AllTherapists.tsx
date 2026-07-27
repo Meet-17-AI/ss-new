@@ -2617,7 +2617,6 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       <div className="flex justify-between items-start mb-2 flex-shrink-0">
         <div>
           <h1 className="text-3xl font-bold mb-1">All Therapists</h1>
-          <p className="text-gray-600">View Therapists Details, Specialization and more...</p>
         </div>
 
         {/* Search bar for list view only */}

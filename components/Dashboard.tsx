@@ -6,10 +6,7 @@ import { AllTherapists } from './AllTherapists';
 import { Appointments } from './Appointments';
 import { RefundsCancellations } from './RefundsCancellations';
 import { useSocket } from '../context/SocketContext';
-import { SendBookingModal } from './SendBookingModal';
 import { CreateBooking } from './CreateBooking';
-import { CreatePage } from './CreatePage';
-import { NewTherapist } from './NewTherapist';
 import { AuditLogs } from './AuditLogs';
 import { Notifications } from './Notifications';
 import { TicketsPage } from './TicketsPage';
@@ -52,7 +49,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
   const [appointmentTab, setAppointmentTab] = useState<string>('scheduled');
   const [refundTab, setRefundTab] = useState<string>('all_payments');
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -165,7 +161,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
   const [isCancelling, setIsCancelling] = useState(false);
 
   const resetAllStates = () => {
-    setIsModalOpen(false);
     setIsDateDropdownOpen(false);
     setShowCustomCalendar(false);
     setSelectedBookingIndex(null);
@@ -420,11 +415,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               style={{ backgroundColor: '#21615D' }}
               onClick={() => {
                 resetAllStates();
-                navigate('/admin/create');
+                navigate('/admin/new-session');
               }}
             >
               <Plus size={20} className="text-white" />
-              <span className="text-white">Create</span>
+              <span className="text-white">New Session</span>
             </div>
           )}
           <div
@@ -577,17 +572,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
         <Routes>
           <Route path="appSettings/*" element={<SettingsPage onBack={() => navigate('/admin/dashboard')} user={user} />} />
           <Route path="edit-profile" element={<AdminEditProfile user={user} onBack={() => navigate('/admin/dashboard')} />} />
-          <Route path="create" element={
-            <CreatePage
-              onCreateBooking={() => navigate('/admin/createBooking')}
-              onCreateDirectBooking={() => navigate('/admin/createBookingDirect')}
-              onSendBookingLink={() => setIsModalOpen(true)}
-              onAddNewTherapist={() => navigate('/admin/newTherapist')}
-            />
-          } />
-          <Route path="createBooking" element={<CreateBooking onBack={() => navigate('/admin/create')} />} />
-          <Route path="createBookingDirect" element={<CreateBooking onBack={() => navigate('/admin/create')} isDirectBooking={true} />} />
-          <Route path="newTherapist" element={<NewTherapist onBack={() => navigate('/admin/create')} />} />
+          {/* One merged booking flow. Cash/QR books outright; "Send Payment Link" holds the
+              slot until Razorpay confirms or the link expires. The old Create landing page
+              and its two separate entries are gone — these paths redirect so existing links
+              and bookmarks keep working. */}
+          <Route path="new-session" element={<CreateBooking onBack={() => navigate('/admin/dashboard')} />} />
+          <Route path="create" element={<Navigate to="/admin/new-session" replace />} />
+          <Route path="createBooking" element={<Navigate to="/admin/new-session" replace />} />
+          <Route path="createBookingDirect" element={<Navigate to="/admin/new-session" replace />} />
+          {/* Add Therapist now lives in Settings; keep the old path working as a redirect */}
+          <Route path="newTherapist" element={<Navigate to="/admin/appSettings/new-therapist" replace />} />
           <Route path="clients" element={
             <AllClients onClientClick={(client) => {
               const tabParam = client.tab === 'nri' ? '&tab=nri' : '';
@@ -621,7 +615,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                 <div className="flex justify-between items-start mb-8">
                   <div>
                     <h1 className="text-3xl font-bold mb-1">Dashboard</h1>
-                    <p className="text-gray-600">Welcome Back, {user?.full_name || user?.username}!</p>
                   </div>
                   <div className="flex items-center gap-4">
                 <div className="relative" ref={dropdownRef}>
@@ -809,135 +802,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
               </div>
             )}
 
-            {/* Upcoming Sessions */}
-            <div className="bg-white rounded-lg border">
-              <div className="p-6 border-b">
-                <h2 className="text-xl font-bold">Upcoming Sessions</h2>
-              </div>
-              <div className="overflow-x-auto max-h-80 overflow-y-auto">
-                <table className="w-full" ref={bookingActionsRef}>
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Client Name</th>
-                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Therapy Type</th>
-                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Assigned Therapist</th>
-                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Mode</th>
-                      <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Session Timings</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {bookings.length === 0 ? (
-                      <tr>
-                        <td colSpan={5} className="px-6 py-20 text-center text-gray-400">
-                          No upcoming sessions
-                        </td>
-                      </tr>
-                    ) : (
-                      bookings.map((booking, index) => (
-                        <React.Fragment key={index}>
-                          <tr
-                            className={`border-b cursor-pointer transition-colors ${selectedBookingIndex === index ? 'bg-gray-100' : 'hover:bg-gray-50'
-                              }`}
-                            onClick={() => setSelectedBookingIndex(selectedBookingIndex === index ? null : index)}
-                          >
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  navigate('/admin/therapists?clientId=' + encodeURIComponent(booking.client_email || booking.client_phone) + '&source=dashboard');
-                                }}
-                                className="text-teal-700 hover:underline font-medium"
-                              >
-                                {formatClientName(booking.client_name)}
-                              </button>
-                              <div className="text-gray-500 text-xs mt-1">{booking.client_phone}</div>
-                              <div className="text-gray-500 text-xs">{booking.client_email}</div>
-                            </td>
-                            <td className="px-6 py-4">{booking.therapy_type}</td>
-                            <td className="px-6 py-4">{booking.therapist_name}</td>
-                            <td className="px-6 py-4">
-                              <div className="flex items-center gap-2">
-                                <span>{formatMode(booking.mode)}</span>
-                              </div>
-                            </td>
-                            <td className="px-6 py-4">{formatSessionTiming(booking.booking_start_at)}</td>
-                          </tr>
-                          {selectedBookingIndex === index && user?.username !== 'Test' && (
-                            <tr className="bg-gray-100">
-                              <td colSpan={5} className="px-6 py-4">
-                                <div className="flex gap-2 justify-center items-center">
-                                  <button
-                                    onClick={() => copyBookingDetails(booking)}
-                                    className="px-3 py-1.5 border border-gray-400 rounded-lg text-xs text-gray-700 hover:bg-white flex items-center gap-1.5 whitespace-nowrap"
-                                  >
-                                    <Copy size={13} />
-                                    Copy Details
-                                  </button>
-                                  <button
-                                    onClick={() => handleReminderClick(booking)}
-                                    className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 border border-gray-400 text-gray-700 hover:bg-white whitespace-nowrap"
-                                  >
-                                    <Send size={13} />
-                                    Send Reminder
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setRescheduleTarget(booking);
-                                      setRescheduleDateTime('');
-                                      setRescheduleDuration(booking.duration || 50);
-                                      setRescheduleReason('');
-                                      setRescheduleNotify(true);
-                                      setShowRescheduleModal(true);
-                                    }}
-                                    className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 border border-teal-600 text-teal-700 bg-white hover:bg-teal-50 whitespace-nowrap"
-                                  >
-                                    <RefreshCw size={13} />
-                                    Reschedule
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      setCancelTarget(booking);
-                                      setCancelReason('');
-                                      setCancelNotify(true);
-                                      setShowCancelModal(true);
-                                    }}
-                                    className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 border border-red-500 text-red-600 bg-white hover:bg-red-50 whitespace-nowrap"
-                                  >
-                                    <X size={13} />
-                                    Cancel Booking
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </React.Fragment>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <div className="px-6 py-4 border-t flex justify-between items-center">
-                <span className="text-sm text-gray-600">
-                  Showing {((currentPage - 1) * bookingsPerPage) + 1}-{Math.min(currentPage * bookingsPerPage, totalBookings)} of {totalBookings} result{totalBookings !== 1 ? 's' : ''}
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    onClick={handlePrevPage}
-                    disabled={currentPage === 1}
-                    className={`p-2 border rounded ${currentPage === 1 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
-                  >
-                    ←
-                  </button>
-                  <button
-                    onClick={handleNextPage}
-                    disabled={currentPage >= Math.ceil(totalBookings / bookingsPerPage)}
-                    className={`p-2 border rounded ${currentPage >= Math.ceil(totalBookings / bookingsPerPage) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-50'}`}
-                  >
-                    →
-                  </button>
-                </div>
-              </div>
-            </div>
 
           </div>
             )
@@ -945,7 +809,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
         </Routes>
       </div>
-      {isModalOpen && <SendBookingModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       {showReminderModal && selectedBooking && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
