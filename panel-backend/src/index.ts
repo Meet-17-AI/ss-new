@@ -4378,7 +4378,7 @@ app.get('/api/therapists-by-therapy', async (req, res) => {
     const result = await pool.query(`
       SELECT therapist_id, name as therapist_name
       FROM therapists
-      WHERE specialization ILIKE $1
+      WHERE specialization ILIKE $1 AND COALESCE(is_active, true) = true
       ORDER BY name ASC
     `, [`%${therapy_name}%`]);
 
@@ -4392,7 +4392,7 @@ app.get('/api/therapists-by-therapy', async (req, res) => {
 // Get all therapies
 app.get('/api/therapies', async (req, res) => {
   try {
-    const result = await pool.query('SELECT DISTINCT specialization FROM therapists WHERE specialization IS NOT NULL');
+    const result = await pool.query('SELECT DISTINCT specialization FROM therapists WHERE specialization IS NOT NULL AND COALESCE(is_active, true) = true');
     const therapySet = new Set<string>();
     result.rows.forEach(row => {
       const specializations = row.specialization.split(',').map((s: string) => s.trim());
@@ -4561,14 +4561,22 @@ app.get('/api/therapists-admin', async (req, res) => {
           THEN b.invitee_payment_amount 
           ELSE 0 
         END), 0) as revenue_this_month,
+        COALESCE(SUM(CASE 
+          WHEN LOWER(b.booking_status) NOT IN ('cancelled', 'canceled')
+          AND b.booking_start_at >= (CURRENT_DATE - INTERVAL '1 month')
+          AND b.booking_start_at < date_trunc('month', CURRENT_DATE)
+          THEN b.invitee_payment_amount 
+          ELSE 0 
+        END), 0) as last_month_revenue,
         ROUND(AVG(NULLIF(CAST(NULLIF(REGEXP_REPLACE(b.client_rating::text, '[^0-9.]', '', 'g'), '') AS numeric), 0)), 1) as average_rating
       FROM therapists t
       LEFT JOIN bookings b ON (
         TRIM(b.booking_host_name) ILIKE '%' || SPLIT_PART(t.name, ' ', 1) || '%'
         OR TRIM(b.booking_host_name) ILIKE t.name
       )
+      WHERE LOWER(t.name) != 'safestories'
       GROUP BY t.therapist_id, t.name, t.specialization, t.contact_info, t.profile_picture_url, t.phone_number, t.is_active, t.google_refresh_token
-      ORDER BY t.name ASC
+      ORDER BY COALESCE(t.is_active, true) DESC, t.name ASC
     `);
 
     res.json(result.rows);
