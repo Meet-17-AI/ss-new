@@ -2616,7 +2616,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       {/* Header - Only title and subheading */}
       <div className="flex justify-between items-start mb-2 flex-shrink-0">
         <div>
-          <h1 className="text-3xl font-bold mb-1">All Therapists</h1>
+          <h1 className="text-3xl font-bold mb-1">Therapists</h1>
         </div>
 
         {/* Search bar for list view only */}

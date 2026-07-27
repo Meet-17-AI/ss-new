@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, Calendar, LogOut, PieChart, ChevronUp, ChevronDown, ChevronRight, Copy, Send, Search, FileText, X, User, CalendarIcon, ArrowLeft, Mail, Eye, EyeOff, Edit, Download, MessageCircle, Headset } from 'lucide-react';
+import { LayoutDashboard, Users, Calendar, CalendarDays, LogOut, PieChart, ChevronUp, ChevronDown, ChevronRight, Copy, Send, Search, FileText, X, User, ArrowLeft, Mail, Eye, EyeOff, Edit, Download, MessageCircle, Headset } from 'lucide-react';
 import { Logo } from './Logo';
 import { Notifications } from './Notifications';
 import { Toast } from './Toast';
@@ -350,8 +350,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
   const [clientAppointmentSearchTerm, setClientAppointmentSearchTerm] = useState('');
 
-  // Calendar view state for upcoming bookings
-  const [showCalendarView, setShowCalendarView] = useState(false);
+  // Calendar view filters (the view itself is the /therapist/my-calendar route)
   const [calendarModeFilter, setCalendarModeFilter] = useState<'all' | 'online' | 'in-person'>('all');
   const [calendarStatusFilter, setCalendarStatusFilter] = useState<'all' | 'upcoming' | 'cancelled' | 'completed'>('upcoming');
   const [selectedTherapistFilters, setSelectedTherapistFilters] = useState<string[]>([]);
@@ -370,7 +369,6 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     setShowCustomCalendar(false);
     setIsClientDateDropdownOpen(false);
     setShowClientCustomCalendar(false);
-    setShowCalendarView(false);
     setIsCaseHistoryVisible(false);
     setCaseHistoryData(null);
     setShowCaseHistoryPasswordModal(false);
@@ -2421,16 +2419,14 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           </div>
           <div
             className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-            style={{ backgroundColor: showCalendarView ? '#F4A9365C' : 'transparent' }}
+            style={{ backgroundColor: activeView === 'my-calendar' ? '#F4A9365C' : 'transparent' }}
             onClick={() => {
-              // resetAllStates() clears showCalendarView, so re-enable it afterwards.
               resetAllStates();
-              setActiveView('dashboard');
-              setShowCalendarView(true);
+              setActiveView('my-calendar');
             }}
           >
-            <CalendarIcon size={20} className={showCalendarView ? 'text-teal-700' : 'text-gray-700'} />
-            <span className={showCalendarView ? 'text-teal-700' : 'text-gray-700'}>My Calendar</span>
+            <CalendarDays size={20} className={activeView === 'my-calendar' ? 'text-teal-700' : 'text-gray-700'} />
+            <span className={activeView === 'my-calendar' ? 'text-teal-700' : 'text-gray-700'}>My Calendar</span>
           </div>
 
         </nav>
@@ -3166,11 +3162,11 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           <EditProfile user={user} onBack={() => setActiveView('dashboard')} />
         ) : activeView === 'changePassword' ? (
           <ChangePassword user={user} onBack={() => setActiveView('dashboard')} />
-        ) : showCalendarView ? (
+        ) : activeView === 'my-calendar' ? (
           <div className="p-8">
             <div className="flex items-center gap-4 mb-6">
               <button
-                onClick={() => setShowCalendarView(false)}
+                onClick={() => setActiveView('dashboard')}
                 className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
               >
                 <span className="text-2xl">←</span>

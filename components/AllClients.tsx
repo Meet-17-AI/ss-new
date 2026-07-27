@@ -530,7 +530,7 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
       {/* Header */}
       <div className="flex justify-between items-start mb-6">
         <div>
-          <h1 className="text-3xl font-bold mb-1">All Clients</h1>
+          <h1 className="text-3xl font-bold mb-1">Clients</h1>
         </div>
         <button
           onClick={toggleEditMode}

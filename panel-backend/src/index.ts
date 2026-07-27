@@ -3141,7 +3141,9 @@ app.get('/api/clients', async (req, res) => {
         invitee_created_at as created_at,
         booking_start_at as latest_booking_date,
         booking_invitee_time,
-        'Indian' as client_type
+        -- Read the real column. This was hardcoded to 'Indian', which made the admin
+        -- NRI tab permanently empty even though /api/therapist-clients showed them.
+        client_type
       FROM bookings
       ORDER BY invitee_created_at DESC
     `);
@@ -3201,7 +3203,7 @@ app.get('/api/clients', async (req, res) => {
           last_session_date: null,
           last_session_date_raw: null,
           therapists: [],
-          client_type: row.client_type || 'Indian'
+          client_type: row.client_type === 'NRI' ? 'NRI' : 'Indian'
         });
       }
 
@@ -3217,8 +3219,9 @@ app.get('/api/clients', async (req, res) => {
         }
       }
 
-      if (row.client_type && row.client_type !== 'Indian') {
-        client.client_type = row.client_type;
+      // If any of a client's bookings is marked NRI, the client is NRI.
+      if (row.client_type === 'NRI') {
+        client.client_type = 'NRI';
       }
 
       // Track last session date and mode for past sessions (excluding cancelled and no_show)
