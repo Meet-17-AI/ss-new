@@ -910,41 +910,100 @@ export async function sendIssueReportEmail(
     screenshot_urls?: string[]; created_at?: any;
   }
 ): Promise<void> {
-  const created = ticket.created_at ? new Date(ticket.created_at).toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }) : new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
-  const esc = (s: string) => String(s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const created = new Date(ticket.created_at || Date.now()).toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  });
+
+  // Ampersand must be escaped first, or it double-encodes the entities added after it.
+  const esc = (s: unknown) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
   const shots = (ticket.screenshot_urls && ticket.screenshot_urls.length > 0)
     ? ticket.screenshot_urls
     : (ticket.screenshot_url ? [ticket.screenshot_url] : []);
-  const shot = shots.length > 0
-    ? `<tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Screenshot${shots.length > 1 ? 's' : ''}</td><td style="padding:6px 12px;">${
-        shots.map((u, i) => `<a href="${u}">View ${shots.length > 1 ? `#${i + 1}` : 'screenshot'}</a>`).join(' &nbsp;·&nbsp; ')
-      }</td></tr>`
+
+  const ticketsUrl = `${(process.env.FRONTEND_URL || 'https://panel.safestories.in').replace(/\/$/, '')}/admin/tickets`;
+
+  const label = 'padding:10px 0;color:#64748b;font-weight:500;width:150px;vertical-align:top;';
+  const value = 'padding:10px 0;color:#0f172a;vertical-align:top;';
+
+  const row = (k: string, v: string) =>
+    `<tr><td style="${label}">${k}</td><td style="${value}">${v}</td></tr>`;
+
+  const attachmentsRow = shots.length > 0
+    ? row(
+        shots.length > 1 ? 'Attachments' : 'Attachment',
+        shots.map((u, i) =>
+          `<a href="${esc(u)}" style="color:#1e6d63;text-decoration:underline;">Screenshot${shots.length > 1 ? ` ${i + 1}` : ''}</a>`
+        ).join('<span style="color:#cbd5e1;"> &nbsp;|&nbsp; </span>')
+      )
     : '';
+
   const html = `
-  <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:560px;margin:0 auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
-    <div style="background:#1e6d63;color:#fff;padding:16px 20px;">
-      <div style="font-size:18px;font-weight:700;">🐛 New Support Ticket #${ticket.id}</div>
-      <div style="font-size:13px;opacity:.9;">A new issue has been raised in the SafeStories panel</div>
+  <div style="background:#f1f5f9;padding:24px 0;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;">
+    <div style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+
+      <div style="background:#1e6d63;padding:24px 28px;">
+        <div style="color:#ffffff;font-size:17px;font-weight:600;letter-spacing:-0.2px;">New Support Ticket</div>
+        <div style="color:#c5e4df;font-size:13px;margin-top:4px;">Reference #${ticket.id} &nbsp;&middot;&nbsp; SafeStories Panel</div>
+      </div>
+
+      <div style="padding:26px 28px 8px 28px;">
+        <div style="font-size:17px;font-weight:600;color:#0f172a;line-height:1.4;">${esc(ticket.subject)}</div>
+      </div>
+
+      <div style="padding:8px 28px 20px 28px;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;line-height:1.5;">
+          ${row('Component', esc(ticket.component))}
+          ${row('Reported by', `${esc(ticket.reported_by)} <span style="color:#64748b;">(${esc(ticket.user_role)})</span>`)}
+          ${row('Submitted', `${created} IST`)}
+          ${attachmentsRow}
+        </table>
+      </div>
+
+      <div style="padding:0 28px 24px 28px;">
+        <div style="font-size:12px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;">Description</div>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:14px 16px;white-space:pre-wrap;color:#334155;font-size:14px;line-height:1.6;">${esc(ticket.description)}</div>
+      </div>
+
+      <div style="padding:0 28px 28px 28px;">
+        <a href="${esc(ticketsUrl)}" style="display:inline-block;background:#1e6d63;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;padding:11px 22px;border-radius:6px;">View ticket</a>
+      </div>
+
+      <div style="padding:16px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;color:#94a3b8;line-height:1.5;">
+        This is an automated notification from the SafeStories Panel. Please do not reply to this email.
+      </div>
+
     </div>
-    <table style="width:100%;border-collapse:collapse;font-size:14px;color:#334155;">
-      <tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;width:120px;">Ticket ID</td><td style="padding:6px 12px;">#${ticket.id}</td></tr>
-      <tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Subject</td><td style="padding:6px 12px;">${esc(ticket.subject)}</td></tr>
-      <tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Component</td><td style="padding:6px 12px;">${esc(ticket.component)}</td></tr>
-      <tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Reported by</td><td style="padding:6px 12px;">${esc(ticket.reported_by)} (${esc(ticket.user_role)})</td></tr>
-      <tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Raised at</td><td style="padding:6px 12px;">${created} IST</td></tr>
-      ${shot}
-    </table>
-    <div style="padding:12px 20px;border-top:1px solid #e2e8f0;">
-      <div style="font-weight:bold;color:#1e6d63;margin-bottom:6px;">Description</div>
-      <div style="white-space:pre-wrap;color:#334155;font-size:14px;">${esc(ticket.description)}</div>
-    </div>
-    <div style="padding:12px 20px;background:#f8fafc;font-size:12px;color:#64748b;">Manage this ticket in the panel → Tickets page.</div>
   </div>`;
+
+  // Plain-text alternative: some clients prefer it, and it improves deliverability.
+  const text = [
+    `New Support Ticket — Reference #${ticket.id}`,
+    '',
+    `Subject:     ${ticket.subject}`,
+    `Component:   ${ticket.component}`,
+    `Reported by: ${ticket.reported_by} (${ticket.user_role})`,
+    `Submitted:   ${created} IST`,
+    ...(shots.length > 0 ? ['', `Attachments:`, ...shots.map((u, i) => `  ${i + 1}. ${u}`)] : []),
+    '',
+    'Description:',
+    ticket.description,
+    '',
+    `View ticket: ${ticketsUrl}`,
+    '',
+    'This is an automated notification from the SafeStories Panel.',
+  ].join('\n');
+
   const mailOptions = {
-    from: 'SafeStories <therapy@safestories.in>',
+    from: 'SafeStories Panel <therapy@safestories.in>',
     to: recipients.join(', '),
-    subject: `🐛 New Ticket #${ticket.id}: ${ticket.subject} [${ticket.component}]`,
+    subject: `[Ticket #${ticket.id}] ${ticket.subject} — ${ticket.component}`,
     html,
+    text,
   };
   await sendEmailWithLogging(mailOptions, `Issue Report #${ticket.id}`);
 }
