@@ -4,7 +4,7 @@ import { Button } from './Button';
 import { User, KeyRound, Mail, Eye, EyeOff } from 'lucide-react';
 
 interface LoginFormProps {
-  onLogin: (user: any) => void;
+  onLogin: (user: any, token?: string) => void;
 }
 
 export const LoginForm: React.FC<LoginFormProps> = ({ onLogin }) => {
@@ -46,7 +46,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLogin }) => {
       const data = await response.json();
 
       if (data.success) {
-        onLogin(data.user);
+        onLogin(data.user, data.token);
       } else {
         setError('Invalid username or password');
       }
@@ -86,7 +86,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLogin }) => {
         };
         
         // Log them in with temporary access
-        onLogin(tempUser);
+        onLogin(tempUser, data.token);
       } else {
         setError(data.error || 'Invalid email or OTP');
       }

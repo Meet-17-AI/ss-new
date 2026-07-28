@@ -31,8 +31,8 @@ const LoginPage = () => {
     }
   }, [isLoggedIn, user, navigate, location]);
 
-  const handleLogin = (userData: any) => {
-    login(userData);
+  const handleLogin = (userData: any, token?: string) => {
+    login(userData, token);
   };
 
   return (

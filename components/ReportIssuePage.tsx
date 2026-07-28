@@ -1,6 +1,36 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ArrowLeft, Upload, X, CheckCircle, AlertCircle, ChevronDown } from 'lucide-react';
 
+export const MAX_SCREENSHOTS = 5;
+const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
+
+// Kept in the order the items appear in each role's sidebar, so the dropdown reads
+// the same way the app does. Admin: components/Dashboard.tsx; therapist:
+// components/TherapistDashboard.tsx. Update both together if the nav changes.
+const COMPONENTS_BY_ROLE: Record<string, string[]> = {
+  admin: [
+    'Dashboard',
+    'Booking',
+    'Therapists',
+    'Clients',
+    'Payments',
+    'Settings',
+    'Notifications',
+    'Tickets',
+    'Other',
+  ],
+  therapist: [
+    'Dashboard',
+    'My Availability',
+    'My Clients',
+    'My Bookings',
+    'My Calendar',
+    'Notifications',
+    'Tickets',
+    'Other',
+  ],
+};
+
 interface ReportIssuePageProps {
   onBack: () => void;
   userInfo: {
@@ -10,12 +40,16 @@ interface ReportIssuePageProps {
   hideHeader?: boolean;
 }
 
+interface PendingShot {
+  file: File;
+  preview: string;
+}
+
 export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userInfo, hideHeader }) => {
   const [subject, setSubject] = useState('');
   const [component, setComponent] = useState('');
   const [description, setDescription] = useState('');
-  const [screenshot, setScreenshot] = useState<File | null>(null);
-  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
+  const [screenshots, setScreenshots] = useState<PendingShot[]>([]);
   const [loading, setLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [issueId, setIssueId] = useState<number | null>(null);
@@ -23,18 +57,8 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const components = [
-    'Dashboard',
-    'Clients',
-    'Therapists',
-    'Appointments',
-    'Calendar',
-    'Session Notes',
-    'Reports',
-    'Profile',
-    'Audit Logs',
-    'Other'
-  ];
+  const components =
+    COMPONENTS_BY_ROLE[String(userInfo.role || '').toLowerCase()] || COMPONENTS_BY_ROLE.admin;
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -48,36 +72,44 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleScreenshotChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      // Check file size (max 5MB)
-      if (file.size > 5 * 1024 * 1024) {
-        setErrors({ ...errors, screenshot: 'File size must be less than 5MB' });
-        return;
-      }
-
-      // Check file type
-      if (!file.type.startsWith('image/')) {
-        setErrors({ ...errors, screenshot: 'Only image files are allowed' });
-        return;
-      }
-
-      setScreenshot(file);
-      setErrors({ ...errors, screenshot: '' });
-
-      // Create preview
+  const readPreview = (file: File): Promise<string> =>
+    new Promise((resolve) => {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setScreenshotPreview(reader.result as string);
-      };
+      reader.onloadend = () => resolve(reader.result as string);
       reader.readAsDataURL(file);
+    });
+
+  const handleScreenshotChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files || []);
+    // Reset the input so picking the same file again still fires onChange.
+    e.target.value = '';
+    if (picked.length === 0) return;
+
+    const room = MAX_SCREENSHOTS - screenshots.length;
+    if (room <= 0) {
+      setErrors({ ...errors, screenshot: `You can attach at most ${MAX_SCREENSHOTS} screenshots` });
+      return;
     }
+
+    const problems: string[] = [];
+    const accepted: File[] = [];
+    for (const file of picked.slice(0, room)) {
+      if (!file.type.startsWith('image/')) problems.push(`${file.name}: not an image`);
+      else if (file.size > MAX_SCREENSHOT_BYTES) problems.push(`${file.name}: over 5MB`);
+      else accepted.push(file);
+    }
+    if (picked.length > room) problems.push(`only the first ${room} added (max ${MAX_SCREENSHOTS})`);
+
+    const withPreviews = await Promise.all(
+      accepted.map(async (file) => ({ file, preview: await readPreview(file) }))
+    );
+    setScreenshots((prev) => [...prev, ...withPreviews]);
+    setErrors({ ...errors, screenshot: problems.join(' · ') });
   };
 
-  const removeScreenshot = () => {
-    setScreenshot(null);
-    setScreenshotPreview(null);
+  const removeScreenshot = (index: number) => {
+    setScreenshots((prev) => prev.filter((_, i) => i !== index));
+    setErrors({ ...errors, screenshot: '' });
   };
 
   const validate = () => {
@@ -111,12 +143,12 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
     setLoading(true);
 
     try {
-      let screenshotUrl = null;
-
-      // Upload screenshot if provided
-      if (screenshot) {
+      // /api/upload-file takes one file per call, so fan out. If any upload fails
+      // we stop rather than silently filing a ticket with missing evidence.
+      const screenshotUrls: string[] = [];
+      for (const shot of screenshots) {
         const formData = new FormData();
-        formData.append('file', screenshot);
+        formData.append('file', shot.file);
         formData.append('folder', 'issue-screenshots');
 
         const uploadResponse = await fetch('/api/upload-file', {
@@ -124,13 +156,14 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
           body: formData
         });
 
-        if (uploadResponse.ok) {
-          const uploadData = await uploadResponse.json();
-          screenshotUrl = uploadData.url;
-        }
+        if (!uploadResponse.ok) throw new Error(`Failed to upload ${shot.file.name}`);
+        const uploadData = await uploadResponse.json();
+        if (!uploadData.url) throw new Error(`Upload returned no URL for ${shot.file.name}`);
+        screenshotUrls.push(uploadData.url);
       }
 
-      // Submit issue report
+      // reported_by / user_role are intentionally NOT sent — the server takes the
+      // reporter's identity from the auth token so it cannot be spoofed.
       const response = await fetch('/api/report-issue', {
         method: 'POST',
         headers: {
@@ -140,9 +173,7 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
           subject,
           component,
           description,
-          screenshot_url: screenshotUrl,
-          reported_by: userInfo.username,
-          user_role: userInfo.role
+          screenshot_urls: screenshotUrls
         })
       });
 
@@ -150,13 +181,12 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
         const data = await response.json();
         setIssueId(data.issueId);
         setShowSuccess(true);
-        
+
         // Reset form
         setSubject('');
         setComponent('');
         setDescription('');
-        setScreenshot(null);
-        setScreenshotPreview(null);
+        setScreenshots([]);
         setErrors({});
       } else {
         throw new Error('Failed to submit issue');
@@ -170,119 +200,9 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
   };
 
   if (showSuccess) {
+    // Only the confirmation is shown here — the form behind it was a dead,
+    // non-functional duplicate of the real one below.
     return (
-      <>
-        <div className="p-8">
-          {/* Header */}
-          {!hideHeader && (
-            <div className="flex items-center gap-4 mb-6">
-              <button
-                onClick={onBack}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <ArrowLeft className="w-6 h-6 text-gray-600" />
-              </button>
-              <div className="flex items-center gap-3">
-                <AlertCircle className="w-8 h-8 text-teal-700" />
-                <h1 className="text-2xl font-semibold text-gray-800">Report an Issue</h1>
-              </div>
-            </div>
-          )}
-
-          {/* Form Container */}
-          <div className="max-w-lg mx-auto">
-            <div className="bg-white rounded-lg shadow-lg p-6">
-              <form onSubmit={handleSubmit} className="space-y-4">
-                {/* Subject */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Subject <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 border-gray-300"
-                    placeholder="Brief summary of the issue"
-                  />
-                </div>
-
-                {/* Component */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Component/Section <span className="text-red-500">*</span>
-                  </label>
-                  <div className="relative" ref={dropdownRef}>
-                    <button
-                      type="button"
-                      onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                      className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 text-left flex items-center justify-between border-gray-300 text-gray-400"
-                    >
-                      <span>Select a component</span>
-                      <ChevronDown className="w-5 h-5 text-gray-400" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Description */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Description <span className="text-red-500">*</span>
-                  </label>
-                  <textarea
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    rows={5}
-                    className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none border-gray-300"
-                    placeholder="Please describe the issue in detail (minimum 20 characters)"
-                  />
-                </div>
-
-                {/* Screenshot Upload */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Screenshot (Optional)
-                  </label>
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-                    <Upload className="w-12 h-12 text-gray-400 mb-3 mx-auto" />
-                    <p className="text-sm text-gray-600 font-medium mb-1">
-                      Click to upload screenshot
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      PNG, JPG up to 5MB
-                    </p>
-                  </div>
-                </div>
-
-                {/* Reporter Info */}
-                <div className="bg-gray-50 rounded-lg p-3">
-                  <p className="text-sm text-gray-600">
-                    Reported by: <span className="font-medium">{userInfo.username}</span> ({userInfo.role})
-                  </p>
-                </div>
-
-                {/* Actions */}
-                <div className="flex gap-4 pt-4">
-                  <button
-                    type="button"
-                    onClick={onBack}
-                    className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="flex-1 px-6 py-3 bg-teal-700 text-white rounded-lg hover:bg-teal-800 transition-colors font-medium"
-                  >
-                    Submit Report
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
-
-        {/* Success Modal */}
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-8 w-full max-w-md text-center mx-4">
             <div className="flex justify-center mb-4">
@@ -309,7 +229,6 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
             </button>
           </div>
         </div>
-      </>
     );
   }
 
@@ -425,13 +344,39 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
             {/* Screenshot Upload */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Screenshot (Optional)
+                Screenshots (Optional)
               </label>
-              {!screenshotPreview ? (
+              {screenshots.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
+                  {screenshots.map((shot, index) => (
+                    <div key={index} className="relative group">
+                      <img
+                        src={shot.preview}
+                        alt={`Screenshot ${index + 1}`}
+                        className="w-full h-32 object-cover rounded-lg border border-gray-300"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeScreenshot(index)}
+                        aria-label={`Remove screenshot ${index + 1}`}
+                        className="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1.5 hover:bg-red-600 transition-colors shadow-lg"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                      <p className="text-xs text-gray-500 mt-1 truncate" title={shot.file.name}>
+                        {shot.file.name}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {screenshots.length < MAX_SCREENSHOTS && (
                 <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-teal-500 transition-colors">
                   <input
                     type="file"
                     accept="image/*"
+                    multiple
                     onChange={handleScreenshotChange}
                     className="hidden"
                     id="screenshot-upload"
@@ -442,27 +387,14 @@ export const ReportIssuePage: React.FC<ReportIssuePageProps> = ({ onBack, userIn
                   >
                     <Upload className="w-12 h-12 text-gray-400 mb-3" />
                     <p className="text-sm text-gray-600 font-medium mb-1">
-                      Click to upload screenshot
+                      {screenshots.length === 0
+                        ? 'Click to upload screenshots'
+                        : `Add more (${MAX_SCREENSHOTS - screenshots.length} remaining)`}
                     </p>
                     <p className="text-xs text-gray-400">
-                      PNG, JPG up to 5MB
+                      PNG, JPG up to 5MB each · up to {MAX_SCREENSHOTS} files
                     </p>
                   </label>
-                </div>
-              ) : (
-                <div className="relative">
-                  <img
-                    src={screenshotPreview}
-                    alt="Screenshot preview"
-                    className="w-full rounded-lg border border-gray-300"
-                  />
-                  <button
-                    type="button"
-                    onClick={removeScreenshot}
-                    className="absolute top-3 right-3 bg-red-500 text-white rounded-full p-2 hover:bg-red-600 transition-colors shadow-lg"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
                 </div>
               )}
               {errors.screenshot && (

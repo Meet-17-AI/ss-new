@@ -906,13 +906,19 @@ export async function sendIssueReportEmail(
   recipients: string[],
   ticket: {
     id: number; subject: string; component: string; description: string;
-    reported_by: string; user_role: string; screenshot_url?: string | null; created_at?: any;
+    reported_by: string; user_role: string; screenshot_url?: string | null;
+    screenshot_urls?: string[]; created_at?: any;
   }
 ): Promise<void> {
   const created = ticket.created_at ? new Date(ticket.created_at).toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }) : new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
   const esc = (s: string) => String(s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const shot = ticket.screenshot_url
-    ? `<tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Screenshot</td><td style="padding:6px 12px;"><a href="${ticket.screenshot_url}">View screenshot</a></td></tr>`
+  const shots = (ticket.screenshot_urls && ticket.screenshot_urls.length > 0)
+    ? ticket.screenshot_urls
+    : (ticket.screenshot_url ? [ticket.screenshot_url] : []);
+  const shot = shots.length > 0
+    ? `<tr><td style="padding:6px 12px;font-weight:bold;color:#1e6d63;">Screenshot${shots.length > 1 ? 's' : ''}</td><td style="padding:6px 12px;">${
+        shots.map((u, i) => `<a href="${u}">View ${shots.length > 1 ? `#${i + 1}` : 'screenshot'}</a>`).join(' &nbsp;·&nbsp; ')
+      }</td></tr>`
     : '';
   const html = `
   <div style="font-family:'Segoe UI',Arial,sans-serif;max-width:560px;margin:0 auto;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">

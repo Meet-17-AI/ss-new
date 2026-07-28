@@ -2,12 +2,18 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { X, RefreshCw, ExternalLink, Plus } from 'lucide-react';
 import { ReportIssuePage } from './ReportIssuePage';
 
+interface Attachment {
+  url: string;
+  name: string | null;
+}
+
 interface Ticket {
   id: number;
   subject: string;
   component: string;
   description: string;
   screenshot_url: string | null;
+  attachments?: Attachment[];
   reported_by: string;
   user_role: string;
   status: string;
@@ -16,6 +22,12 @@ interface Ticket {
   updated_at: string | null;
   resolved_at: string | null;
 }
+
+/** Old tickets predate the attachments table and only have screenshot_url. */
+const ticketAttachments = (t: Ticket): Attachment[] => {
+  if (t.attachments && t.attachments.length > 0) return t.attachments;
+  return t.screenshot_url ? [{ url: t.screenshot_url, name: null }] : [];
+};
 
 const STATUSES: { key: string; label: string; cls: string }[] = [
   { key: 'open', label: 'Open', cls: 'bg-blue-100 text-blue-700' },
@@ -35,15 +47,19 @@ export const TicketsPage: React.FC<{ userRole?: string; user?: any }> = ({ userR
   const [savingNotes, setSavingNotes] = useState(false);
   const [draftNotes, setDraftNotes] = useState('');
   const [isCreatingTicket, setIsCreatingTicket] = useState(false);
+  // Authoritative — the server decides this from the token. Never infer it from a prop.
+  const [canManage, setCanManage] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const reportedByParam = userRole === 'therapist' && (user?.username || user?.full_name) ? `&reported_by=${encodeURIComponent(user.username || user.full_name)}` : '';
-      const res = await fetch(`/api/report-issues?status=${filter}${reportedByParam}`);
+      // No reported_by param: ownership scoping is applied server-side from the
+      // auth token. Sending it here would have been advisory at best.
+      const res = await fetch(`/api/report-issues?status=${filter}`);
       const data = await res.json();
       setTickets(data.tickets || []);
       setCounts(data.counts || {});
+      setCanManage(Boolean(data.canManage));
     } catch (e) {
       console.error('Failed to load tickets', e);
     } finally {
@@ -102,8 +118,11 @@ export const TicketsPage: React.FC<{ userRole?: string; user?: any }> = ({ userR
             <ReportIssuePage 
               onBack={() => { setIsCreatingTicket(false); load(); }} 
               userInfo={{
+                // Display only — the server takes the real identity from the token.
+                // The role picks which component list the dropdown shows, so it must
+                // be the actual role, not a manage/can't-manage split.
                 username: user?.username || user?.full_name || 'Admin',
-                role: userRole === 'therapist' ? 'Therapist' : 'Admin'
+                role: user?.role || userRole
               }}
               hideHeader={false}
             />
@@ -181,10 +200,29 @@ export const TicketsPage: React.FC<{ userRole?: string; user?: any }> = ({ userR
                 <div className="text-sm text-gray-800 whitespace-pre-wrap bg-gray-50 rounded-lg p-3 border">{selected.description}</div>
               </div>
 
-              {selected.screenshot_url && (
-                <a href={selected.screenshot_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-teal-700 hover:underline">
-                  <ExternalLink size={14} /> View screenshot
-                </a>
+              {ticketAttachments(selected).length > 0 && (
+                <div>
+                  <div className="text-gray-400 text-xs mb-2">
+                    Screenshots ({ticketAttachments(selected).length})
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {ticketAttachments(selected).map((a, i) => (
+                      <a
+                        key={i}
+                        href={a.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="group relative block border rounded-lg overflow-hidden hover:border-teal-500"
+                        title={a.name || `Screenshot ${i + 1}`}
+                      >
+                        <img src={a.url} alt={a.name || `Screenshot ${i + 1}`} className="w-full h-24 object-cover" />
+                        <span className="absolute bottom-1 right-1 bg-white/90 rounded px-1.5 py-0.5 text-[10px] text-teal-700 inline-flex items-center gap-1">
+                          <ExternalLink size={10} /> Open
+                        </span>
+                      </a>
+                    ))}
+                  </div>
+                </div>
               )}
 
               <div>
@@ -192,9 +230,9 @@ export const TicketsPage: React.FC<{ userRole?: string; user?: any }> = ({ userR
                 <div className="flex gap-2 flex-wrap">
                   {STATUSES.map(s => (
                     <button key={s.key} 
-                      onClick={() => userRole !== 'therapist' && changeStatus(selected, s.key)}
-                      disabled={userRole === 'therapist'}
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${selected.status === s.key ? s.cls + ' ring-2 ring-offset-1 ring-teal-500' : 'bg-white text-gray-500'} ${userRole === 'therapist' && selected.status !== s.key ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                      onClick={() => canManage && changeStatus(selected, s.key)}
+                      disabled={!canManage}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${selected.status === s.key ? s.cls + ' ring-2 ring-offset-1 ring-teal-500' : 'bg-white text-gray-500'} ${!canManage && selected.status !== s.key ? 'opacity-50 cursor-not-allowed' : ''}`}>
                       {s.label}
                     </button>
                   ))}
@@ -204,10 +242,10 @@ export const TicketsPage: React.FC<{ userRole?: string; user?: any }> = ({ userR
               <div>
                 <div className="text-gray-400 text-xs mb-1">Internal notes</div>
                 <textarea value={draftNotes} onChange={e => setDraftNotes(e.target.value)} rows={4}
-                  disabled={userRole === 'therapist'}
+                  disabled={!canManage}
                   className="w-full border rounded-lg p-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 disabled:bg-gray-100 disabled:text-gray-500"
-                  placeholder={userRole === 'therapist' ? "Internal notes are read-only" : "Add resolution notes, root cause, who's handling it…"} />
-                {userRole !== 'therapist' && (
+                  placeholder={!canManage ? "Internal notes are read-only" : "Add resolution notes, root cause, who's handling it…"} />
+                {canManage && (
                   <button
                     disabled={savingNotes}
                     onClick={async () => { setSavingNotes(true); await patchTicket(selected.id, { notes: draftNotes }); setSavingNotes(false); }}

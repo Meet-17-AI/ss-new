@@ -11,6 +11,9 @@ node_modules
 dist
 dist-ssr
 *.local
+# Backups of env files still contain the secrets they copied.
+.env.local.bak-*
+.env.*.bak
 
 # Editor directories and files
 .vscode/*

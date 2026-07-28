@@ -98,7 +98,8 @@ export const ChangePassword: React.FC<ChangePasswordProps> = ({ onBack, user, hi
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           user_id: user.id,
-          new_password: newPassword
+          new_password: newPassword,
+          current_password: currentPassword
         })
       });
 

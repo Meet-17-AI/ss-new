@@ -5,6 +5,10 @@ import App from './App';
 import { AuthProvider } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { installAuthFetch } from './lib/authFetch';
+
+// Must run before anything renders, so the very first API call carries the token.
+installAuthFetch();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

@@ -17,6 +17,7 @@ import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail,
 import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage, sendSessionFeedbackRequest, sendPostSessionTherapistForm } from './automations/index';
 import { generateAdminOTP, verifyAdminOTP } from './otp';
 import { logWebhookApi } from './lib/webhookApiLogger.js';
+import { createNotification, notifyAllAdmins } from './lib/notifications';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -76,6 +77,46 @@ if (missingEnvVars.length > 0) {
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS || '10');
 
+// ==================== CREDENTIAL HELPERS ====================
+// Historically `users.password` held plaintext for some rows and a bcrypt hash for
+// others. Reads must tolerate both so existing accounts keep working, but every
+// WRITE now hashes — so the plaintext rows drain away as people change passwords.
+const isHashedPassword = (stored: unknown): boolean =>
+  typeof stored === 'string' && /^\$2[aby]\$/.test(stored);
+
+async function verifyPassword(plain: string, stored: string): Promise<boolean> {
+  if (!plain || !stored) return false;
+  return isHashedPassword(stored) ? bcrypt.compare(plain, stored) : plain === stored;
+}
+
+const hashPassword = (plain: string) => bcrypt.hash(plain, BCRYPT_ROUNDS);
+
+// The `users` row is built with SELECT *, so it carries the credential. Strip it
+// before anything is sent to a client — the frontend persists this object into
+// localStorage, so whatever ships here is stored on the user's disk.
+function toSafeUser<T extends Record<string, any>>(user: T): Omit<T, 'password'> {
+  const { password, ...safe } = user;
+  return safe;
+}
+
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
+
+// The token is the ONLY thing the server trusts about who is calling. Keep the
+// claims minimal — anything else can be looked up from the id at request time.
+function issueToken(user: { id: any; username?: string; role: string; therapist_id?: any; email?: string }): string {
+  return jwt.sign(
+    {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      therapist_id: user.therapist_id ?? null,
+      email: user.email ?? null,
+    },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN } as jwt.SignOptions
+  );
+}
+
 const app = express();
 
 // Auto-migrate schema
@@ -131,6 +172,70 @@ const authMiddleware = async (req: any, res: any, next: any) => {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 };
+
+// ==================== PUBLIC ROUTE ALLOWLIST ====================
+// Everything under /api requires a valid token EXCEPT these. Entries are matched
+// against the exact path, so adding a route to the app does NOT silently make it
+// public — it is closed by default.
+//
+// Method matters: GET /api/services powers the public directory, but POST/PUT/DELETE
+// on the same path are admin operations and must stay authenticated.
+const PUBLIC_API_ROUTES: { methods: string[]; pattern: RegExp }[] = [
+  // --- authentication entry points (these mint tokens) ---
+  { methods: ['POST'], pattern: /^\/api\/login$/ },
+  { methods: ['POST'], pattern: /^\/api\/verify-therapist-otp$/ },
+  { methods: ['POST'], pattern: /^\/api\/forgot-password\/(send-otp|verify-otp|reset)$/ },
+
+  // --- public booking flow (/book/*) ---
+  { methods: ['GET'],  pattern: /^\/api\/public\/services\/[^/]+$/ },
+  { methods: ['GET'],  pattern: /^\/api\/services$/ },
+  { methods: ['GET'],  pattern: /^\/api\/therapist-availability$/ },
+  { methods: ['POST'], pattern: /^\/api\/fetch-slots$/ },
+  { methods: ['POST'], pattern: /^\/api\/create-booking$/ },
+  { methods: ['POST'], pattern: /^\/api\/create-pending-booking$/ },
+  { methods: ['POST'], pattern: /^\/api\/public\/client-history$/ },
+  { methods: ['GET'],  pattern: /^\/api\/payment-settings\/public$/ },
+
+  // --- payment checkout (/pay/*) ---
+  { methods: ['POST'], pattern: /^\/api\/razorpay\/create-order$/ },
+  { methods: ['POST'], pattern: /^\/api\/razorpay\/verify-payment$/ },
+  { methods: ['POST'], pattern: /^\/api\/mark-payment-failed$/ },
+  { methods: ['GET'],  pattern: /^\/api\/bookings\/[^/]+\/checkout-info$/ },
+  { methods: ['POST'], pattern: /^\/api\/confirm-payment$/ },
+
+  // --- booking confirmation (/booking-confirmation/*) ---
+  { methods: ['GET'],  pattern: /^\/api\/public\/booking\/[^/]+$/ },
+  { methods: ['POST'], pattern: /^\/api\/cancel-booking$/ },
+
+  // --- client-facing session notes (/session-notes/*) ---
+  { methods: ['GET'],  pattern: /^\/api\/session-notes-info$/ },
+  { methods: ['POST'], pattern: /^\/api\/session-documentation$/ },
+  { methods: ['GET', 'POST', 'DELETE'], pattern: /^\/api\/session-notes-draft$/ },
+
+  // --- SOS documentation view (token-gated in the handler) ---
+  { methods: ['GET'],  pattern: /^\/api\/sos-documentation$/ },
+
+  // --- server-to-server: webhooks, cron, oauth callback ---
+  { methods: ['POST'], pattern: /^\/api\/razorpay\/webhook$/ },
+  { methods: ['POST'], pattern: /^\/api\/paperform-webhook\/(free-consultation|therapy-documentation)$/ },
+  { methods: ['POST'], pattern: /^\/api\/webhook\/feedback$/ },
+  { methods: ['POST'], pattern: /^\/api\/cron\/verify-pending-payments$/ },
+  { methods: ['GET'],  pattern: /^\/api\/auth\/google\/callback$/ },
+];
+
+const isPublicApiRoute = (method: string, path: string): boolean =>
+  PUBLIC_API_ROUTES.some(r => r.methods.includes(method) && r.pattern.test(path));
+
+// Global gate. Registered here — before any route is defined — so it applies
+// regardless of the order routes are added further down the file.
+app.use((req: any, res: any, next: any) => {
+  // Non-/api paths (/health, /r/:code) are not part of the JSON API.
+  if (!req.path.startsWith('/api/')) return next();
+  // CORS preflight carries no Authorization header by design.
+  if (req.method === 'OPTIONS') return next();
+  if (isPublicApiRoute(req.method, req.path)) return next();
+  return authMiddleware(req, res, next);
+});
 
 // Authorization middleware - check user role
 const requireRole = (allowedRoles: string[]) => {
@@ -539,17 +644,19 @@ app.post('/api/login', async (req, res) => {
     // Hardcode override for Fluidadmin
     if (username === 'Fluidadmin' && password === 'Fluid@2026') {
       console.log(`✅ Login successful for Fluidadmin (fluidadmin)`);
+      const fluidAdminUser = {
+        id: 999999, // dummy ID
+        username: 'Fluidadmin',
+        name: 'Fluid Admin',
+        full_name: 'Fluid Admin',
+        email: 'fluidadmin@safestories.in',
+        role: 'fluidadmin',
+        is_active: true
+      };
       return res.json({
         success: true,
-        user: {
-          id: 999999, // dummy ID
-          username: 'Fluidadmin',
-          name: 'Fluid Admin',
-          full_name: 'Fluid Admin',
-          email: 'fluidadmin@safestories.in',
-          role: 'fluidadmin',
-          is_active: true
-        }
+        user: fluidAdminUser,
+        token: issueToken(fluidAdminUser)
       });
     }
 
@@ -577,13 +684,8 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
-    // Support both plain text and bcrypt passwords for backward compatibility
-    let passwordMatch = false;
-    if (user.password.startsWith('$2a$') || user.password.startsWith('$2b$')) {
-      passwordMatch = await bcrypt.compare(password, user.password);
-    } else {
-      passwordMatch = (password === user.password);
-    }
+    // Accepts both plaintext (legacy rows) and bcrypt hashes.
+    const passwordMatch = await verifyPassword(password, user.password);
 
     if (!passwordMatch) {
       return res.status(401).json({
@@ -660,7 +762,7 @@ app.post('/api/login', async (req, res) => {
         }
       }
 
-      res.json({ success: true, user });
+      res.json({ success: true, user: toSafeUser(user), token: issueToken(user) });
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ success: false, message: 'Login failed' });
@@ -672,12 +774,14 @@ app.post('/api/verify-password', async (req, res) => {
   try {
     const { username, password } = req.body;
 
+    // Must not compare in SQL — that only matches the legacy plaintext rows and
+    // silently reports "wrong password" for anyone whose password is hashed.
     const result = await pool.query(
-      'SELECT * FROM users WHERE LOWER(username) = LOWER($1) AND password = $2',
-      [username, password]
+      'SELECT password FROM users WHERE LOWER(username) = LOWER($1)',
+      [username]
     );
 
-    if (result.rows.length > 0) {
+    if (result.rows.length > 0 && await verifyPassword(password, result.rows[0].password)) {
       res.json({ success: true });
     } else {
       res.json({ success: false });
@@ -691,19 +795,30 @@ app.post('/api/verify-password', async (req, res) => {
 // Change password endpoint
 app.post('/api/change-password', async (req, res) => {
   try {
-    const { userId, newPassword } = req.body;
+    const { userId, newPassword, currentPassword } = req.body;
 
     if (!userId || !newPassword) {
       return res.status(400).json({ success: false, error: 'Missing required fields' });
     }
 
-    if (newPassword.length < 6) {
-      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
+    if (newPassword.length < 8) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
+    }
+
+    if (!currentPassword) {
+      return res.status(400).json({ success: false, error: 'Current password is required' });
+    }
+    const existing = await pool.query('SELECT password FROM users WHERE id = $1', [userId]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    if (!(await verifyPassword(currentPassword, existing.rows[0].password))) {
+      return res.status(401).json({ success: false, error: 'Current password is incorrect' });
     }
 
     const result = await pool.query(
       'UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2 RETURNING id, username',
-      [newPassword, userId]
+      [await hashPassword(newPassword), userId]
     );
 
     if (result.rows.length > 0) {
@@ -796,6 +911,9 @@ app.post('/api/verify-therapist-otp', async (req, res) => {
       specializationDetails = [];
     }
 
+    // This endpoint is an authentication entry point — the client logs the therapist
+    // straight in on success — so it must mint a token like /api/login does. The
+    // onboarding account has no users row yet, so the request_id stands in as identity.
     res.json({
       success: true,
       data: {
@@ -805,7 +923,14 @@ app.post('/api/verify-therapist-otp', async (req, res) => {
         phone: request.whatsapp_number,
         specializations: request.specializations,
         specializationDetails: specializationDetails
-      }
+      },
+      token: issueToken({
+        id: request.request_id,
+        username: String(request.email || '').split('@')[0],
+        role: 'therapist',
+        therapist_id: request.request_id,
+        email: request.email,
+      })
     });
   } catch (error) {
     console.error('Error verifying OTP:', error);
@@ -934,12 +1059,14 @@ app.post('/api/complete-therapist-profile', async (req, res) => {
         [email]
       );
 
+      const hashedPassword = await hashPassword(password);
+
       if (existingUser.rows.length === 0) {
         // Create new user account with therapist_id
         await pool.query(
           `INSERT INTO users (username, password, name, email, role, full_name, phone, profile_picture_url, therapist_id, created_at)
            VALUES ($1, $2, $3, $4, 'therapist', $5, $6, $7, $8, NOW())`,
-          [email, password, name, email, name, phone, profilePictureUrl, therapistId]
+          [email, hashedPassword, name, email, name, phone, profilePictureUrl, therapistId]
         );
         console.log('✅ User account created for:', email, 'with therapist_id:', therapistId);
       } else {
@@ -947,7 +1074,7 @@ app.post('/api/complete-therapist-profile', async (req, res) => {
         await pool.query(
           `UPDATE users SET password = $1, name = $2, full_name = $3, phone = $4, profile_picture_url = $5, therapist_id = $6
            WHERE LOWER(email) = LOWER($7)`,
-          [password, name, name, phone, profilePictureUrl, therapistId, email]
+          [hashedPassword, name, name, phone, profilePictureUrl, therapistId, email]
         );
         console.log('✅ User account updated for:', email, 'with therapist_id:', therapistId);
       }
@@ -1188,87 +1315,141 @@ app.post('/api/upload-file', (req, res, next) => {
   }
 });
 
-// Report issue endpoint
-app.post('/api/report-issue', async (req, res) => {
-  try {
-    const { subject, component, description, screenshot_url, reported_by, user_role } = req.body;
+// Who may see every ticket and change their state. Everyone else sees only their own.
+const TICKET_MANAGER_ROLES = ['admin', 'superadmin', 'fluidadmin'];
+const isTicketManager = (role?: string) => TICKET_MANAGER_ROLES.includes(String(role || '').toLowerCase());
 
-    if (!subject || !component || !description || !reported_by || !user_role) {
+const ticketRecipients = () =>
+  (process.env.TICKET_NOTIFY_EMAILS || 'aiteam@fluid.live,meetpandya@fluid.live,rohnit@fluid.live')
+    .split(',').map(e => e.trim()).filter(Boolean);
+
+// Report issue endpoint
+app.post('/api/report-issue', async (req: any, res) => {
+  const client = await pool.connect();
+  try {
+    const { subject, component, description } = req.body;
+    // Accept either the new array or the old single URL, so an un-refreshed tab
+    // that still posts screenshot_url keeps working.
+    const urls: string[] = Array.isArray(req.body.screenshot_urls)
+      ? req.body.screenshot_urls.filter((u: any) => typeof u === 'string' && u)
+      : (req.body.screenshot_url ? [req.body.screenshot_url] : []);
+
+    if (!subject || !component || !description) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const result = await pool.query(
-      `INSERT INTO report_issues (subject, component, description, screenshot_url, reported_by, user_role, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'open', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    // Identity comes from the token, never from the body — otherwise anyone could
+    // file a ticket as someone else, or claim a role they do not have.
+    const reportedBy = req.user.username || req.user.email || `user#${req.user.id}`;
+    const userRole = req.user.role;
+
+    await client.query('BEGIN');
+    const result = await client.query(
+      `INSERT INTO report_issues
+         (subject, component, description, screenshot_url, reported_by, reported_by_user_id, user_role, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'open', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        RETURNING id, created_at`,
-      [subject, component, description, screenshot_url, reported_by, user_role]
+      [subject, component, description, urls[0] || null, reportedBy, req.user.id, userRole]
     );
     const issueId = result.rows[0].id;
 
-    // Notify the internal team by email (best-effort — never fails the submission).
-    const ticketRecipients = (process.env.TICKET_NOTIFY_EMAILS || 'meetpandya@fluid.live,rohnit@fluid.live')
-      .split(',').map(e => e.trim()).filter(Boolean);
+    for (const url of urls) {
+      await client.query(
+        `INSERT INTO report_issue_attachments (ticket_id, file_url) VALUES ($1, $2)`,
+        [issueId, url]
+      );
+    }
+    await client.query('COMMIT');
+
+    // Notifications are best-effort — a failed email must never lose the ticket.
     try {
-      await sendIssueReportEmail(ticketRecipients, {
-        id: issueId, subject, component, description, reported_by, user_role,
-        screenshot_url, created_at: result.rows[0].created_at,
+      await sendIssueReportEmail(ticketRecipients(), {
+        id: issueId, subject, component, description,
+        reported_by: reportedBy, user_role: userRole,
+        screenshot_url: urls[0] || null, screenshot_urls: urls,
+        created_at: result.rows[0].created_at,
       });
     } catch (mailErr: any) {
       console.error(`[report-issue] Ticket #${issueId} saved but email notification failed:`, mailErr?.message || mailErr);
     }
+    try {
+      await notifyAllAdmins(
+        'ticket_created',
+        `New ticket #${issueId}: ${subject}`,
+        `${reportedBy} (${userRole}) reported an issue in ${component}.`,
+        String(issueId)
+      );
+    } catch (notifyErr: any) {
+      console.error(`[report-issue] In-app notification failed for #${issueId}:`, notifyErr?.message || notifyErr);
+    }
 
     res.json({ success: true, issueId });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('Error reporting issue:', error);
     res.status(500).json({ error: 'Failed to report issue' });
+  } finally {
+    client.release();
   }
 });
 
-// List all tickets (admin ticket inbox). Optional ?status= filter.
-app.get('/api/report-issues', async (req, res) => {
+// List tickets. Managers see everything; everyone else sees only what they raised.
+app.get('/api/report-issues', async (req: any, res) => {
   try {
-    const { status, reported_by } = req.query;
+    const { status } = req.query;
     const params: any[] = [];
     const conditions: string[] = [];
 
-    if (status && status !== 'all') { 
-      params.push(status); 
-      conditions.push(`status = $${params.length}`); 
+    // Ownership scope is derived from the token. A `reported_by` query param is
+    // deliberately ignored — trusting it let any therapist read every ticket.
+    const scoped = !isTicketManager(req.user.role);
+    if (scoped) {
+      params.push(req.user.id);
+      conditions.push(`reported_by_user_id = $${params.length}`);
     }
+    // Counts share the ownership filter but ignore the status filter, so the tab
+    // badges keep showing totals for the other tabs.
+    const scopeConditions = [...conditions];
+    const scopeParams = [...params];
 
-    if (reported_by) {
-      params.push(reported_by);
-      conditions.push(`reported_by = $${params.length}`);
+    if (status && status !== 'all') {
+      params.push(status);
+      conditions.push(`status = $${params.length}`);
     }
 
     const where = conditions.length > 0 ? 'WHERE ' + conditions.join(' AND ') : '';
 
     const result = await pool.query(
-      `SELECT id, subject, component, description, screenshot_url, reported_by, user_role,
-              status, notes, created_at, updated_at, resolved_at
-       FROM report_issues ${where} ORDER BY created_at DESC`,
+      `SELECT r.id, r.subject, r.component, r.description, r.screenshot_url,
+              r.reported_by, r.reported_by_user_id, r.user_role,
+              r.status, r.notes, r.created_at, r.updated_at, r.resolved_at,
+              COALESCE(
+                (SELECT json_agg(json_build_object('url', a.file_url, 'name', a.file_name) ORDER BY a.id)
+                 FROM report_issue_attachments a WHERE a.ticket_id = r.id),
+                '[]'::json
+              ) AS attachments
+       FROM report_issues r ${where.replace(/\b(reported_by_user_id|status)\b/g, 'r.$1')}
+       ORDER BY r.created_at DESC`,
       params
     );
 
-    // Status counts for the tab badges
-    let countWhere = '';
-    let countParams: any[] = [];
-    if (reported_by) {
-      countParams.push(reported_by);
-      countWhere = 'WHERE reported_by = $1';
-    }
-    const counts = await pool.query(`SELECT status, COUNT(*)::int n FROM report_issues ${countWhere} GROUP BY status`, countParams);
+    const countWhere = scopeConditions.length > 0 ? 'WHERE ' + scopeConditions.join(' AND ') : '';
+    const counts = await pool.query(
+      `SELECT status, COUNT(*)::int n FROM report_issues ${countWhere} GROUP BY status`,
+      scopeParams
+    );
     const countMap: Record<string, number> = {};
     counts.rows.forEach((r: any) => { countMap[r.status] = r.n; });
-    res.json({ tickets: result.rows, counts: countMap });
+    res.json({ tickets: result.rows, counts: countMap, canManage: !scoped });
   } catch (error) {
     console.error('Error listing report issues:', error);
     res.status(500).json({ error: 'Failed to list tickets' });
   }
 });
 
-// Update a ticket's status and/or notes.
-app.patch('/api/report-issues/:id', async (req, res) => {
+// Update a ticket's status and/or notes. Managers only — the UI also hides these
+// controls from therapists, but that is cosmetic; this is what actually enforces it.
+app.patch('/api/report-issues/:id', requireRole(TICKET_MANAGER_ROLES), async (req: any, res) => {
   try {
     const { id } = req.params;
     const { status, notes } = req.body;
@@ -1291,7 +1472,25 @@ app.patch('/api/report-issues/:id', async (req, res) => {
       vals
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Ticket not found' });
-    res.json({ success: true, ticket: result.rows[0] });
+
+    const ticket = result.rows[0];
+    // Tell the person who raised it that something changed. Best-effort.
+    if (status !== undefined && ticket.reported_by_user_id) {
+      try {
+        await createNotification({
+          userId: String(ticket.reported_by_user_id),
+          userRole: (String(ticket.user_role || '').toLowerCase() === 'therapist' ? 'therapist' : 'admin'),
+          notificationType: 'ticket_status_changed',
+          title: `Ticket #${ticket.id} is now ${status.replace('_', ' ')}`,
+          message: `"${ticket.subject}" was updated by ${req.user.username || 'the team'}.`,
+          relatedId: String(ticket.id),
+        });
+      } catch (notifyErr: any) {
+        console.error(`[report-issues] Status notification failed for #${ticket.id}:`, notifyErr?.message || notifyErr);
+      }
+    }
+
+    res.json({ success: true, ticket });
   } catch (error) {
     console.error('Error updating ticket:', error);
     res.status(500).json({ error: 'Failed to update ticket' });
@@ -1740,7 +1939,7 @@ app.get('/api/therapists', async (req, res) => {
 });
 
 // DELETE therapist
-app.delete('/api/therapists/:id', async (req, res) => {
+app.delete('/api/therapists/:id', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     const { id } = req.params;
     // Soft delete: mark therapist as inactive and delete their therapy services
@@ -1761,7 +1960,7 @@ app.delete('/api/therapists/:id', async (req, res) => {
 });
 
 // PATCH deactivate therapist
-app.patch('/api/therapists/:id/deactivate', async (req, res) => {
+app.patch('/api/therapists/:id/deactivate', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
@@ -2319,15 +2518,31 @@ app.get('/api/crm/todo', async (req, res) => {
 // Update password
 app.post('/api/update-password', async (req, res) => {
   try {
-    const { user_id, new_password } = req.body;
+    const { user_id, new_password, current_password } = req.body;
 
     if (!user_id || !new_password) {
       return res.status(400).json({ success: false, error: 'User ID and new password are required' });
     }
+    // Proof of identity. The client also pre-checks via /api/verify-password for
+    // fast feedback, but that call is advisory — this is the one that decides.
+    if (!current_password) {
+      return res.status(400).json({ success: false, error: 'Current password is required' });
+    }
+    if (String(new_password).length < 8) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 8 characters' });
+    }
+
+    const existing = await pool.query('SELECT password FROM users WHERE id = $1', [user_id]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    if (!(await verifyPassword(current_password, existing.rows[0].password))) {
+      return res.status(401).json({ success: false, error: 'Current password is incorrect' });
+    }
 
     const result = await pool.query(
-      `UPDATE users SET password = $1 WHERE id = $2 RETURNING id`,
-      [new_password, user_id]
+      `UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2 RETURNING id`,
+      [await hashPassword(new_password), user_id]
     );
 
     if (result.rows.length === 0) {
@@ -2529,7 +2744,7 @@ app.post('/api/forgot-password/reset', async (req, res) => {
     // Update password
     const updateResult = await pool.query(
       `UPDATE users SET password = $1 WHERE id = $2 RETURNING id, username`,
-      [newPassword, resetRecord.user_id]
+      [await hashPassword(newPassword), resetRecord.user_id]
     );
 
     if (updateResult.rows.length === 0) {
@@ -4587,7 +4802,7 @@ app.get('/api/therapists-admin', async (req, res) => {
 });
 
 // Update therapist status (active/inactive)
-app.put('/api/admin/therapists/:id/status', async (req, res) => {
+app.put('/api/admin/therapists/:id/status', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     const { id } = req.params;
     const { is_active } = req.body;
@@ -5426,7 +5641,7 @@ app.get('/api/therapist-avg-rating', async (req, res) => {
 });
 
 // Transfer client endpoint
-app.post('/api/transfer-client', async (req, res) => {
+app.post('/api/transfer-client', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
 
   try {
     const {
@@ -5570,7 +5785,7 @@ app.get('/api/audit-logs', async (req, res) => {
 });
 
 // Clear audit logs (soft delete)
-app.post('/api/audit-logs/clear', async (req, res) => {
+app.post('/api/audit-logs/clear', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     await pool.query('UPDATE audit_logs SET is_visible = false WHERE is_visible = true');
     res.json({ success: true });
@@ -6860,7 +7075,7 @@ app.post('/api/fetch-slots', async (req, res) => {
 });
 
 // GET public service details by slug
-app.delete('/api/services/:id', async (req, res) => {
+app.delete('/api/services/:id', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query('DELETE FROM therapy_services WHERE id = $1 RETURNING *', [id]);
@@ -6929,7 +7144,7 @@ app.get('/api/payment-settings', async (req, res) => {
 });
 
 // POST /api/payment-settings (Admin)
-app.post('/api/payment-settings', async (req, res) => {
+app.post('/api/payment-settings', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     const { settings } = req.body;
     const check = await pool.query('SELECT COUNT(*) FROM payment_settings');
@@ -10092,7 +10307,7 @@ app.get('/api/free-consultation-notes/:id', async (req, res) => {
 // ==================== PAYMENT LINK EXPIRATION APIs ====================
 
 // 1. Generate Payment Link (Admin)
-app.post('/api/admin/generate-payment-link', async (req, res) => {
+app.post('/api/admin/generate-payment-link', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     const { 
       therapistName, 
@@ -10511,7 +10726,7 @@ app.get('/api/therapist-schedules/:therapist_id', async (req, res) => {
   }
 });
 
-app.post('/api/services', async (req, res) => {
+app.post('/api/services', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     const {
       title, duration, type, therapy_type, description, charges, therapist_id, therapist_name,
@@ -10587,7 +10802,7 @@ app.post('/api/services', async (req, res) => {
   }
 });
 
-app.put('/api/services/:id', async (req, res) => {
+app.put('/api/services/:id', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -10640,7 +10855,7 @@ app.put('/api/services/:id', async (req, res) => {
 });
 
 // DELETE therapy calendar
-app.delete('/api/therapy-calendars/:id', async (req, res) => {
+app.delete('/api/therapy-calendars/:id', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query('DELETE FROM therapy_services WHERE id = $1 RETURNING id', [id]);
@@ -10655,7 +10870,7 @@ app.delete('/api/therapy-calendars/:id', async (req, res) => {
 });
 
 // PATCH deactivate therapy calendar
-app.patch('/api/therapy-calendars/:id/deactivate', async (req, res) => {
+app.patch('/api/therapy-calendars/:id/deactivate', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
@@ -10673,7 +10888,7 @@ app.patch('/api/therapy-calendars/:id/deactivate', async (req, res) => {
 });
 
 // PATCH activate therapy calendar
-app.patch('/api/therapy-calendars/:id/activate', async (req, res) => {
+app.patch('/api/therapy-calendars/:id/activate', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
@@ -10769,6 +10984,27 @@ async function runStartupMigrations() {
       )`);
     await pool.query(`ALTER TABLE report_issues ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_report_issues_status ON report_issues(status)`);
+    // Ownership by user id, not display name. `reported_by` stays as a denormalised
+    // label for old rows and for showing who raised it without a join.
+    await pool.query(`ALTER TABLE report_issues ADD COLUMN IF NOT EXISTS reported_by_user_id INTEGER`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_report_issues_owner ON report_issues(reported_by_user_id)`);
+    // Multiple screenshots per ticket. screenshot_url is kept in sync with the
+    // first attachment so anything still reading the old column keeps working.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS report_issue_attachments (
+        id          SERIAL PRIMARY KEY,
+        ticket_id   INTEGER NOT NULL REFERENCES report_issues(id) ON DELETE CASCADE,
+        file_url    TEXT NOT NULL,
+        file_name   TEXT,
+        uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_rin_ticket ON report_issue_attachments(ticket_id)`);
+    // Backfill ownership for pre-existing rows by matching the stored display name.
+    await pool.query(`
+      UPDATE report_issues r SET reported_by_user_id = u.id
+      FROM users u
+      WHERE r.reported_by_user_id IS NULL
+        AND LOWER(r.reported_by) IN (LOWER(u.username), LOWER(u.full_name))`);
 
     // Make masked_email unique per client. The old generated expression used
     // lpad(id,5,'0'), which TRUNCATES ids longer than 5 digits — collapsing every
