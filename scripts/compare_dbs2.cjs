@@ -1,20 +1,21 @@
+require('dotenv').config({ path: require('path').resolve(__dirname, '../panel-backend/.env.local') });
 const { Client } = require('pg');
 const fs = require('fs');
 
 const db1Config = {
-  host: '72.60.103.151',
+  host: process.env.PGHOST,
   port: 5432,
-  user: 'fluidadmin',
-  password: 'admin123',
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD,
   database: 'safestories_db',
   ssl: { rejectUnauthorized: false }
 };
 
 const db2Config = {
-  host: '72.60.103.151',
+  host: process.env.PGHOST,
   port: 5432,
-  user: 'fluidadmin',
-  password: 'admin123',
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD,
   database: 'safestories_v2',
   ssl: { rejectUnauthorized: false }
 };

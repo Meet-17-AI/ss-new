@@ -51,7 +51,7 @@
 ## 🚀 Ready to Test
 
 ### Login Credentials:
-- **Admin**: `admin` / `admin123` OR `poojajain@safestories.in` / `Safestories@2026`
+- **Admin**: `admin` / `<REDACTED-SEE-.env.example>` OR `poojajain@safestories.in` / `Safestories@2026`
 - **Therapist**: `Ishika` / `Ishika123` (case-insensitive)
 
 ### Expected Behavior:

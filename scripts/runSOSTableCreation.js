@@ -1,3 +1,5 @@
+import * as dotenv from 'dotenv';
+dotenv.config({ path: 'panel-backend/.env.local' });
 import pkg from 'pg';
 const { Pool } = pkg;
 import fs from 'fs';
@@ -8,11 +10,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const pool = new Pool({
-  host: '72.60.103.151',
+  host: process.env.PGHOST,
   port: 5432,
   database: 'safestories_db',
-  user: 'fluidadmin',
-  password: 'admin123',
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD,
   ssl: false
 });
 

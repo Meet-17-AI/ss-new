@@ -84,7 +84,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     console.log('   2. Point-in-time recovery options');
     console.log('   3. Manual backup files (.sql or .dump)\n');
     
-    console.log('   Server: 72.60.103.151');
+    console.log(`   Server: ${process.env.PGHOST}`);
     console.log('   Database: safestories_db\n');
     
     console.log('═══════════════════════════════════════════════════════\n');

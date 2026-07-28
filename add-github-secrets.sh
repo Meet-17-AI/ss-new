@@ -32,11 +32,11 @@ AAAEA6Ahs9FbkYAHeP0LG7CqYyVL8n92LnqqvF4A5xSXcELMgL0DPmlDwXle07gKhCy8cW
 byhqK0JWiWRFoafi5GalAAAAEWRlcGxveUBzcnYxMTY5MjgwAQIDBA==
 -----END OPENSSH PRIVATE KEY-----"
 
-gh secret set PGHOST --body "72.60.103.151"
+gh secret set PGHOST --body "<DB-HOST>"
 gh secret set PGPORT --body "5432"
 gh secret set PGDATABASE --body "safestories_db_v2"
 gh secret set PGUSER --body "fluidadmin"
-gh secret set PGPASSWORD --body "admin123"
+gh secret set PGPASSWORD --body "<REDACTED-SEE-.env.example>"
 gh secret set JWT_SECRET --body "416eaa4693222d766c3075d39c632a30dba33692edd7a967fed21344592be70c"
 gh secret set RAZORPAY_KEY_ID --body "rzp_live_SaBaiUb2drX26Q"
 gh secret set RAZORPAY_KEY_SECRET --body "Pce9pDS10yAq6aOEUbeYOT9f"

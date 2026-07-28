@@ -1,12 +1,14 @@
+import * as dotenv from 'dotenv';
+dotenv.config({ path: 'panel-backend/.env.local' });
 import pkg from 'pg';
 const { Pool } = pkg;
 
 const pool = new Pool({
-  host: '72.60.103.151',
+  host: process.env.PGHOST,
   port: 5432,
   database: 'safestories_db',
-  user: 'fluidadmin',
-  password: 'admin123'
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD
 });
 
 async function findClient() {

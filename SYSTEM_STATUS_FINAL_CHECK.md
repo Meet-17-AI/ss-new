@@ -4,11 +4,11 @@
 
 ### Local Environment (.env.local) - ✅ ALL SET
 ```
-PGHOST=72.60.103.151
+PGHOST=<DB-HOST>
 PGPORT=5432
 PGDATABASE=safestories_db
 PGUSER=fluidadmin
-PGPASSWORD=admin123
+PGPASSWORD=<REDACTED-SEE-.env.example>
 
 MINIO_ENDPOINT=s3.srv1169280.hstgr.cloud
 $1443

@@ -50,7 +50,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     
     console.log('📋 NEXT STEPS:\n');
     console.log('1. Contact your hosting provider/server admin:');
-    console.log('   Server: 72.60.103.151');
+    console.log(`   Server: ${process.env.PGHOST}`);
     console.log('   Database: safestories_db');
     console.log('   Ask for: Backups from Feb 26-28, 2026\n');
     
@@ -69,7 +69,7 @@ const pool = new Pool({ connectionString: process.env.DATABASE_URL });
     // Create a backup NOW
     console.log('💡 RECOMMENDATION: Create a backup RIGHT NOW\n');
     console.log('Run this command on your server:');
-    console.log(`   pg_dump -h 72.60.103.151 -U fluidadmin -d safestories_db > backup_$(date +%Y%m%d_%H%M%S).sql\n`);
+    console.log(`   pg_dump -h ${process.env.PGHOST} -U fluidadmin -d safestories_db > backup_$(date +%Y%m%d_%H%M%S).sql\n`);
     
     await pool.end();
   } catch (error) {

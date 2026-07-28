@@ -14,6 +14,12 @@ dist-ssr
 # Backups of env files still contain the secrets they copied.
 .env.local.bak-*
 .env.*.bak
+# Env files of every shape — these held live DB credentials in git history.
+.env
+.env.*
+!.env.example
+*.env.render
+ssclone_env.txt
 
 # Editor directories and files
 .vscode/*

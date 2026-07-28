@@ -1,3 +1,4 @@
+import bcrypt from 'bcrypt';
 import pool from '../lib/db';
 
 async function createUsersTable() {
@@ -17,14 +18,20 @@ async function createUsersTable() {
     
     console.log('✓ Users table created successfully');
     
-    // Insert default admin user
-    await pool.query(`
-      INSERT INTO users (username, password, name, role)
-      VALUES ('admin', 'admin123', 'Pooja Jain', 'admin')
-      ON CONFLICT (username) DO NOTHING;
-    `);
-    
-    console.log('✓ Default admin user created (username: admin, password: admin123)');
+    // Insert default admin user. The password is supplied by the operator and
+    // stored as a bcrypt hash — this used to seed a hardcoded plaintext one.
+    const seedPassword = process.env.SEED_ADMIN_PASSWORD;
+    if (!seedPassword) {
+      throw new Error('Set SEED_ADMIN_PASSWORD to seed the default admin user');
+    }
+    await pool.query(
+      `INSERT INTO users (username, password, name, role)
+       VALUES ($1, $2, $3, 'admin')
+       ON CONFLICT (username) DO NOTHING`,
+      ['admin', await bcrypt.hash(seedPassword, 10), 'Pooja Jain']
+    );
+
+    console.log('✓ Default admin user created (username: admin)');
     
     await pool.end();
   } catch (error) {

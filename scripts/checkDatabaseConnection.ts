@@ -6,7 +6,7 @@ async function checkDatabaseConnection() {
     
     // Check connection details
     console.log('Connected to:');
-    console.log(`  Host: ${process.env.PGHOST || '72.60.103.151'}`);
+    console.log(`  Host: ${process.env.PGHOST}`);
     console.log(`  Database: ${process.env.PGDATABASE || 'safestories_db'}`);
     console.log(`  User: ${process.env.PGUSER || 'fluidadmin'}\n`);
 

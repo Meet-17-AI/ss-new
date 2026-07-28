@@ -15,11 +15,11 @@
    
    The `.env.local` file is already configured with:
    ```
-   PGHOST=72.60.103.151
+   PGHOST=<DB-HOST>
    PGPORT=5432
    PGDATABASE=safestories_db
    PGUSER=fluidadmin
-   PGPASSWORD=admin123
+   PGPASSWORD=<REDACTED-SEE-.env.example>
    ```
 
 3. **Run the Application**

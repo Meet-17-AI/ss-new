@@ -1,3 +1,4 @@
+require('dotenv').config({ path: require('path').resolve(__dirname, '../panel-backend/.env.local') });
 const { Pool } = require('pg');
 
 const databases = ['safestories_db', 'safestories_db_v2', 'safestories_v2', 'ss_db_2', 'ss_clone'];
@@ -5,11 +6,11 @@ const databases = ['safestories_db', 'safestories_db_v2', 'safestories_v2', 'ss_
 async function searchMuskan() {
   for (const db of databases) {
     const pool = new Pool({
-      host: '72.60.103.151',
+      host: process.env.PGHOST,
       port: 5432,
       database: db,
-      user: 'fluidadmin',
-      password: 'admin123'
+      user: process.env.PGUSER,
+      password: process.env.PGPASSWORD
     });
 
     try {

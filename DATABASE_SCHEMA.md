@@ -465,4 +465,4 @@
 
 **Last Updated**: January 2026
 **Database**: PostgreSQL (safestories_db)
-**Host**: 72.60.103.151:5432
+**Host**: <DB-HOST>:5432

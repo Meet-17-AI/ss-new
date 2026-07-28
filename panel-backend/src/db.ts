@@ -3,12 +3,21 @@ import * as dotenv from 'dotenv';
 
 dotenv.config({ path: '.env.local' });
 
+// No credential fallbacks. Defaults here get committed and end up in git history;
+// they also silently pointed this pool at the stale `safestories_db` when the env
+// was missing, instead of failing loudly.
+const requiredDbVars = ['PGHOST', 'PGDATABASE', 'PGUSER', 'PGPASSWORD'];
+const missingDbVars = requiredDbVars.filter(v => !process.env[v]);
+if (missingDbVars.length > 0) {
+  throw new Error(`Missing database environment variables: ${missingDbVars.join(', ')}`);
+}
+
 const pool = new Pool({
-  host: process.env.PGHOST || '72.60.103.151',
+  host: process.env.PGHOST,
   port: parseInt(process.env.PGPORT || '5432'),
-  database: process.env.PGDATABASE || 'safestories_db',
-  user: process.env.PGUSER || 'fluidadmin',
-  password: process.env.PGPASSWORD || 'admin123',
+  database: process.env.PGDATABASE,
+  user: process.env.PGUSER,
+  password: process.env.PGPASSWORD,
   max: 1, // Limit connections for serverless
   connectionTimeoutMillis: 10000,
   idleTimeoutMillis: 30000,
