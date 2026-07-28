@@ -8,16 +8,15 @@ export default defineConfig(({ mode }) => {
     // UI can be worked on without booting a backend (whose startup crons send real
     // client emails). Defaults to the local backend.
     const apiTarget = env.VITE_API_TARGET || 'http://localhost:3002';
-    const crmTarget = env.VITE_CRM_TARGET || 'http://localhost:3003';
     return {
       server: {
-        port: 3004,
+        port: 5173,
         host: '0.0.0.0',
         proxy: {
-          '/api/crm': {
-            target: crmTarget,
-            changeOrigin: true,
-          },
+          // Note: this prefix also covers /api/crm/todo and /api/crm-audit-logs,
+          // which used to be routed to a separate backend on :3003. That backend
+          // was a stale fork and is gone; panel-backend serves both, as it already
+          // does in production.
           '/api': {
             target: apiTarget,
             changeOrigin: true,
