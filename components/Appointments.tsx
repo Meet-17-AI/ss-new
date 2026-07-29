@@ -126,10 +126,21 @@ export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onC
   // Reschedule state
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
   const [rescheduleTarget, setRescheduleTarget] = useState<Appointment | null>(null);
-  const [rescheduleDateTime, setRescheduleDateTime] = useState('');
+  const [rescheduleDate, setRescheduleDate] = useState('');
+  const [rescheduleSlots, setRescheduleSlots] = useState<{ iso: string; label: string }[]>([]);
+  const [rescheduleSlotIso, setRescheduleSlotIso] = useState('');
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [slotsError, setSlotsError] = useState('');
   const [rescheduleDuration, setRescheduleDuration] = useState(50);
   const [rescheduleReason, setRescheduleReason] = useState('');
   const [rescheduleNotify, setRescheduleNotify] = useState(true);
+
+  // Today in IST, as YYYY-MM-DD — used as the date picker's floor so past dates
+  // cannot be chosen. Built from the IST calendar date rather than UTC, or the
+  // boundary would be wrong for several hours each night.
+  const todayIST = new Date(Date.now() + (5.5 * 60 + new Date().getTimezoneOffset()) * 60000)
+    .toISOString()
+    .slice(0, 10);
   const [isRescheduling, setIsRescheduling] = useState(false);
 
   // Cancel state
@@ -363,15 +374,69 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
   // ── Reschedule ──────────────────────────────────────────────────────────────
   const openRescheduleModal = (apt: Appointment) => {
     setRescheduleTarget(apt);
-    setRescheduleDateTime('');
+    setRescheduleDate('');
+    setRescheduleSlots([]);
+    setRescheduleSlotIso('');
+    setSlotsError('');
     setRescheduleDuration(apt.duration || 50);
     setRescheduleReason('');
     setRescheduleNotify(true);
     setShowRescheduleModal(true);
   };
 
+  // Pull the therapist's real availability for the chosen date, rather than
+  // letting the admin type any time and only discover the clash afterwards.
+  useEffect(() => {
+    if (!showRescheduleModal || !rescheduleTarget || !rescheduleDate) return;
+
+    let cancelled = false;
+    const run = async () => {
+      setLoadingSlots(true);
+      setSlotsError('');
+      setRescheduleSlots([]);
+      setRescheduleSlotIso('');
+      try {
+        const res = await fetch('/api/fetch-slots', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            selectedTherapist: rescheduleTarget.booking_host_name,
+            therapistId: rescheduleTarget.therapist_id || undefined,
+            selectedDate: rescheduleDate,
+            timezone: 'Asia/Kolkata',
+            isDirectBooking: false,
+            isAdmin: true,
+          }),
+        });
+        if (!res.ok) throw new Error(`Slot lookup failed (${res.status})`);
+        const data = await res.json();
+        const raw: string[] = data?.[0]?.['Available Slots'] || [];
+
+        // A slot earlier today is in the past — the API returns the whole day.
+        const now = Date.now();
+        const slots = raw
+          .filter(iso => new Date(iso).getTime() > now)
+          .map(iso => ({
+            iso,
+            label: new Date(iso).toLocaleTimeString('en-IN', {
+              timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true,
+            }),
+          }));
+
+        if (!cancelled) setRescheduleSlots(slots);
+      } catch (err: any) {
+        if (!cancelled) setSlotsError(err?.message || 'Could not load available slots');
+      } finally {
+        if (!cancelled) setLoadingSlots(false);
+      }
+    };
+    run();
+    // Guards against an earlier date's response landing after a later one.
+    return () => { cancelled = true; };
+  }, [showRescheduleModal, rescheduleDate, rescheduleTarget]);
+
   const handleReschedule = async () => {
-    if (!rescheduleTarget || !rescheduleDateTime || !rescheduleReason.trim()) {
+    if (!rescheduleTarget || !rescheduleSlotIso || !rescheduleReason.trim()) {
       setToast({ message: 'Please fill in all required fields', type: 'error' });
       return;
     }
@@ -382,7 +447,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           booking_id: rescheduleTarget.booking_id,
-          new_start_at: new Date(rescheduleDateTime).toISOString(),
+          new_start_at: new Date(rescheduleSlotIso).toISOString(),
           duration: rescheduleDuration,
           reason: rescheduleReason,
           notify: rescheduleNotify
@@ -1070,25 +1135,76 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
                 </div>
               </div>
 
-              {/* New Date & Time */}
+              {/* New date — slots load automatically for whatever is picked */}
               <div>
                 <label className="block text-sm font-semibold text-gray-900 mb-2">
-                  New Date &amp; Time <span className="text-red-500">*</span>
+                  New Date <span className="text-red-500">*</span>
                 </label>
                 <input
-                  type="datetime-local"
-                  value={rescheduleDateTime}
-                  onChange={e => setRescheduleDateTime(e.target.value)}
-                  min={new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
-                  className="w-full px-4 py-3 border-2 border-gray-900 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  type="date"
+                  value={rescheduleDate}
+                  onChange={e => setRescheduleDate(e.target.value)}
+                  min={todayIST}
+                  className="w-full px-4 py-3 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
+              </div>
+
+              {/* Available slots for that date */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-900 mb-2">
+                  Available Slots <span className="text-red-500">*</span>
+                  {rescheduleTarget.booking_host_name && (
+                    <span className="font-normal text-gray-400 ml-1">
+                      · {rescheduleTarget.booking_host_name}
+                    </span>
+                  )}
+                </label>
+
+                {!rescheduleDate ? (
+                  <div className="text-sm text-gray-400 border border-dashed rounded-lg py-6 text-center">
+                    Pick a date to see available times
+                  </div>
+                ) : loadingSlots ? (
+                  <div className="flex items-center justify-center gap-2 text-sm text-gray-500 border rounded-lg py-6">
+                    <div className="w-4 h-4 border-2 border-gray-300 border-t-teal-600 rounded-full animate-spin" />
+                    Loading available slots…
+                  </div>
+                ) : slotsError ? (
+                  <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg py-3 px-4">
+                    {slotsError}
+                  </div>
+                ) : rescheduleSlots.length === 0 ? (
+                  <div className="text-sm text-gray-500 bg-amber-50 border border-amber-200 rounded-lg py-3 px-4">
+                    No available slots on this date. Try another day.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-4 gap-2 max-h-44 overflow-y-auto pr-1">
+                    {rescheduleSlots.map(slot => (
+                      <button
+                        key={slot.iso}
+                        type="button"
+                        onClick={() => setRescheduleSlotIso(slot.iso)}
+                        className={`px-2 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                          rescheduleSlotIso === slot.iso
+                            ? 'text-white border-transparent'
+                            : 'bg-white text-gray-700 hover:border-teal-500 hover:bg-teal-50'
+                        }`}
+                        style={rescheduleSlotIso === slot.iso ? { backgroundColor: '#21615D' } : undefined}
+                      >
+                        {slot.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <div className="flex items-center gap-3 mt-3">
+                  <span className="text-sm text-gray-600">Duration</span>
                   <input
                     type="number"
                     value={rescheduleDuration}
                     onChange={e => setRescheduleDuration(Number(e.target.value))}
                     min={1}
-                    className="w-24 px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    className="w-20 px-3 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
                   />
                   <span className="text-sm text-gray-600">minutes</span>
                 </div>
@@ -1130,8 +1246,8 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
                 </button>
                 <button
                   onClick={handleReschedule}
-                  disabled={isRescheduling}
-                  className="px-6 py-2.5 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+                  disabled={isRescheduling || !rescheduleSlotIso || !rescheduleReason.trim()}
+                  className="px-6 py-2.5 text-white rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                   style={{ backgroundColor: '#21615D' }}
                 >
                   {isRescheduling ? (
