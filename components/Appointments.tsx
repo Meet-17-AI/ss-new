@@ -5,6 +5,7 @@ import { SendBookingModal } from './SendBookingModal';
 import { Toast } from './Toast';
 import { Loader } from './Loader';
 import { deriveBookingStatus, statusLabel, statusBadgeClass } from '../lib/bookingStatus';
+import { InlineCalendar } from './InlineCalendar';
 
 interface Appointment {
   booking_id?: number;
@@ -1102,10 +1103,12 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
 
       {/* ── Reschedule Booking Modal ──────────────────────────────────────────── */}
       {showRescheduleModal && rescheduleTarget && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[9999]" onClick={() => setShowRescheduleModal(false)}>
-          <div className="bg-white rounded-xl w-full max-w-lg shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-[9999] p-4" onClick={() => setShowRescheduleModal(false)}>
+          {/* Calendar + slots make this tall; cap it and scroll the body rather
+              than letting the actions fall off screen on shorter displays. */}
+          <div className="bg-white rounded-xl w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
             {/* Header */}
-            <div className="flex justify-between items-start p-6 pb-4">
+            <div className="flex justify-between items-start p-6 pb-4 flex-shrink-0">
               <div>
                 <h3 className="text-xl font-bold text-gray-900">Reschedule Booking</h3>
                 <p className="text-sm text-gray-500 mt-1">
@@ -1117,7 +1120,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
               </button>
             </div>
 
-            <div className="px-6 pb-6 space-y-5">
+            <div className="px-6 pb-6 space-y-5 overflow-y-auto">
               {/* Current Date & Time */}
               <div>
                 <p className="text-sm font-semibold text-gray-900 mb-2">Current Date &amp; Time</p>
@@ -1140,16 +1143,16 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
                 <label className="block text-sm font-semibold text-gray-900 mb-2">
                   New Date <span className="text-red-500">*</span>
                 </label>
-                <input
-                  type="date"
+                <InlineCalendar
                   value={rescheduleDate}
-                  onChange={e => setRescheduleDate(e.target.value)}
+                  onChange={setRescheduleDate}
                   min={todayIST}
-                  className="w-full px-4 py-3 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
               </div>
 
-              {/* Available slots for that date */}
+              {/* Slots section stays hidden until a date exists — an empty
+                  placeholder was just noise in an already busy dialog. */}
+              {rescheduleDate && (
               <div>
                 <label className="block text-sm font-semibold text-gray-900 mb-2">
                   Available Slots <span className="text-red-500">*</span>
@@ -1160,11 +1163,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
                   )}
                 </label>
 
-                {!rescheduleDate ? (
-                  <div className="text-sm text-gray-400 border border-dashed rounded-lg py-6 text-center">
-                    Pick a date to see available times
-                  </div>
-                ) : loadingSlots ? (
+                {loadingSlots ? (
                   <div className="flex items-center justify-center gap-2 text-sm text-gray-500 border rounded-lg py-6">
                     <div className="w-4 h-4 border-2 border-gray-300 border-t-teal-600 rounded-full animate-spin" />
                     Loading available slots…
@@ -1209,6 +1208,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
                   <span className="text-sm text-gray-600">minutes</span>
                 </div>
               </div>
+              )}
 
               {/* Reason */}
               <div>
