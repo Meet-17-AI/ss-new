@@ -4,10 +4,17 @@ import { ArrowLeft, Upload, X, CheckCircle, AlertCircle, ChevronDown } from 'luc
 export const MAX_SCREENSHOTS = 5;
 const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
 
-// Kept in the order the items appear in each role's sidebar, so the dropdown reads
-// the same way the app does. Admin: components/Dashboard.tsx; therapist:
-// components/TherapistDashboard.tsx. Update both together if the nav changes.
+// Sidebar sections first, in the order they appear in the nav, then the
+// cross-cutting systems that have no sidebar entry of their own. Order is
+// deliberate — keep it in sync with the nav if that changes.
+const SHARED_SYSTEMS = [
+  'Chatbot',
+  'Email Notification',
+  'Whatsapp Notification',
+];
+
 const COMPONENTS_BY_ROLE: Record<string, string[]> = {
+  // Mirrors the admin sidebar: components/Dashboard.tsx
   admin: [
     'Dashboard',
     'Booking',
@@ -15,19 +22,16 @@ const COMPONENTS_BY_ROLE: Record<string, string[]> = {
     'Clients',
     'Payments',
     'Settings',
-    'Notifications',
-    'Tickets',
-    'Other',
+    ...SHARED_SYSTEMS,
   ],
+  // Mirrors the therapist sidebar: components/TherapistDashboard.tsx
   therapist: [
     'Dashboard',
     'My Availability',
     'My Clients',
     'My Bookings',
     'My Calendar',
-    'Notifications',
-    'Tickets',
-    'Other',
+    ...SHARED_SYSTEMS,
   ],
 };
 
