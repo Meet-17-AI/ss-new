@@ -7,10 +7,13 @@ const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
 // Sidebar sections first, in the order they appear in the nav, then the
 // cross-cutting systems that have no sidebar entry of their own. Order is
 // deliberate — keep it in sync with the nav if that changes.
+// 'Other' stays last as the escape hatch, so an issue that fits none of the
+// named areas still gets filed rather than mis-categorised.
 const SHARED_SYSTEMS = [
   'Chatbot',
   'Email Notification',
   'Whatsapp Notification',
+  'Other',
 ];
 
 const COMPONENTS_BY_ROLE: Record<string, string[]> = {
