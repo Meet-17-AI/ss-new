@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
-import { Activity, List, LogOut, Menu, X, Ticket } from 'lucide-react';
+import { Activity, List, LogOut, Menu, X, Ticket, ScrollText } from 'lucide-react';
 import { Logo } from './Logo';
 import { AutomationLogsDashboard } from './AutomationLogsDashboard';
 import { AutomationLogsList } from './AutomationLogsList';
 import { TicketsPage } from './TicketsPage';
+import { ActivityLogsPage } from './ActivityLogsPage';
 
 interface FluidAdminLayoutProps {
   onLogout: () => void;
@@ -21,6 +22,7 @@ export const FluidAdminLayout: React.FC<FluidAdminLayoutProps> = ({ onLogout, us
   const menuItems = [
     { icon: Activity, label: 'Dashboard', path: '/automation-logs' },
     { icon: List, label: 'All Logs', path: '/automation-logs/list' },
+    { icon: ScrollText, label: 'Activity Logs', path: '/automation-logs/activity' },
     { icon: Ticket, label: 'Tickets', path: '/automation-logs/tickets' },
   ];
 
@@ -105,6 +107,7 @@ export const FluidAdminLayout: React.FC<FluidAdminLayoutProps> = ({ onLogout, us
             <Route path="list" element={<AutomationLogsList />} />
             {/* fluidadmin counts as a ticket manager server-side, so this view can
                 see every ticket and change status. */}
+            <Route path="activity" element={<ActivityLogsPage />} />
             <Route path="tickets" element={<TicketsPage userRole={user?.role} user={user} />} />
             <Route path="*" element={<Navigate to="/automation-logs" replace />} />
           </Routes>

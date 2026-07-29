@@ -18,6 +18,7 @@ import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage, sendSessio
 import { generateAdminOTP, verifyAdminOTP } from './otp';
 import { logWebhookApi } from './lib/webhookApiLogger.js';
 import { createNotification, notifyAllAdmins } from './lib/notifications';
+import { logActivity, categoryForRole, extractSafeMetadata } from './lib/activityLog';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -235,6 +236,56 @@ app.use((req: any, res: any, next: any) => {
   if (req.method === 'OPTIONS') return next();
   if (isPublicApiRoute(req.method, req.path)) return next();
   return authMiddleware(req, res, next);
+});
+
+// ==================== ACTIVITY LOGGING ====================
+// Registered AFTER the auth gate so req.user is populated — that identity is the
+// whole point, and it is why this could not have been built before auth existed.
+// One middleware covers all routes, including ones added later; the previous
+// approach was 7 hand-placed INSERTs across 158 routes.
+
+// Reads are not logged: dashboards poll constantly and the noise would bury the
+// actions that matter. Add specific GETs here if a read ever needs an audit trail.
+const LOGGED_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+// Never log the log endpoints themselves — reading logs would generate logs.
+const LOG_EXEMPT = /^\/api\/(activity-logs|audit-logs|crm-audit-logs|automation-logs|webhook-api-logs|notifications)/;
+
+app.use((req: any, res: any, next: any) => {
+  if (!req.path.startsWith('/api/') || !LOGGED_METHODS.has(req.method)) return next();
+  if (LOG_EXEMPT.test(req.path)) return next();
+
+  const startedAt = Date.now();
+  // 'finish' fires once the response is sent, so status and duration are known
+  // and the user is never waiting on the log write.
+  res.on('finish', () => {
+    try {
+      const user = req.user;
+      const routePattern = req.route?.path
+        ? (req.baseUrl || '') + req.route.path
+        : req.path;
+      logActivity({
+        category: categoryForRole(user?.role),
+        actorId: user?.id != null ? String(user.id) : null,
+        actorName: user?.username ?? null,
+        actorRole: user?.role ?? null,
+        action: `${req.method} ${routePattern}`,
+        method: req.method,
+        route: routePattern,
+        path: req.path,
+        entityType: routePattern.split('/')[2] || null,
+        entityId: req.params?.id != null ? String(req.params.id) : null,
+        statusCode: res.statusCode,
+        durationMs: Date.now() - startedAt,
+        ipAddress: (req.headers['x-forwarded-for'] || '').toString().split(',')[0].trim() || req.ip || null,
+        userAgent: req.headers['user-agent'] || null,
+        metadata: extractSafeMetadata(req),
+      });
+    } catch (err: any) {
+      console.error('[activityLog] middleware error:', err?.message || err);
+    }
+  });
+  next();
 });
 
 // Authorization middleware - check user role
@@ -10999,6 +11050,33 @@ async function runStartupMigrations() {
         uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_rin_ticket ON report_issue_attachments(ticket_id)`);
+
+    // Activity log. Holds request-level actions across every role; automation and
+    // API traffic keep their own purpose-built tables (automation_logs,
+    // webhook_api_logs) and are surfaced alongside this one in the logs UI.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS activity_logs (
+        id          BIGSERIAL PRIMARY KEY,
+        category    TEXT NOT NULL,
+        actor_id    TEXT,
+        actor_name  TEXT,
+        actor_role  TEXT,
+        action      TEXT NOT NULL,
+        method      TEXT NOT NULL,
+        route       TEXT NOT NULL,
+        path        TEXT NOT NULL,
+        entity_type TEXT,
+        entity_id   TEXT,
+        status_code INTEGER,
+        duration_ms INTEGER,
+        ip_address  TEXT,
+        user_agent  TEXT,
+        metadata    JSONB,
+        created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_logs(created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_activity_category ON activity_logs(category, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_activity_actor ON activity_logs(actor_id, created_at DESC)`);
     // Backfill ownership for pre-existing rows by matching the stored display name.
     await pool.query(`
       UPDATE report_issues r SET reported_by_user_id = u.id
@@ -11148,6 +11226,115 @@ app.get('/api/automation-logs/:id', async (req, res) => {
   } catch (error) {
     console.error('Error fetching automation log details:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch automation log details' });
+  }
+});
+
+// ==================== UNIFIED ACTIVITY LOGS (superadmin) ====================
+// One endpoint backs all five tabs. Request-level activity lives in activity_logs;
+// automation and API traffic keep their purpose-built tables and are read from
+// there rather than duplicated, so their existing detail (payloads, retry state)
+// stays intact.
+const LOG_VIEWER_ROLES = ['admin', 'superadmin', 'fluidadmin'];
+
+app.get('/api/activity-logs', requireRole(LOG_VIEWER_ROLES), async (req: any, res) => {
+  try {
+    const source = String(req.query.source || 'activity');
+    const limit = Math.min(parseInt(String(req.query.limit || '100')), 500);
+    const offset = Math.max(parseInt(String(req.query.offset || '0')), 0);
+    const { category, search, from, to } = req.query;
+
+    const where: string[] = [];
+    const params: any[] = [];
+    const add = (clause: string, value: any) => { params.push(value); where.push(clause.replace('?', `$${params.length}`)); };
+
+    if (from) add('created_at >= ?', from);
+    if (to) add('created_at <= ?', to);
+
+    if (source === 'automation') {
+      if (search) {
+        params.push(`%${search}%`);
+        const p = `$${params.length}`;
+        where.push(`(automation_type ILIKE ${p} OR recipient ILIKE ${p} OR booking_id ILIKE ${p})`);
+      }
+      const sql = `SELECT id, booking_id, automation_type AS action, recipient, status,
+                          error_message, created_at
+                   FROM automation_logs
+                   ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+                   ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+      const rows = await pool.query(sql, params);
+      const total = await pool.query(`SELECT COUNT(*)::int n FROM automation_logs ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`, params);
+      return res.json({ source, logs: rows.rows, total: total.rows[0].n });
+    }
+
+    if (source === 'api') {
+      if (search) {
+        params.push(`%${search}%`);
+        const p = `$${params.length}`;
+        where.push(`(name ILIKE ${p} OR endpoint ILIKE ${p})`);
+      }
+      const sql = `SELECT id, log_type, name AS action, endpoint, method, status,
+                          error_message, created_at
+                   FROM webhook_api_logs
+                   ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+                   ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+      const rows = await pool.query(sql, params);
+      const total = await pool.query(`SELECT COUNT(*)::int n FROM webhook_api_logs ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`, params);
+      return res.json({ source, logs: rows.rows, total: total.rows[0].n });
+    }
+
+    // Default: request-level activity, optionally scoped to one category tab.
+    if (category && category !== 'all') add('category = ?', category);
+    if (search) {
+      params.push(`%${search}%`);
+      where.push(`(actor_name ILIKE $${params.length} OR action ILIKE $${params.length} OR path ILIKE $${params.length})`);
+    }
+    const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';
+    const rows = await pool.query(
+      `SELECT id, category, actor_id, actor_name, actor_role, action, method, route, path,
+              entity_type, entity_id, status_code, duration_ms, ip_address, metadata, created_at
+       FROM activity_logs ${clause}
+       ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
+      params
+    );
+    const total = await pool.query(`SELECT COUNT(*)::int n FROM activity_logs ${clause}`, params);
+    res.json({ source: 'activity', logs: rows.rows, total: total.rows[0].n });
+  } catch (error) {
+    console.error('Error fetching activity logs:', error);
+    res.status(500).json({ error: 'Failed to fetch activity logs' });
+  }
+});
+
+// Counts for the tab badges and the header cards.
+app.get('/api/activity-logs/stats', requireRole(LOG_VIEWER_ROLES), async (_req, res) => {
+  try {
+    const byCategory = await pool.query(
+      `SELECT category, COUNT(*)::int n,
+              COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours')::int today
+       FROM activity_logs GROUP BY category`
+    );
+    const failures = await pool.query(
+      `SELECT COUNT(*)::int n FROM activity_logs WHERE status_code >= 400
+        AND created_at > NOW() - INTERVAL '24 hours'`
+    );
+    const automation = await pool.query(
+      `SELECT COUNT(*)::int n, COUNT(*) FILTER (WHERE status = 'failed')::int failed FROM automation_logs`
+    );
+    const api = await pool.query(
+      `SELECT COUNT(*)::int n, COUNT(*) FILTER (WHERE status = 'failed')::int failed FROM webhook_api_logs`
+    );
+
+    const categories: Record<string, { total: number; today: number }> = {};
+    byCategory.rows.forEach((r: any) => { categories[r.category] = { total: r.n, today: r.today }; });
+
+    res.json({
+      categories,
+      failures24h: failures.rows[0].n,
+      automation: { total: automation.rows[0].n, failed: automation.rows[0].failed },
+      api: { total: api.rows[0].n, failed: api.rows[0].failed },
+    });
+  } catch (error) {
+    console.error('Error fetching activity log stats:', error);
+    res.status(500).json({ error: 'Failed to fetch stats' });
   }
 });
 
