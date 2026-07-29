@@ -20,7 +20,7 @@ const COMPONENTS_BY_ROLE: Record<string, string[]> = {
   // Mirrors the admin sidebar: components/Dashboard.tsx
   admin: [
     'Dashboard',
-    'Booking',
+    'Bookings',
     'Therapists',
     'Clients',
     'Payments',
