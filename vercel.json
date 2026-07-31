@@ -1,13 +1,14 @@
 {
   "redirects": [
     {
-      "source": "/book/:slug",
-      "destination": "https://panel.safestories.in/book/:slug",
-      "permanent": true
-    },
-    {
-      "source": "/:match*",
-      "destination": "https://panel.safestories.in/:match*",
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "safestories-dashboard.vercel.app"
+        }
+      ],
+      "destination": "https://panel.safestories.in/$1",
       "permanent": true
     }
   ],
