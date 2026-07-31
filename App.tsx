@@ -16,6 +16,11 @@ import { PublicDirectory } from './components/PublicDirectory';
 import { FluidAdminLayout } from './components/FluidAdminLayout';
 import CRMApp from './src/crm/App';
 import { Monitor } from 'lucide-react';
+
+if (window.location.hostname.includes('safestories-dashboard.vercel.app')) {
+  window.location.replace('https://panel.safestories.in' + window.location.pathname + window.location.search + window.location.hash);
+}
+
 import { useAuth } from './context/AuthContext';
 import { ProtectedRoute } from './context/ProtectedRoute';
 

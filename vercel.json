@@ -1,4 +1,16 @@
 {
+  "redirects": [
+    {
+      "source": "/book/:slug",
+      "destination": "https://panel.safestories.in/book/:slug",
+      "permanent": true
+    },
+    {
+      "source": "/:match*",
+      "destination": "https://panel.safestories.in/:match*",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     { "source": "/api/sos-documentation", "destination": "/api/sos-documentation" },
     { "source": "/api/:path*", "destination": "https://api.srv1169280.hstgr.cloud/api/:path*" },
