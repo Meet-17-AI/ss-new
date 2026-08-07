@@ -14,7 +14,7 @@
   ],
   "rewrites": [
     { "source": "/api/sos-documentation", "destination": "/api/sos-documentation" },
-    { "source": "/api/:path*", "destination": "https://REPLACE-WITH-RENDER-SERVICE.onrender.com/api/:path*" },
+    { "source": "/api/:path*", "destination": "https://ss-new-backend.onrender.com/api/:path*" },
     { "source": "/sos-view/:token", "destination": "/index.html" },
     { "source": "/((?!api).*)", "destination": "/index.html" }
   ],
