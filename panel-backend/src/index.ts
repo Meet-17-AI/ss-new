@@ -923,28 +923,124 @@ const generateUniqueTherapistId = async (name: string): Promise<string> => {
   return id;
 };
 
-app.post('/api/new-therapist-requests', async (req, res) => {
+/**
+ * Sends the onboarding OTP without letting SMTP dictate how long the caller waits.
+ *
+ * A mail send is a side effect of creating the invite, not part of it: the invite
+ * is already durable in Postgres before this runs, and the OTP can be re-sent. So
+ * it gets a hard deadline. Past it we stop waiting and report back — the send may
+ * still complete, which is why the timeout is reported as 'pending', not 'failed'.
+ */
+const EMAIL_DEADLINE_MS = 15_000;
+
+type InviteEmailResult = { ok: boolean; pending?: boolean; error?: string };
+
+const sendInviteEmailBounded = async (
+  email: string, name: string, otp: string, expiresAt: Date
+): Promise<InviteEmailResult> => {
+  let timer: NodeJS.Timeout | undefined;
   try {
-    const { therapistName, whatsappNumber, email, specializations, specializationDetails } = req.body;
+    const result = await Promise.race([
+      sendOTPEmail(email, name, otp, expiresAt).then(() => ({ ok: true })),
+      new Promise<InviteEmailResult>(resolve => {
+        timer = setTimeout(() => resolve({ ok: false, pending: true }), EMAIL_DEADLINE_MS);
+      }),
+    ]);
+    if (result.pending) console.warn(`⏳ OTP email to ${email} exceeded ${EMAIL_DEADLINE_MS}ms; responding without it.`);
+    else console.log(`✅ Therapist onboarding OTP sent to: ${email}`);
+    return result;
+  } catch (err: any) {
+    console.error('❌ Failed to send therapist onboarding email:', err);
+    return { ok: false, error: err?.message || String(err) };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
 
-    // Generate 6-digit OTP
+// Only admins invite therapists. Previously any authenticated session could —
+// including a therapist's own — which let a therapist mint therapist records.
+app.post('/api/new-therapist-requests', requireRole(['admin']), async (req, res) => {
+  const { therapistName, whatsappNumber, email, specializations, specializationDetails } = req.body || {};
+
+  // therapist_name, whatsapp_number, email and specializations are all NOT NULL
+  // in new_therapist_requests. Validating here turns a missing field into a
+  // readable 400 instead of a 500 from Postgres — which is what the admin hit,
+  // and which still burns a request_id off the sequence on the way out.
+  const name = String(therapistName || '').trim();
+  const mail = String(email || '').trim();
+  const phone = String(whatsappNumber || '').trim();
+  const specs = String(specializations || '').trim();
+
+  if (!name || !mail) {
+    return res.status(400).json({ success: false, error: 'Therapist name and email are required' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
+    return res.status(400).json({ success: false, error: 'Enter a valid email address' });
+  }
+  if (!phone) {
+    return res.status(400).json({ success: false, error: 'WhatsApp number is required' });
+  }
+  if (!specs) {
+    return res.status(400).json({ success: false, error: 'Select at least one specialization' });
+  }
+
+  const client = await pool.connect();
+  try {
+    // An already-onboarded therapist has a users row. Re-inviting them would
+    // hand out an OTP that /api/complete-therapist-profile then rejects, so the
+    // admin would watch it succeed and silently go nowhere.
+    //
+    // The link runs through therapists.contact_info, NOT users.email: every
+    // therapist onboarded before this flow existed has a NULL users.email and
+    // is identified only by contact_info. Checking users.email alone matches
+    // none of them. The second arm covers accounts created by
+    // /api/complete-therapist-profile, which does set username/email.
+    const onboarded = await client.query(
+      `SELECT 1
+         FROM users u
+         LEFT JOIN therapists t ON t.therapist_id = u.therapist_id
+        WHERE u.therapist_id IS NOT NULL
+          AND (LOWER(t.contact_info) = LOWER($1)
+               OR LOWER(u.email) = LOWER($1)
+               OR LOWER(u.username) = LOWER($1))
+        LIMIT 1`,
+      [mail]
+    );
+    if (onboarded.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: 'A therapist with this email has already completed onboarding.',
+      });
+    }
+
     const otpToken = Math.floor(100000 + Math.random() * 900000).toString();
-
-    // Set expiry to 24 hours from now
     const otpExpiresAt = new Date();
     otpExpiresAt.setHours(otpExpiresAt.getHours() + 24);
 
-    const result = await pool.query(
+    // The request row and the therapists row are one unit of work. They used to
+    // be two independent statements with the second in its own try/catch, so a
+    // failure there left an invite whose therapist did not exist anywhere.
+    await client.query('BEGIN');
+
+    // Supersede any earlier pending invite for this address, so exactly one OTP
+    // is live per therapist and the newest email is the one that works.
+    await client.query(
+      `UPDATE new_therapist_requests SET status = 'superseded'
+        WHERE LOWER(email) = LOWER($1) AND status = 'pending'`,
+      [mail]
+    );
+
+    const result = await client.query(
       `INSERT INTO new_therapist_requests (therapist_name, whatsapp_number, email, specializations, specialization_details, otp_token, otp_expires_at, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
        RETURNING *`,
-      [therapistName, whatsappNumber, email, specializations, JSON.stringify(specializationDetails), otpToken, otpExpiresAt]
+      [name, phone, mail, specs, JSON.stringify(specializationDetails ?? []), otpToken, otpExpiresAt]
     );
 
     // Create the therapist record NOW, so the invitee is part of the system
-    // immediately: they appear on the Therapists tab and get their own group on
-    // the Therapies tab with an "Add New Therapy" card, before they have
-    // onboarded.
+    // immediately: they appear on the Therapists tab, on the Therapies tab with
+    // an "Add New Therapy" card, and in Organization Settings → Integrations
+    // ready for a calendar connection — all before they have onboarded.
     //
     // Only the therapists row is written here. The `users` row — the actual
     // login — is created by /api/complete-therapist-profile once the therapist
@@ -954,47 +1050,111 @@ app.post('/api/new-therapist-requests', async (req, res) => {
     // status='invited' distinguishes this from a working account. Without it
     // the card would read Active, because /api/therapists-admin derives
     // login_enabled as COALESCE(u.is_active, true) and there is no users row yet.
-    try {
-      const existing = await pool.query(
-        `SELECT therapist_id FROM therapists WHERE LOWER(contact_info) = LOWER($1) LIMIT 1`,
-        [email]
+    const existing = await client.query(
+      `SELECT therapist_id FROM therapists WHERE LOWER(contact_info) = LOWER($1) LIMIT 1`,
+      [mail]
+    );
+
+    let therapistId: string;
+    if (existing.rows.length === 0) {
+      therapistId = await generateUniqueTherapistId(name);
+      await client.query(
+        `INSERT INTO therapists (
+           therapist_id, name, contact_info, phone_number,
+           specialization, specialization_details, status, is_active
+         ) VALUES ($1, $2, $3, $4, $5, $6, 'invited', true)`,
+        [
+          therapistId, name, mail, phone,
+          specs || null,
+          specializationDetails ? JSON.stringify(specializationDetails) : null,
+        ]
       );
-      if (existing.rows.length === 0) {
-        const therapistId = await generateUniqueTherapistId(therapistName);
-        await pool.query(
-          `INSERT INTO therapists (
-             therapist_id, name, contact_info, phone_number,
-             specialization, specialization_details, status, is_active
-           ) VALUES ($1, $2, $3, $4, $5, $6, 'invited', true)`,
-          [
-            therapistId, therapistName, email, whatsappNumber,
-            specializations || null,
-            specializationDetails ? JSON.stringify(specializationDetails) : null,
-          ]
-        );
-        console.log(`✅ Therapist record created for invite: ${therapistName} (${therapistId})`);
-      } else {
-        console.log(`ℹ️  Therapist already exists for ${email}; re-inviting without creating a duplicate.`);
-      }
-    } catch (therapistErr) {
-      // The invite itself is already saved and the OTP email still goes out.
-      // Failing here would strand the request row, so log and continue.
-      console.error('⚠️ Could not create therapist record for invite (non-fatal):', therapistErr);
+      console.log(`✅ Therapist record created for invite: ${name} (${therapistId})`);
+    } else {
+      // Re-invite: refresh the details the admin just typed rather than leaving
+      // the record frozen at whatever the first invite said.
+      therapistId = existing.rows[0].therapist_id;
+      await client.query(
+        `UPDATE therapists SET
+           name = $2, phone_number = $3,
+           specialization = COALESCE($4, specialization),
+           specialization_details = COALESCE($5, specialization_details)
+         WHERE therapist_id = $1`,
+        [
+          therapistId, name, phone,
+          specs || null,
+          specializationDetails ? JSON.stringify(specializationDetails) : null,
+        ]
+      );
+      console.log(`ℹ️  Therapist already exists for ${mail}; re-invited as ${therapistId}.`);
     }
 
-    // Send OTP email to therapist
-    try {
-      await sendOTPEmail(email, therapistName, otpToken, otpExpiresAt);
-      console.log(`✅ Therapist onboarding OTP sent to: ${email}`);
-    } catch (emailError) {
-      console.error('❌ Failed to send therapist onboarding email:', emailError);
-      // Continue anyway - OTP is saved in database
-    }
+    await client.query('COMMIT');
 
-    res.json({ success: true, data: result.rows[0] });
-  } catch (error) {
+    // Committed above, so the invite survives whatever the mail server does.
+    const emailResult = await sendInviteEmailBounded(mail, name, otpToken, otpExpiresAt);
+
+    res.json({
+      success: true,
+      data: result.rows[0],
+      therapistId,
+      requestId: result.rows[0].request_id,
+      emailSent: emailResult.ok,
+      emailPending: Boolean(emailResult.pending),
+      emailError: emailResult.error || null,
+    });
+  } catch (error: any) {
+    try { await client.query('ROLLBACK'); } catch { /* connection already broken */ }
     console.error('Error saving new therapist request:', error);
     res.status(500).json({ success: false, error: 'Failed to save new therapist request' });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * Re-send the onboarding OTP for an existing invite.
+ *
+ * Without this, an invite whose email failed to send is a dead end: the therapist
+ * row exists so re-inviting is a no-op, but nobody holds the OTP.
+ */
+app.post('/api/new-therapist-requests/:requestId/resend', requireRole(['admin']), async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const existing = await pool.query(
+      `SELECT * FROM new_therapist_requests WHERE request_id = $1`,
+      [requestId]
+    );
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Invite not found' });
+    }
+
+    // Mint a fresh OTP and window rather than resending a code that may already
+    // have expired — a resend is only useful if the code in it still works.
+    const otpToken = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpiresAt = new Date();
+    otpExpiresAt.setHours(otpExpiresAt.getHours() + 24);
+
+    const updated = await pool.query(
+      `UPDATE new_therapist_requests
+          SET otp_token = $2, otp_expires_at = $3, status = 'pending', updated_at = NOW()
+        WHERE request_id = $1
+        RETURNING *`,
+      [requestId, otpToken, otpExpiresAt]
+    );
+
+    const row = updated.rows[0];
+    const emailResult = await sendInviteEmailBounded(row.email, row.therapist_name, otpToken, otpExpiresAt);
+
+    res.json({
+      success: true,
+      emailSent: emailResult.ok,
+      emailPending: Boolean(emailResult.pending),
+      emailError: emailResult.error || null,
+    });
+  } catch (error) {
+    console.error('Error resending therapist invite:', error);
+    res.status(500).json({ success: false, error: 'Failed to resend invite' });
   }
 });
 
@@ -1104,6 +1264,11 @@ app.post('/api/complete-therapist-profile', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Profile already submitted for this email' });
     }
 
+    // Hash once, up front, and store only the hash. `therapist_details.password`
+    // is NOT NULL and never read back by anything, so keeping the therapist's
+    // chosen password here in the clear bought nothing and risked everything.
+    const hashedPassword = await hashPassword(password);
+
     // Serialize specialization details as JSON
     const specializationDetailsJson = specializationDetails ? JSON.stringify(specializationDetails) : '[]';
     console.log('📦 Serialized specialization details:', specializationDetailsJson);
@@ -1127,7 +1292,7 @@ app.post('/api/complete-therapist-profile', async (req, res) => {
       [
         requestId, name, email, phone, specializations,
         specializationDetailsJson, qualification || null,
-        qualificationPdfUrl || null, profilePictureUrl || null, password
+        qualificationPdfUrl || null, profilePictureUrl || null, hashedPassword
       ]
     );
 
@@ -1219,8 +1384,8 @@ app.post('/api/complete-therapist-profile', async (req, res) => {
         [email]
       );
 
-      const hashedPassword = await hashPassword(password);
-
+      // Reuses the hash computed above — bcrypt is deliberately slow, and the
+      // users row and therapist_details row describe the same password.
       if (existingUser.rows.length === 0) {
         // Create new user account with therapist_id
         await pool.query(

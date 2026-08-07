@@ -18,6 +18,10 @@ export const NewTherapist: React.FC<NewTherapistProps> = ({ onBack }) => {
   }>({});
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // The invite is saved before the email is attempted, so a send failure is not
+  // a failed submission — it needs its own, softer message.
+  const [emailWarning, setEmailWarning] = useState<string | null>(null);
 
   const countryCodes = [
     { code: '+91', country: 'India' },
@@ -72,6 +76,8 @@ export const NewTherapist: React.FC<NewTherapistProps> = ({ onBack }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setError(null);
+    setEmailWarning(null);
 
     try {
       const response = await fetch('/api/new-therapist-requests', {
@@ -90,14 +96,29 @@ export const NewTherapist: React.FC<NewTherapistProps> = ({ onBack }) => {
         })
       });
 
-      if (response.ok) {
-        setShowSuccessModal(true);
-      } else {
-        alert('Failed to submit therapist details');
+      // A gateway timeout or a crashed backend returns HTML, not JSON.
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(
+          data?.error ||
+          (response.status === 502 || response.status === 504
+            ? 'The server took too long to respond. The therapist may still have been created — check the Therapists tab before retrying.'
+            : `Could not add the therapist (HTTP ${response.status}).`)
+        );
       }
-    } catch (error) {
-      console.error('Error:', error);
-      alert('An error occurred');
+
+      if (data && data.emailSent === false) {
+        setEmailWarning(
+          data.emailPending
+            ? 'The therapist was added, but the invite email is taking longer than usual to send. It may still arrive.'
+            : `The therapist was added, but the invite email could not be sent${data.emailError ? ` (${data.emailError})` : ''}. Use Resend invite from the Therapists tab.`
+        );
+      }
+      setShowSuccessModal(true);
+    } catch (err: any) {
+      console.error('Error adding therapist:', err);
+      setError(err?.message || 'An unexpected error occurred. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -238,6 +259,12 @@ export const NewTherapist: React.FC<NewTherapistProps> = ({ onBack }) => {
               )}
             </div>
 
+            {error && (
+              <div className="px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+
             {/* Proceed Button */}
             <button
               type="submit"
@@ -258,9 +285,15 @@ export const NewTherapist: React.FC<NewTherapistProps> = ({ onBack }) => {
               <Lottie animationData={sessionBookedAnimation} loop={true} />
             </div>
             <h3 className="text-xl font-bold mb-4">New Therapist Details Captured</h3>
-            <p className="text-gray-600 mb-6">
-              The link has been sent to the therapist for profile completion, once it completed our tech team will further start the new therapist onboarding.
-            </p>
+            {emailWarning ? (
+              <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mb-6 text-sm text-left">
+                {emailWarning}
+              </p>
+            ) : (
+              <p className="text-gray-600 mb-6">
+                The link has been sent to the therapist for profile completion, once it completed our tech team will further start the new therapist onboarding.
+              </p>
+            )}
             <button
               onClick={() => {
                 setShowSuccessModal(false);

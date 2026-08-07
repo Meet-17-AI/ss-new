@@ -12,7 +12,25 @@ const useGmailSmtp = process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD;
 let gmailTransporter: any = null;
 if (useGmailSmtp) {
   gmailTransporter = nodemailer.createTransport({
-    service: 'gmail',
+    // Spelled out rather than `service: 'gmail'`. The preset supplies only
+    // host/port/secure and gives us nowhere to set the two options below.
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
+
+    // Force IPv4. smtp.gmail.com is dual-stack, and on a host with an AAAA
+    // route advertised but no working IPv6 path the connection dies with
+    // `ENETUNREACH ...:465` — but only after the connect timeout expires, so
+    // the caller stalls for minutes. Observed in production: an admin's
+    // "add therapist" request hung ~2 min and the gateway returned 502.
+    family: 4,
+
+    // Bound every phase. Nodemailer defaults connectionTimeout to 120s, which
+    // is far longer than any HTTP request should wait on a side effect.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
+
     auth: {
       user: process.env.GMAIL_USER,
       pass: process.env.GMAIL_APP_PASSWORD,
