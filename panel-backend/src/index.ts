@@ -346,9 +346,21 @@ import { google } from 'googleapis';
 import * as dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
 
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '168173993649-2v0jpmi1c4mdkjg70agbret556r7uarm.apps.googleusercontent.com';
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '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';
+// No credential fallbacks. These previously inlined the real client id and
+// secret after `process.env.X ||`, which put a live Google OAuth credential in
+// the source tree and blocked a push to a public repo. The env vars are set in
+// every deployment, so the fallbacks were dead code that only served to leak.
+// Same rule as lib/db.ts: missing config should be loud, not silently wrong.
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'https://panel.safestories.in/api/auth/google/callback';
+
+if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+  console.warn(
+    '[Google OAuth] GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are not set. ' +
+    'Calendar connection and event creation will fail until they are configured.'
+  );
+}
 
 const getOAuth2Client = () => {
   return new google.auth.OAuth2(

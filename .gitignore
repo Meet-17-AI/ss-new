@@ -46,5 +46,12 @@ backups/
 panel-backend/check_*.ts
 panel-backend/list_*.ts
 panel-backend/diagnose.ts
-panel-backend/test_*.ts
+panel-backend/test_*
 panel-backend/test.js
+
+# Contains a real production VPS SSH private key plus the full secret set
+# (PGPASSWORD, JWT_SECRET, live Razorpay key + secret, MinIO keys). Never commit.
+add-github-secrets.sh
+# Hardcoded admin account passwords.
+panel-backend/test-login.js
+scripts/updatePasswordsCapitalized.ts
