@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   IndianRupee, RefreshCw, Calendar, Clock, Users, X, Search,
-  AlertTriangle, Ban, Plus, Tag, ChevronRight, ChevronLeft, Check,
+  AlertTriangle, Ban, Pencil, Tag, ChevronRight, ChevronLeft, Check,
 } from 'lucide-react';
 
 /* ------------------------------------------------------------------ *
@@ -806,7 +806,7 @@ export const PricingSettings: React.FC = () => {
             onClick={() => setAddingClientPrice(true)}
             className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 font-medium text-sm rounded-lg flex items-center gap-2 whitespace-nowrap"
           >
-            <Plus size={17} /> Client Pricing
+            <Pencil size={17} /> Specific Client Price
           </button>
         </div>
       </div>

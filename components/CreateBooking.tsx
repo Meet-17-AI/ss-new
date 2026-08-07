@@ -57,6 +57,21 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
   const [hasRestrictions, setHasRestrictions] = useState(false);
   const [paymentMode, setPaymentMode] = useState<'link' | 'qr' | 'cash' | ''>('');
   const [customAmount, setCustomAmount] = useState<string>('');
+  // Server-resolved price for the selected client + therapy: which rule won,
+  // and what a new client would pay for comparison.
+  const [priceInfo, setPriceInfo] = useState<{
+    amount: number;
+    list_amount: number;
+    price_source: string;
+    is_special_price: boolean;
+  } | null>(null);
+  // Set once the admin edits the amount, so a re-resolve does not overwrite it.
+  const amountTouchedRef = useRef(false);
+  // Mirror of priceInfo for use inside async callbacks. fetchAvailableSlots
+  // would otherwise close over a stale value and treat a resolved price as
+  // absent.
+  const priceInfoRef = useRef<typeof priceInfo>(null);
+  useEffect(() => { priceInfoRef.current = priceInfo; }, [priceInfo]);
   const [currency, setCurrency] = useState<string>('INR');
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
   const [clientType, setClientType] = useState<string>('Indian');
@@ -91,21 +106,27 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
 
   // Resolve the session charge for a therapy+therapist pair straight from the services
   // list, so the Amount field can prefill immediately — before a date/slot is chosen.
-  const resolveCharge = (therapy: string, therapist: string): number | null => {
+  /**
+   * Which therapy is being booked, as a service id.
+   *
+   * Replaces the old resolveCharge(), which read therapy_services.charges
+   * directly and returned a number. That was a second, parallel pricing path:
+   * it only ever saw the list price, so an admin booking for a grandfathered
+   * client — or one on an admin-set rate — was quoted the wrong amount, and
+   * that amount is what /api/admin/generate-payment-link bills. This resolves
+   * the SERVICE only; the price comes from the server.
+   */
+  const resolveServiceId = (therapy: string, therapist: string): number | null => {
     if (!therapy || !therapist || services.length === 0) return null;
     const firstWord = therapist.trim().toLowerCase().split(/\s+/)[0];
     const therapyLc = cleanTherapyName(therapy).toLowerCase();
     const active = services.filter((s: any) => s.is_active !== false);
-    // Most specific: therapist first name + therapy title substring.
     let match = active.find((s: any) =>
       (s.therapist_name || '').toLowerCase().includes(firstWord) &&
       (s.title || '').toLowerCase().includes(therapyLc)
     );
-    // Fallback: therapist first name only.
     if (!match) match = active.find((s: any) => (s.therapist_name || '').toLowerCase().includes(firstWord));
-    if (!match) return null;
-    const n = parseInt(String(match.charges || '').replace(/[^0-9]/g, ''), 10);
-    return isNaN(n) || n <= 0 ? null : n;
+    return match?.id ?? null;
   };
 
   // Suppresses the client dropdown from re-opening immediately after a selection,
@@ -483,16 +504,51 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
 
   // Prefill the Amount immediately when a therapy + therapist are chosen (or a client is
   // selected, which auto-fills both) — without waiting for a date/slot fetch.
+  const selectedServiceId = resolveServiceId(selectedTherapy, selectedTherapist);
+
+  // Reset the "admin typed their own figure" guard whenever the inputs that
+  // determine the price change. Picking a different therapy or a different
+  // client should re-quote; simply re-rendering should not discard an edit.
   useEffect(() => {
-    if (isFreeConsultation) return;
-    if (selectedTherapy && selectedTherapist) {
-      const charge = resolveCharge(selectedTherapy, selectedTherapist);
-      if (charge) {
-        setSessionCharges(charge);
-        setCustomAmount(String(charge));
-      }
+    amountTouchedRef.current = false;
+  }, [selectedServiceId, clientEmail, clientWhatsApp]);
+
+  // Auto-fetch the price FOR THIS CLIENT.
+  //
+  // Runs on the client's email/phone as well as the therapy, so an existing
+  // client's grandfathered rate and any admin-set per-client price reach this
+  // form — the same figures the public booking page and Razorpay use. The
+  // amount stays editable: a concession or package rate is a legitimate reason
+  // for an admin to depart from it, and /api/admin/generate-payment-link
+  // treats their figure as authoritative.
+  useEffect(() => {
+    if (isFreeConsultation || !selectedServiceId) {
+      setPriceInfo(null);
+      return;
     }
-  }, [selectedTherapy, selectedTherapist, services, isFreeConsultation]);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/public/resolve-price', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            serviceId: selectedServiceId,
+            email: clientEmail,
+            phone: clientWhatsApp ? `${countryCode}${clientWhatsApp}` : '',
+          }),
+        });
+        if (!res.ok) return;
+        const p = await res.json();
+        if (!p?.success) return;
+        setPriceInfo(p);
+        setSessionCharges(p.amount);
+        if (!amountTouchedRef.current) setCustomAmount(String(p.amount));
+      } catch (err) {
+        console.error('Error resolving price:', err);
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [selectedServiceId, clientEmail, clientWhatsApp, countryCode, isFreeConsultation]);
 
   const fetchAvailableSlots = async () => {
     setIsLoadingSlots(true);
@@ -523,9 +579,15 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
           // Always read charges from the response, even if no slots are available for this date
           const charges = data[0]['session charges'] || 0;
           const modeString = data[0]['mode'] || '';
-          
-          setSessionCharges(charges);
-          setCustomAmount(charges > 0 ? charges.toString() : '');
+
+          // Fallback only. This quote carries no client identity, so it is the
+          // LIST price — applying it unconditionally would overwrite a
+          // grandfathered or custom rate that the resolve effect had already
+          // filled in, and would discard an amount the admin typed.
+          if (charges > 0 && !priceInfoRef.current && !amountTouchedRef.current) {
+            setSessionCharges(charges);
+            setCustomAmount(charges.toString());
+          }
           
           const modes: string[] = [];
           try {
@@ -1130,10 +1192,40 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
                       <input
                         type="number"
                         value={customAmount}
-                        onChange={(e) => setCustomAmount(e.target.value)}
+                        onChange={(e) => {
+                          // Marks the figure as the admin's own, so a later
+                          // re-resolve leaves it alone.
+                          amountTouchedRef.current = true;
+                          setCustomAmount(e.target.value);
+                        }}
                         placeholder={sessionCharges > 0 ? `e.g. ${sessionCharges}` : "Enter amount"}
                         className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white"
                       />
+                      {/* Say where the auto-filled figure came from, so an admin
+                          can tell a protected rate from a plain list price
+                          before overriding it. */}
+                      {priceInfo && (
+                        <p className="text-xs mt-1.5">
+                          {priceInfo.price_source === 'lock' ? (
+                            <span className="text-teal-700 font-medium">
+                              Existing client rate ₹{priceInfo.amount.toLocaleString('en-IN')}
+                              {priceInfo.is_special_price && (
+                                <span className="text-gray-400 font-normal"> · list ₹{priceInfo.list_amount.toLocaleString('en-IN')}</span>
+                              )}
+                            </span>
+                          ) : priceInfo.price_source === 'override' ? (
+                            <span className="text-purple-700 font-medium">
+                              Custom price set for this client ₹{priceInfo.amount.toLocaleString('en-IN')}
+                              <span className="text-gray-400 font-normal"> · list ₹{priceInfo.list_amount.toLocaleString('en-IN')}</span>
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">
+                              Current price ₹{priceInfo.amount.toLocaleString('en-IN')}
+                              {!clientEmail && ' · enter the client to check for a protected or custom rate'}
+                            </span>
+                          )}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>

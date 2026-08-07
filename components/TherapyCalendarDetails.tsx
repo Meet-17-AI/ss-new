@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Loader, Save, Plus, Trash2, GripVertical, Edit, Link, Copy, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Loader, Save, Plus, Trash2, GripVertical, Edit, Link, Copy, ExternalLink, Lock } from 'lucide-react';
 import { Toast } from './Toast';
+import { displayTherapistName } from '../lib/platformTherapist';
 // @ts-ignore
 import ReactQuill from 'react-quill-new';
 import 'react-quill-new/dist/quill.snow.css';
@@ -142,9 +143,10 @@ export function TherapyCalendarDetails() {
         setTherapists(therapistList);
       }
 
-      // Prefill on create. Deliberately not routed through handleTherapistChange,
-      // which blanks title/schedule_id — correct when a user switches therapists,
-      // wrong for the initial fill.
+      // Prefill on create, from the ?therapistId the "+ Add New Therapy" card
+      // passes. This is now the ONLY way a therapist gets set on a new therapy —
+      // the dropdown is gone and the field is read-only — so without this
+      // parameter the form correctly refuses to proceed.
       if (!isEdit && prefillTherapistId) {
         const preselected = therapistList.find(t => t.therapist_id === prefillTherapistId);
         if (preselected) {
@@ -208,23 +210,11 @@ export function TherapyCalendarDetails() {
     }
   };
 
-  const handleTherapistChange = (therapistId: string) => {
-    const selected = therapists.find(t => t.therapist_id === therapistId);
-    setFormData({
-      ...formData,
-      therapist_id: therapistId,
-      therapist_name: selected?.name || '',
-      title: '', // reset title since specializations change
-      schedule_id: null
-    });
-    if (therapistId) {
-      fetchSchedules(therapistId);
-      checkGoogleConnection(therapistId);
-    } else {
-      setSchedules([]);
-      setGoogleConnected(null);
-    }
-  };
+  // handleTherapistChange was removed with the therapist dropdown. It reset
+  // title and schedule_id on every change, which is correct when picking a
+  // therapist for a brand-new therapy but destructive on an edit. The therapist
+  // is now fixed for the life of the form, so nothing needs to react to it
+  // changing.
 
   // Status applies immediately via the dedicated activate/deactivate endpoints,
   // independently of the form's Save — so it is gated behind a confirmation.
@@ -367,8 +357,24 @@ export function TherapyCalendarDetails() {
           <h1 className="text-2xl font-bold text-teal-800">
             {isEdit ? 'Edit Therapy' : 'Add New Therapy'}
           </h1>
+          {/* Name the therapist the form is actually about. It is already known
+              in both cases — prefilled from the per-therapist "+" card on the
+              Therapies tab when adding, and loaded with the record when editing
+              — so the old generic wording just withheld it.
+              Falls back to the generic line while the record is still loading,
+              so the subheading never flashes an empty name. */}
           <p className="text-gray-500 text-sm mt-1">
-            {isEdit ? 'Modify therapy details and settings' : 'Set up a new therapy for a therapist'}
+            {formData.therapist_name ? (
+              <>
+                {isEdit ? 'Editing' : 'New therapy for'}{' '}
+                <span className="font-semibold text-gray-700">
+                  {displayTherapistName(formData.therapist_name, formData.therapist_id)}
+                </span>
+                {isEdit && formData.title ? <> · {formData.title}</> : null}
+              </>
+            ) : (
+              isEdit ? 'Modify therapy details and settings' : 'Set up a new therapy for a therapist'
+            )}
           </p>
         </div>
         <div className="ml-auto flex items-center gap-4">
@@ -462,17 +468,40 @@ export function TherapyCalendarDetails() {
             <div className="space-y-6 max-w-4xl">
               <div className="grid grid-cols-2 gap-6">
                 <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Therapist *</label>
-                  <select
-                    value={formData.therapist_id}
-                    onChange={(e) => handleTherapistChange(e.target.value)}
-                    className="w-full border rounded-lg p-3 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-teal-500 outline-none transition-all"
-                  >
-                    <option value="">Select Therapist</option>
-                    {therapists.map(t => (
-                      <option key={t.therapist_id} value={t.therapist_id}>{t.name}</option>
-                    ))}
-                  </select>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Therapist</label>
+                  {/* Fixed, not selectable.
+                      The therapist is decided before this form opens — by the
+                      "+ Add New Therapy" card on the Therapies tab when adding,
+                      and by the record itself when editing. Re-selecting here
+                      used to reset the title and schedule (handleTherapistChange
+                      blanked both), so on an edit it could silently move a live
+                      therapy — and its booking link — to a different therapist. */}
+                  {formData.therapist_id ? (
+                    <div
+                      className="w-full border rounded-lg p-3 bg-gray-100 text-gray-700 flex items-center justify-between gap-3 cursor-not-allowed"
+                      title="The therapist cannot be changed here"
+                    >
+                      <span className="font-medium truncate">
+                        {displayTherapistName(formData.therapist_name, formData.therapist_id)}
+                      </span>
+                      <Lock size={15} className="text-gray-400 shrink-0" />
+                    </div>
+                  ) : (
+                    // No therapist could be resolved. With the picker gone there
+                    // is no way to recover in place, so say what to do instead of
+                    // presenting a form that cannot be saved.
+                    <div className="w-full border border-amber-200 rounded-lg p-3 bg-amber-50 text-sm text-amber-800">
+                      No therapist selected. Start from the{' '}
+                      <button
+                        type="button"
+                        onClick={() => navigate('/admin/userSettings/therapies')}
+                        className="font-semibold underline hover:no-underline"
+                      >
+                        Therapies tab
+                      </button>{' '}
+                      and use the “Add New Therapy” card under the therapist you want.
+                    </div>
+                  )}
                   {!isEdit && googleConnected === false && (
                     <p className="text-sm text-red-600 mt-2">
                       ⚠ This therapist's Google Calendar is not connected. Calendar creation is disabled until it is connected (Settings → Calendars).

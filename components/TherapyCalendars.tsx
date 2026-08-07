@@ -39,6 +39,9 @@ export function TherapyCalendars() {
   const [pendingOtpId, setPendingOtpId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const [selectedTherapy, setSelectedTherapy] = useState<TherapyService | null>(null);
+  // Roster from /api/therapists-admin — the only source for therapists who have
+  // no therapy_services rows yet.
+  const [therapists, setTherapists] = useState<any[]>([]);
   const navigate = useNavigate();
 
   const handleCopy = (e: React.MouseEvent, link: string, id: number) => {
@@ -56,10 +59,18 @@ export function TherapyCalendars() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const calRes = await fetch('/api/services');
+      // The roster is fetched alongside the calendars so therapists who have no
+      // therapies yet still get a group with an "Add New Therapy" card.
+      const [calRes, therRes] = await Promise.all([
+        fetch('/api/services'),
+        fetch('/api/therapists-admin'),
+      ]);
       if (!calRes.ok) throw new Error('Failed to fetch data');
       const calData = await calRes.json();
       setCalendars(calData);
+      // A failed roster fetch is not fatal — the page still renders every
+      // therapist who already has calendars.
+      setTherapists(therRes.ok ? await therRes.json() : []);
     } catch (err: any) {
       console.error('Error fetching data:', err);
       setError('Failed to load therapy calendars');
@@ -86,14 +97,30 @@ export function TherapyCalendars() {
     item.title?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const groupedCalendars = Object.entries(
-    filteredCalendars.reduce((acc, calendar) => {
-      const therapistName = calendar.therapist_name || 'Unassigned';
-      if (!acc[therapistName]) acc[therapistName] = [];
-      acc[therapistName].push(calendar);
-      return acc;
-    }, {} as Record<string, TherapyService[]>)
-  )
+  // Therapists who have no therapies yet.
+  //
+  // /api/services is driven by therapy_services, so it returns nothing at all
+  // for a therapist without calendars — they simply would not exist on this
+  // page, and there would be no "+" card to give them their first therapy.
+  // A newly invited therapist is exactly that case, so the roster is merged in
+  // separately and seeded as an empty group.
+  const groupsFromCalendars = filteredCalendars.reduce((acc, calendar) => {
+    const therapistName = calendar.therapist_name || 'Unassigned';
+    if (!acc[therapistName]) acc[therapistName] = [];
+    acc[therapistName].push(calendar);
+    return acc;
+  }, {} as Record<string, TherapyService[]>);
+
+  const search = searchTerm.toLowerCase();
+  therapists
+    .filter(t => t.is_active !== false && t.login_enabled !== false)
+    .filter(t => !search || (t.name || '').toLowerCase().includes(search))
+    .forEach(t => {
+      const name = t.name || 'Unassigned';
+      if (!groupsFromCalendars[name]) groupsFromCalendars[name] = [];
+    });
+
+  const groupedCalendars = Object.entries(groupsFromCalendars)
     .map(([therapistName, therapistCalendars]) => [
       therapistName,
       [...therapistCalendars].sort((a, b) => {
@@ -196,15 +223,11 @@ export function TherapyCalendars() {
             />
             <Search size={18} className="absolute left-3 top-2.5 text-gray-400" />
           </div>
-          {user?.username !== 'Test' && (
-            <button
-              onClick={() => navigate('/admin/userSettings/therapies/new')}
-              className="flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors"
-            >
-              <Plus size={18} />
-              Add New Therapy
-            </button>
-          )}
+          {/* The top-level "Add New Therapy" button was removed. It opened the
+              form with no therapist selected, while every therapist group below
+              has its own "+" card that prefills them. Having one entry point
+              that always carries a therapistId is what lets the form name the
+              therapist in its heading. */}
         </div>
       </div>
 
@@ -221,20 +244,35 @@ export function TherapyCalendars() {
         </div>
       ) : (
         <div className="flex-1 flex flex-col pr-2 pb-10">
-          {filteredCalendars.length > 0 ? (
+          {/* Gated on the GROUPS, not the calendars. A therapist with no
+              therapies yet forms a valid group with only an add card, and
+              gating on filteredCalendars would hide exactly those. */}
+          {groupedCalendars.length > 0 ? (
             <div className="space-y-8">
               {groupedCalendars.map(([therapistName, therapistCalendars]) => {
                 const first = therapistCalendars[0];
                 const therapistInactive =
                   therapistCalendars.length > 0 && first.therapist_is_active === false;
-                const therapistId = first?.therapist_id || '';
+                // An empty group has no calendar to read the id from, so fall
+                // back to the roster — without this the "+" card would be
+                // withheld from exactly the therapists who most need it.
+                const therapistId =
+                  first?.therapist_id ||
+                  therapists.find(t => (t.name || '') === therapistName)?.therapist_id ||
+                  '';
                 const isPlatform = isPlatformTherapist(therapistName, therapistId);
                 const shownName = displayTherapistName(therapistName, therapistId);
                 // "Unassigned" has no therapist to prefill, and a deactivated
                 // therapist would only get dead calendars, so the add card is
                 // withheld in both cases.
+                // The platform "Free Consultation" host is excluded too. It is
+                // not real staff and does not appear in /api/therapists, which
+                // is the list the therapy form resolves its prefilled
+                // therapistId against — so its add card led to a form that
+                // could not identify a therapist and could not be saved.
                 const canAddTherapy =
-                  user?.username !== 'Test' && !!therapistId && therapistName !== 'Unassigned';
+                  user?.username !== 'Test' && !!therapistId &&
+                  therapistName !== 'Unassigned' && !isPlatform;
                 return (
                 <div key={therapistName} className="bg-transparent">
                   {/* Therapist Header */}

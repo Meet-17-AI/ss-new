@@ -255,7 +255,6 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
       } catch (e) { console.error('Failed to parse services:', e); }
 
       const therapistsWithStatus = therapistsData
-        .filter((t: any) => t.name?.toLowerCase().trim() !== 'muskan 2')
         .map((t: any) => {
         const firstName = t.name ? t.name.split(' ')[0] : '';
         

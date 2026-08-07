@@ -892,6 +892,25 @@ app.post('/api/change-password', async (req, res) => {
 });
 
 // Save new therapist request with OTP
+/**
+ * Shared therapist_id generator: first name + 4 digits, retried until unique.
+ * Both the invite (below) and the therapist's own profile completion mint ids,
+ * and they must agree on the format.
+ */
+const generateUniqueTherapistId = async (name: string): Promise<string> => {
+  const build = () => {
+    const firstName = (name || 'therapist').split(' ')[0].toLowerCase().replace(/[^a-z]/g, '') || 'therapist';
+    return `${firstName}${Math.floor(1000 + Math.random() * 9000)}`;
+  };
+  let id = build();
+  for (let attempts = 0; attempts < 10; attempts++) {
+    const existing = await pool.query('SELECT therapist_id FROM therapists WHERE therapist_id = $1', [id]);
+    if (existing.rows.length === 0) return id;
+    id = build();
+  }
+  return id;
+};
+
 app.post('/api/new-therapist-requests', async (req, res) => {
   try {
     const { therapistName, whatsappNumber, email, specializations, specializationDetails } = req.body;
@@ -909,6 +928,47 @@ app.post('/api/new-therapist-requests', async (req, res) => {
        RETURNING *`,
       [therapistName, whatsappNumber, email, specializations, JSON.stringify(specializationDetails), otpToken, otpExpiresAt]
     );
+
+    // Create the therapist record NOW, so the invitee is part of the system
+    // immediately: they appear on the Therapists tab and get their own group on
+    // the Therapies tab with an "Add New Therapy" card, before they have
+    // onboarded.
+    //
+    // Only the therapists row is written here. The `users` row — the actual
+    // login — is created by /api/complete-therapist-profile once the therapist
+    // verifies the OTP and chooses their OWN password. An admin never sets
+    // credentials for someone else.
+    //
+    // status='invited' distinguishes this from a working account. Without it
+    // the card would read Active, because /api/therapists-admin derives
+    // login_enabled as COALESCE(u.is_active, true) and there is no users row yet.
+    try {
+      const existing = await pool.query(
+        `SELECT therapist_id FROM therapists WHERE LOWER(contact_info) = LOWER($1) LIMIT 1`,
+        [email]
+      );
+      if (existing.rows.length === 0) {
+        const therapistId = await generateUniqueTherapistId(therapistName);
+        await pool.query(
+          `INSERT INTO therapists (
+             therapist_id, name, contact_info, phone_number,
+             specialization, specialization_details, status, is_active
+           ) VALUES ($1, $2, $3, $4, $5, $6, 'invited', true)`,
+          [
+            therapistId, therapistName, email, whatsappNumber,
+            specializations || null,
+            specializationDetails ? JSON.stringify(specializationDetails) : null,
+          ]
+        );
+        console.log(`✅ Therapist record created for invite: ${therapistName} (${therapistId})`);
+      } else {
+        console.log(`ℹ️  Therapist already exists for ${email}; re-inviting without creating a duplicate.`);
+      }
+    } catch (therapistErr) {
+      // The invite itself is already saved and the OTP email still goes out.
+      // Failing here would strand the request row, so log and continue.
+      console.error('⚠️ Could not create therapist record for invite (non-fatal):', therapistErr);
+    }
 
     // Send OTP email to therapist
     try {
@@ -1083,27 +1143,56 @@ app.post('/api/complete-therapist-profile', async (req, res) => {
     }
     console.log('✅ Generated therapist_id:', therapistId);
 
-    // Create entry in therapists table with status='pending_review'
-    console.log('👨‍⚕️ Creating therapist entry...');
+    // Upsert the therapists row.
+    //
+    // The admin's invite already created this record with status='invited' so
+    // the therapist would show up across the panel straight away. Inserting
+    // again here would produce a SECOND therapist for the same person — with a
+    // different therapist_id, splitting their bookings and calendars in two.
+    // Adopt the existing row instead, and keep its therapist_id so nothing that
+    // already references it breaks.
+    console.log('👨‍⚕️ Creating/updating therapist entry...');
     try {
-      await pool.query(`
-        INSERT INTO therapists (
-          therapist_id, name, contact_info, phone_number,
-          specialization, specialization_details,
-          qualification_pdf_url, profile_picture_url, status
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending_review')
-      `, [
-        therapistId,
-        name,
-        email,
-        phone,
-        specializations,
-        specializationDetailsJson,
-        qualificationPdfUrl,
-        profilePictureUrl
-      ]);
-      console.log('✅ Therapist entry created with status: pending_review');
+      const existing = await pool.query(
+        `SELECT therapist_id FROM therapists WHERE LOWER(contact_info) = LOWER($1) LIMIT 1`,
+        [email]
+      );
+
+      if (existing.rows.length > 0) {
+        therapistId = existing.rows[0].therapist_id;
+        await pool.query(`
+          UPDATE therapists SET
+            name = $2, phone_number = $3, specialization = $4,
+            specialization_details = $5,
+            qualification_pdf_url = COALESCE($6, qualification_pdf_url),
+            profile_picture_url  = COALESCE($7, profile_picture_url),
+            status = 'pending_review'
+          WHERE therapist_id = $1
+        `, [
+          therapistId, name, phone, specializations,
+          specializationDetailsJson, qualificationPdfUrl, profilePictureUrl,
+        ]);
+        console.log('✅ Adopted invited therapist record:', therapistId);
+      } else {
+        await pool.query(`
+          INSERT INTO therapists (
+            therapist_id, name, contact_info, phone_number,
+            specialization, specialization_details,
+            qualification_pdf_url, profile_picture_url, status
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending_review')
+        `, [
+          therapistId,
+          name,
+          email,
+          phone,
+          specializations,
+          specializationDetailsJson,
+          qualificationPdfUrl,
+          profilePictureUrl
+        ]);
+        console.log('✅ Therapist entry created with status: pending_review');
+      }
     } catch (therapistError) {
       console.error('⚠️ Error creating therapist entry:', therapistError);
       throw therapistError; // This is critical, so throw error
@@ -1981,7 +2070,15 @@ app.get('/api/therapists', async (req, res) => {
              false as google_calendar_connected
       FROM users u
       LEFT JOIN therapists t ON u.therapist_id = t.therapist_id
-      WHERE u.role = 'therapist' AND COALESCE(t.is_active, true) = true
+      WHERE u.role = 'therapist'
+        AND COALESCE(t.is_active, true) = true
+        -- A users row carrying role='therapist' but no therapist_id has nothing
+        -- to link to: no therapists record, so no schedules, calendars, bookings
+        -- or availability. Every consumer of this list keys off therapist_id, so
+        -- such a row is unusable and only shows up as a phantom name in pickers.
+        -- One such row exists (an admin account mis-assigned the therapist role),
+        -- and the frontend had been hiding it by matching on its literal name.
+        AND u.therapist_id IS NOT NULL
       ORDER BY COALESCE(u.full_name, u.name)
     `);
 
@@ -4821,6 +4918,12 @@ app.get('/api/therapists-admin', async (req, res) => {
         -- the therapist cards must see it too or the two Settings tabs disagree
         -- about the same person.
         COALESCE(u.is_active, true) as login_enabled,
+        t.status,
+        -- An invited therapist has a therapists row but no users row yet: the
+        -- admin created the invite, the therapist has not set their password.
+        -- login_enabled cannot express this (COALESCE makes a missing users row
+        -- read as enabled), so the card needs the explicit signal.
+        (u.id IS NULL) AS awaiting_onboarding,
         COALESCE(t.google_refresh_token IS NOT NULL, false) AS google_calendar_connected,
         (SELECT MAX(schedule_id) FROM therapist_resources WHERE therapist_id = t.therapist_id) as "scheduleId",
         COUNT(DISTINCT CASE 
@@ -4860,7 +4963,7 @@ app.get('/api/therapists-admin', async (req, res) => {
         OR TRIM(b.booking_host_name) ILIKE t.name
       )
       WHERE LOWER(t.name) != 'safestories'
-      GROUP BY t.therapist_id, t.name, t.specialization, t.contact_info, t.profile_picture_url, t.phone_number, t.is_active, t.google_refresh_token, u.is_active
+      GROUP BY t.therapist_id, t.name, t.specialization, t.contact_info, t.profile_picture_url, t.phone_number, t.is_active, t.status, t.google_refresh_token, u.is_active, u.id
       ORDER BY (COALESCE(t.is_active, true) AND COALESCE(u.is_active, true)) DESC, t.name ASC
     `);
 
@@ -4894,6 +4997,96 @@ app.put('/api/admin/therapists/:id/status', requireRole(['admin','superadmin','f
   } catch (error) {
     console.error('Error updating therapist status:', error);
     res.status(500).json({ error: 'Failed to update therapist status' });
+  }
+});
+
+/**
+ * PUT /api/admin/therapists/:id/details
+ *
+ * Edits a therapist's PROFILE DETAILS ONLY, from the Therapists tab lightbox.
+ *
+ * Deliberately narrow. The column list is an allowlist, so this cannot reach
+ * is_active, status, therapist_id, google_refresh_token or anything credential
+ * related — those have their own endpoints and their own consequences. Passing
+ * them here is ignored rather than rejected, so a future field added to the
+ * modal cannot silently gain write access to them.
+ *
+ * A separate endpoint rather than a reuse of PUT /api/therapist-profile: that
+ * one takes therapist_id from the request body with no role gate and no
+ * ownership check, so any authenticated user can rewrite any therapist's
+ * profile through it. It is left alone here (the therapist-facing profile page
+ * depends on it) but must not be the basis for an admin feature.
+ *
+ * `email` maps to therapists.contact_info and `phone` to phone_number, matching
+ * how /api/therapists-admin reads them back.
+ */
+const THERAPIST_DETAIL_FIELDS: Record<string, string> = {
+  name: 'name',
+  email: 'contact_info',
+  phone: 'phone_number',
+  specialization: 'specialization',
+  specialization_details: 'specialization_details',
+  profile_picture_url: 'profile_picture_url',
+  qualification_pdf_url: 'qualification_pdf_url',
+};
+
+app.put('/api/admin/therapists/:id/details', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+
+    const provided = Object.keys(THERAPIST_DETAIL_FIELDS).filter(k => body[k] !== undefined);
+    if (provided.length === 0) {
+      return res.status(400).json({ error: 'No editable fields supplied' });
+    }
+
+    const name = typeof body.name === 'string' ? body.name.trim() : undefined;
+    if (name !== undefined && name === '') {
+      return res.status(400).json({ error: 'Name cannot be empty' });
+    }
+
+    await client.query('BEGIN');
+
+    const sets = provided.map((k, i) => `${THERAPIST_DETAIL_FIELDS[k]} = $${i + 1}`);
+    const values = provided.map(k => (typeof body[k] === 'string' ? body[k].trim() : body[k]));
+
+    const result = await client.query(
+      `UPDATE therapists SET ${sets.join(', ')} WHERE therapist_id = $${provided.length + 1} RETURNING *`,
+      [...values, id]
+    );
+    if (result.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Therapist not found' });
+    }
+
+    // Keep the linked login row in step. The panel reads the therapist's name,
+    // email and phone from BOTH tables depending on the screen, so updating only
+    // `therapists` leaves the two disagreeing about the same person.
+    const userSets: string[] = [];
+    const userVals: any[] = [];
+    if (body.name !== undefined) { userSets.push(`name = $${userVals.push(name)}`, `full_name = $${userVals.push(name)}`); }
+    if (body.email !== undefined) { userSets.push(`email = $${userVals.push(String(body.email).trim())}`); }
+    if (body.phone !== undefined) { userSets.push(`phone = $${userVals.push(String(body.phone).trim())}`); }
+    if (body.profile_picture_url !== undefined) { userSets.push(`profile_picture_url = $${userVals.push(body.profile_picture_url)}`); }
+
+    if (userSets.length > 0) {
+      userVals.push(id);
+      await client.query(
+        `UPDATE users SET ${userSets.join(', ')}, updated_at = NOW()
+          WHERE role = 'therapist' AND therapist_id = $${userVals.length}`,
+        userVals
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, therapist: result.rows[0], updated: provided });
+  } catch (error: any) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Error updating therapist details:', error);
+    res.status(500).json({ error: error.message || 'Failed to update therapist details' });
+  } finally {
+    client.release();
   }
 });
 

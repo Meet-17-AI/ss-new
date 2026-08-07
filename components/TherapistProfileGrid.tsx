@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Plus, User, Mail, Phone, RefreshCw, CalendarCheck, Star, Ban } from 'lucide-react';
+import { Search, Plus, User, Mail, Phone, RefreshCw, CalendarCheck, Star, Ban, MailCheck } from 'lucide-react';
 import { resolveMediaUrl, initialsFor } from '../lib/mediaUrl';
 import { ViewTherapistModal } from './ViewTherapistModal';
 
@@ -15,6 +15,11 @@ interface TherapistCard {
   // Optional on purpose: an older/lagging API build omits it, and the code must
   // treat "absent" as active rather than deactivating everyone.
   login_enabled?: boolean;
+  // True while an invited therapist has no users row yet — the admin sent the
+  // invite, they have not verified the OTP and set their own password. They are
+  // neither Active nor Deactivated, so they get their own badge.
+  awaiting_onboarding?: boolean;
+  status?: string | null;
   google_calendar_connected: boolean;
   total_sessions_lifetime: string | number;
   sessions_this_month: string | number;
@@ -39,6 +44,12 @@ const specializationList = (raw: string | null): string[] =>
 // flagged every therapist as deactivated the moment the API lagged the UI.
 const isDeactivated = (t: TherapistCard) =>
   t.is_active === false || t.login_enabled === false;
+
+// Invited but not yet onboarded. Checked BEFORE isDeactivated when picking a
+// badge: such a therapist has no users row, so login_enabled COALESCEs to true
+// and they would otherwise read as a fully working account.
+const isAwaitingOnboarding = (t: TherapistCard) =>
+  t.awaiting_onboarding === true && !isDeactivated(t);
 
 // The stored placeholder for "no number entered" is the bare country code, which
 // reads as a real value in the UI. Treat it as empty.
@@ -108,7 +119,8 @@ export const TherapistProfileGrid: React.FC = () => {
         <div>
           <h2 className="text-xl font-bold text-gray-800">Therapists</h2>
           <p className="text-sm text-gray-500 mt-1">
-            All therapists on the platform, with their specializations and session activity.
+            View and manage every therapist profile — open a card to see or update their
+            contact number, email.
             {deactivatedCount > 0 && (
               <span className="text-gray-400"> · {deactivatedCount} deactivated, shown last.</span>
             )}
@@ -213,6 +225,14 @@ export const TherapistProfileGrid: React.FC = () => {
                             <Ban size={10} />
                             Deactivated
                           </span>
+                        ) : isAwaitingOnboarding(therapist) ? (
+                          <span
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-50 text-amber-700 border border-amber-200"
+                            title="Invite sent. They set their own password after verifying the emailed OTP."
+                          >
+                            <MailCheck size={10} />
+                            Invited
+                          </span>
                         ) : (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-green-50 text-green-700 border border-green-200">
                             Active
@@ -298,6 +318,9 @@ export const TherapistProfileGrid: React.FC = () => {
             profile_picture_url: resolveMediaUrl(selectedTherapist.profile_picture_url),
           }}
           onClose={() => setSelectedTherapist(null)}
+          // Refetch rather than patching local state: the edit also writes the
+          // linked users row, and the card shows fields derived server-side.
+          onSaved={() => fetchTherapists()}
         />
       )}
     </div>
