@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Loader, Save, Plus, Trash2, GripVertical, Edit, Link, Copy, ExternalLink } from 'lucide-react';
 import { Toast } from './Toast';
 // @ts-ignore
@@ -58,7 +58,15 @@ const DEFAULT_QUESTIONS: FormQuestion[] = [
 export function TherapyCalendarDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const isEdit = id && id !== 'new';
+  // Set by the per-therapist "Add New Therapy" card on the Therapies tab.
+  const prefillTherapistId = searchParams.get('therapistId');
+
+  // Instant-apply status toggle (create pages have no row to toggle yet).
+  const [isActive, setIsActive] = useState(true);
+  const [statusConfirm, setStatusConfirm] = useState<'activate' | 'deactivate' | null>(null);
+  const [statusSaving, setStatusSaving] = useState(false);
 
   const [activeTab, setActiveTab] = useState<'basic' | 'form' | 'payment'>('basic');
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
@@ -128,8 +136,27 @@ export function TherapyCalendarDetails() {
   const fetchInitialData = async () => {
     try {
       const therRes = await fetch('/api/therapists');
+      let therapistList: Therapist[] = [];
       if (therRes.ok) {
-        setTherapists(await therRes.json());
+        therapistList = await therRes.json();
+        setTherapists(therapistList);
+      }
+
+      // Prefill on create. Deliberately not routed through handleTherapistChange,
+      // which blanks title/schedule_id — correct when a user switches therapists,
+      // wrong for the initial fill.
+      if (!isEdit && prefillTherapistId) {
+        const preselected = therapistList.find(t => t.therapist_id === prefillTherapistId);
+        if (preselected) {
+          setFormData(prev => ({
+            ...prev,
+            therapist_id: preselected.therapist_id,
+            therapist_name: preselected.name,
+          }));
+          // Populates the schedule dropdown and auto-selects the first schedule.
+          fetchSchedules(preselected.therapist_id);
+          checkGoogleConnection(preselected.therapist_id);
+        }
       }
 
       if (isEdit) {
@@ -147,6 +174,7 @@ export function TherapyCalendarDetails() {
               requires_tnc: target.requires_tnc ?? true,
               is_payment_enabled: target.is_payment_enabled ?? true
             });
+            setIsActive((target as any).is_active !== false);
             if (target.therapist_id) {
               fetchSchedules(target.therapist_id);
               checkGoogleConnection(target.therapist_id);
@@ -198,6 +226,32 @@ export function TherapyCalendarDetails() {
     }
   };
 
+  // Status applies immediately via the dedicated activate/deactivate endpoints,
+  // independently of the form's Save — so it is gated behind a confirmation.
+  const handleStatusChange = async () => {
+    if (!statusConfirm || !isEdit) return;
+    const targetActive = statusConfirm === 'activate';
+    try {
+      setStatusSaving(true);
+      const res = await fetch(
+        `/api/therapy-calendars/${id}/${targetActive ? 'activate' : 'deactivate'}`,
+        { method: 'PATCH' }
+      );
+      if (!res.ok) throw new Error('Failed to update status');
+      setIsActive(targetActive);
+      setStatusConfirm(null);
+      setToast({
+        message: `Therapy ${targetActive ? 'activated' : 'deactivated'} successfully.`,
+        type: 'success',
+      });
+    } catch (err) {
+      console.error('Status change error:', err);
+      setToast({ message: 'Failed to update therapy status', type: 'error' });
+    } finally {
+      setStatusSaving(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!formData.therapist_id || !formData.title) {
       setToast({ message: 'Therapist and Therapy Name are required', type: 'error' });
@@ -229,11 +283,11 @@ export function TherapyCalendarDetails() {
       if (isEdit) {
         // Refresh the current form data with any server changes (e.g. updated slug)
         setFormData(prev => ({ ...prev, ...result }));
-        setTimeout(() => navigate('/admin/therapy-calendars'), 1500);
+        setTimeout(() => navigate('/admin/userSettings/therapies'), 1500);
       } else {
         // After creation, navigate to the edit page of the newly created service
         // so the admin can immediately see and copy the generated public link
-        setTimeout(() => navigate(`/admin/therapy-calendars/${result.id}`), 1200);
+        setTimeout(() => navigate(`/admin/userSettings/therapies/${result.id}`), 1200);
       }
     } catch (err) {
       console.error('Save error:', err);
@@ -304,20 +358,44 @@ export function TherapyCalendarDetails() {
       
       <div className="flex items-center gap-4 mb-6">
         <button 
-          onClick={() => navigate('/admin/therapy-calendars')}
+          onClick={() => navigate('/admin/userSettings/therapies')}
           className="p-2 hover:bg-gray-200 rounded-full transition-colors"
         >
           <ArrowLeft size={20} className="text-gray-700" />
         </button>
         <div>
           <h1 className="text-2xl font-bold text-teal-800">
-            {isEdit ? 'Edit Therapy Calendar' : 'Create New Calendar'}
+            {isEdit ? 'Edit Therapy' : 'Add New Therapy'}
           </h1>
           <p className="text-gray-500 text-sm mt-1">
-            {isEdit ? 'Modify calendar details and settings' : 'Set up a new booking calendar for a therapist'}
+            {isEdit ? 'Modify therapy details and settings' : 'Set up a new therapy for a therapist'}
           </p>
         </div>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-4">
+          {/* Status toggle — moved here from the therapy card. Applies at once,
+              so it always asks first. */}
+          {isEdit && (
+            <div className="flex items-center gap-2.5 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setStatusConfirm(isActive ? 'deactivate' : 'activate')}
+                disabled={statusSaving}
+                title={isActive ? 'Deactivate this therapy' : 'Activate this therapy'}
+                className={`w-10 h-5 flex items-center rounded-full p-1 transition-colors disabled:opacity-50 ${
+                  isActive ? 'bg-teal-600' : 'bg-gray-300'
+                }`}
+              >
+                <div
+                  className={`bg-white w-3.5 h-3.5 rounded-full shadow-sm transform transition-transform ${
+                    isActive ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+              <span className={`text-sm font-medium ${isActive ? 'text-teal-700' : 'text-gray-500'}`}>
+                {isActive ? 'Active' : 'Deactivated'}
+              </span>
+            </div>
+          )}
           <button
             onClick={handleSave}
             disabled={saving || (!isEdit && googleConnected === false)}
@@ -705,6 +783,52 @@ export function TherapyCalendarDetails() {
           )}
         </div>
       </div>
+
+      {statusConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 max-w-md w-full shadow-2xl">
+            <h3 className="text-lg font-bold text-gray-900 mb-2">
+              {statusConfirm === 'deactivate' ? 'Deactivate this therapy?' : 'Activate this therapy?'}
+            </h3>
+            <p className="text-sm text-gray-600 mb-6">
+              {statusConfirm === 'deactivate' ? (
+                <>
+                  <span className="font-semibold">{formData.title}</span> will stop accepting new
+                  bookings and its public booking link will be disabled immediately. Existing
+                  bookings are not affected.
+                </>
+              ) : (
+                <>
+                  <span className="font-semibold">{formData.title}</span> will accept bookings again
+                  and its public link will go live immediately.
+                </>
+              )}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setStatusConfirm(null)}
+                disabled={statusSaving}
+                className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleStatusChange}
+                disabled={statusSaving}
+                className={`flex-1 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-50 ${
+                  statusConfirm === 'deactivate'
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : 'bg-teal-600 hover:bg-teal-700'
+                }`}
+              >
+                {statusSaving
+                  ? 'Working...'
+                  : statusConfirm === 'deactivate' ? 'Deactivate' : 'Activate'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

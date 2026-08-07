@@ -38,3 +38,13 @@ LOGIC_BUGS_REPORT_*.md
 
 # DB deletion backups (contain client PII - never commit)
 backups/
+
+# Local database scratch scripts (check_*/list_*/diagnose/test_*).
+# Several embedded live DB credentials inline rather than reading process.env,
+# which is how they nearly reached a public repo. They are throwaway debugging
+# aids, never imported by the app.
+panel-backend/check_*.ts
+panel-backend/list_*.ts
+panel-backend/diagnose.ts
+panel-backend/test_*.ts
+panel-backend/test.js

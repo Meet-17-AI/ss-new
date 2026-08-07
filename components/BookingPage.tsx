@@ -12,10 +12,14 @@ import './BookingPage.css';
 
 interface BookingPageProps {
   session: {
+    id?: number;
     title: string;
     detailedDescription?: string;
     duration: string;
+    /** List price as text ("₹1700"). Provisional until the client identifies themselves. */
     charges: string;
+    list_amount?: number;
+    price_is_provisional?: boolean;
     owner: string;
     slug: string;
     label?: string;
@@ -76,6 +80,17 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   const [availableSlots, setAvailableSlots] = useState<string[]>([]);
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
   const [sessionCharges, setSessionCharges] = useState(session.charges);
+
+  // The price THIS client pays, resolved server-side once they identify
+  // themselves. Null until then, when the list price on `session` is all that
+  // can be known. An existing client on a grandfathered rate, or one the admin
+  // has priced individually, sees their own figure appear here.
+  const [resolvedPrice, setResolvedPrice] = useState<{
+    amount: number;
+    list_amount: number;
+    is_special_price: boolean;
+    price_source: string;
+  } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [bookedDetails, setBookedDetails] = useState<any>(null);
@@ -128,6 +143,25 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
     const timer = setTimeout(async () => {
       setLastCheckedEmail(emailVal);
       setLastCheckedPhone(phoneVal);
+
+      // Re-quote for this specific client. Runs on the same debounce as the
+      // history lookup, so an existing client's grandfathered rate (or an
+      // admin-set price) replaces the list price as soon as they type their
+      // email. Fire-and-forget: a failed quote leaves the list price showing,
+      // and the server re-resolves at checkout regardless.
+      fetch('/api/public/resolve-price', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug: session.slug, serviceId: session.id, email: emailVal, phone: phoneVal }),
+      })
+        .then(r => (r.ok ? r.json() : null))
+        .then(p => {
+          if (p?.success) {
+            setResolvedPrice(p);
+            setSessionCharges(`₹${p.amount}`);
+          }
+        })
+        .catch(err => console.error('Error resolving price:', err));
 
       try {
         const response = await fetch('/api/public/client-history', {
@@ -475,9 +509,16 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
     }
 
     setIsSubmitting(true);
-    const amountVal = parseFloat(sessionCharges.replace('₹', '').replace(',', '')) || 0;
+
+    // Prefer the client-specific figure once it has resolved. This is only what
+    // gets DISPLAYED and what decides whether to open checkout — the amount
+    // actually charged is resolved again server-side in create-order, so a
+    // tampered value here cannot change the price.
+    const amountVal = resolvedPrice
+      ? resolvedPrice.amount
+      : (parseFloat(sessionCharges.replace('₹', '').replace(',', '')) || 0);
     // Free if charges are zero OR if the service has payment disabled
-    const isFree = session.charges === '₹0' || session.charges === '0' || session.charges.toLowerCase().includes('free') || amountVal === 0 || session.is_payment_enabled === false;
+    const isFree = amountVal === 0 || session.is_payment_enabled === false;
 
     // Compile custom responses into a readable text block
     let compiledNotes = formData.notes || '';
@@ -525,6 +566,11 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
       invitee_question: compiledNotes, // Send both
       isAdmin: false,
       clientTimezone: clientTimezone,
+      // Lets the server identify the therapy directly instead of inferring it
+      // from the resource label, which canonicalTherapyLabel() flattens.
+      serviceId: session.id,
+      slug: session.slug,
+      // Display/reference only. The server re-resolves and overwrites this.
       amount: amountVal
     };
 
@@ -581,10 +627,17 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
 
     try {
       // Step 1 — Create Razorpay order
+      // Identify WHAT is being paid for, never HOW MUCH. The server resolves
+      // the amount from the pricing rules and returns the order it created.
       const orderResponse = await fetch('/api/razorpay/create-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount: amountVal }),
+        body: JSON.stringify({
+          slug: session.slug,
+          serviceId: session.id,
+          email: formData.email,
+          phone: formData.whatsapp,
+        }),
       });
       if (!orderResponse.ok) {
         const errorMsg = await orderResponse.json();
@@ -1241,10 +1294,28 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
                     <div className="bp-option-header">
                       <div className="bp-option-icon">
                         <strong>₹{parseFloat((sessionCharges || session.charges).replace('₹', '') || '0').toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
+                        {/* A client on a rate below list — grandfathered through a
+                            price rise, or priced individually by an admin — sees
+                            the list price struck through so the difference is
+                            visible rather than silent. */}
+                        {resolvedPrice && resolvedPrice.amount < resolvedPrice.list_amount && (
+                          <span style={{ marginLeft: 8, textDecoration: 'line-through', opacity: 0.5, fontWeight: 400 }}>
+                            ₹{resolvedPrice.list_amount.toLocaleString('en-IN')}
+                          </span>
+                        )}
                       </div>
                       <Check size={16} className="bp-check-icon" />
                     </div>
-                    <p className="bp-option-desc">Session Charges</p>
+                    <p className="bp-option-desc">
+                      Session Charges
+                      {resolvedPrice?.is_special_price && (
+                        <span style={{ display: 'block', marginTop: 4, color: '#0f766e', fontWeight: 600 }}>
+                          {resolvedPrice.price_source === 'lock'
+                            ? 'Your existing client rate has been applied.'
+                            : 'A special rate has been applied to your account.'}
+                        </span>
+                      )}
+                    </p>
                   </div>
                 </div>
               )}

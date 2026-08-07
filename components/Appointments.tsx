@@ -231,13 +231,25 @@ export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onC
   const fetchAppointments = () => {
     setLoading(true);
     fetch('/api/appointments')
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        }
+        return res.json();
+      })
       .then(data => {
-        setAppointments(data);
+        // Ensure data is an array; handle error responses
+        if (Array.isArray(data)) {
+          setAppointments(data);
+        } else {
+          console.error('Unexpected response format:', data);
+          setAppointments([]);
+        }
         setLoading(false);
       })
       .catch(err => {
         console.error('Error fetching appointments:', err);
+        setAppointments([]);
         setLoading(false);
       });
   };

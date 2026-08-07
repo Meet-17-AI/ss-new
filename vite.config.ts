@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
     // Point the dev server at an already-deployed API instead of a local one, so the
     // UI can be worked on without booting a backend (whose startup crons send real
     // client emails). Defaults to the local backend.
-    const apiTarget = env.VITE_API_TARGET || 'http://localhost:3002';
+    const apiTarget = env.VITE_API_TARGET || 'http://localhost:3001';
     return {
       server: {
         port: 5173,

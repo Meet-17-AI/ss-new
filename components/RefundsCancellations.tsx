@@ -145,8 +145,8 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
 
   const tabs = [
     { id: 'all_payments', label: 'All Payments' },
-    { id: 'completed', label: 'Completed/Paid' },
     { id: 'pending', label: 'Pending' },
+    { id: 'completed', label: 'Paid' },
     { id: 'expired', label: 'Failed/Expired' },
     { id: 'all', label: 'Cancellation' },
     { id: 'Pending', label: 'Refund Initiated' },
@@ -307,7 +307,6 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
       <div className="flex justify-between items-start mb-6">
         <div>
           <h1 className="text-3xl font-bold mb-1">Payments</h1>
-          <p className="text-sm italic mt-1" style={{ color: '#21615D' }}>Razorpay gateway currently only displays "Initiated" or "Failed" statuses. A "Completed" status will not be shown</p>
         </div>
         <div className="flex gap-4 items-center flex-wrap justify-end">
           <div className="relative w-80">
@@ -373,6 +372,16 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
           </button>
         ))}
       </div>
+
+      {/* Razorpay Info Message - Only show in Refund Initiated tab */}
+      {activeTab === 'Pending' && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+          <p className="text-sm text-blue-800">
+            <strong>Note:</strong> Razorpay does not confirm when a refund is completed. It only shows whether the refund was initiated or failed.
+            For completed refunds, the funds will appear in the customer's account within 7-10 business days.
+          </p>
+        </div>
+      )}
 
       {/* Table */}
       <div className="bg-white rounded-lg border flex-1 flex flex-col">
@@ -495,7 +504,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                           }
                           const rs = (refund.refund_status || '').toLowerCase().trim();
                           if (!rs) {
-                            return <span className="text-gray-400">Not initiated</span>;
+                            return <span className="text-gray-400">Not Eligible</span>;
                           }
                           const style = REFUND_STATUS_STYLES[rs]
                             || { label: refund.refund_status, className: 'bg-gray-100 text-gray-700' };

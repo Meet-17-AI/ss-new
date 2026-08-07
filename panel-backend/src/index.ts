@@ -19,6 +19,10 @@ import { generateAdminOTP, verifyAdminOTP } from './otp';
 import { logWebhookApi } from './lib/webhookApiLogger.js';
 import { createNotification, notifyAllAdmins } from './lib/notifications';
 import { logActivity, categoryForRole, extractSafeMetadata } from './lib/activityLog';
+import {
+  resolvePrice, recordPriceLock, logPriceResolution, resolveServiceIdFromLabel,
+  normalizeEmail, normalizePhoneDigits, parseCharges, istDateToTimestamp, syncLegacyCharges,
+} from './lib/pricing';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -137,7 +141,7 @@ const getAllowedOrigins = () => {
     return process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim());
   }
   // Default to localhost for development
-  return ['http://localhost:5174', 'http://localhost:3006', 'http://localhost:3004'];
+  return ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3006', 'http://localhost:3004'];
 };
 
 const corsOptions = {
@@ -195,6 +199,10 @@ const PUBLIC_API_ROUTES: { methods: string[]; pattern: RegExp }[] = [
   { methods: ['POST'], pattern: /^\/api\/create-booking$/ },
   { methods: ['POST'], pattern: /^\/api\/create-pending-booking$/ },
   { methods: ['POST'], pattern: /^\/api\/public\/client-history$/ },
+  // Read-only price quote for the booking page. Returns a figure the visitor is
+  // about to be shown anyway, and reports no membership signal an unauthenticated
+  // caller could use to enumerate clients.
+  { methods: ['POST'], pattern: /^\/api\/public\/resolve-price$/ },
   { methods: ['GET'],  pattern: /^\/api\/payment-settings\/public$/ },
 
   // --- payment checkout (/pay/*) ---
@@ -1339,9 +1347,9 @@ app.post('/api/upload-file', (req, res, next) => {
       return res.status(400).json({ success: false, error: 'No file uploaded' });
     }
 
-    const { folder } = req.body; // 'profile-pictures', 'qualification-pdfs', or 'issue-screenshots'
+    const { folder } = req.body; // 'profile-pictures', 'qualification-pdfs', 'issue-screenshots', or 'org-logos'
 
-    if (!folder || !['profile-pictures', 'qualification-pdfs', 'issue-screenshots'].includes(folder)) {
+    if (!folder || !['profile-pictures', 'qualification-pdfs', 'issue-screenshots', 'org-logos'].includes(folder)) {
       return res.status(400).json({ success: false, error: 'Invalid folder specified' });
     }
 
@@ -1354,7 +1362,7 @@ app.post('/api/upload-file', (req, res, next) => {
     const fileUrl = await uploadFile(
       req.file.buffer,
       fileName,
-      folder as 'profile-pictures' | 'qualification-pdfs' | 'issue-screenshots',
+      folder as 'profile-pictures' | 'qualification-pdfs' | 'issue-screenshots' | 'org-logos',
       req.file.mimetype
     );
 
@@ -4794,6 +4802,10 @@ app.get('/api/therapist/calendar-blocks', async (req, res) => {
 // Get all therapists
 app.get('/api/therapists-admin', async (req, res) => {
   try {
+    // The "SafeStories" row is the platform's own free-consultation calendar
+    // host, not a person, so it is excluded here — both consumers of this
+    // endpoint render the list as real staff. It still shows on the Therapies
+    // tab, which reads /api/services.
     const result = await pool.query(`
       SELECT 
         t.therapist_id,
@@ -4803,6 +4815,12 @@ app.get('/api/therapists-admin', async (req, res) => {
         t.profile_picture_url,
         t.phone_number,
         COALESCE(t.is_active, true) as is_active,
+        -- Separate flag from t.is_active: users.is_active gates LOGIN, while
+        -- therapists.is_active gates the therapist record itself. /api/services
+        -- keys "therapist inactive" (and disables booking links) off this one, so
+        -- the therapist cards must see it too or the two Settings tabs disagree
+        -- about the same person.
+        COALESCE(u.is_active, true) as login_enabled,
         COALESCE(t.google_refresh_token IS NOT NULL, false) AS google_calendar_connected,
         (SELECT MAX(schedule_id) FROM therapist_resources WHERE therapist_id = t.therapist_id) as "scheduleId",
         COUNT(DISTINCT CASE 
@@ -4836,13 +4854,14 @@ app.get('/api/therapists-admin', async (req, res) => {
         END), 0) as last_month_revenue,
         ROUND(AVG(NULLIF(CAST(NULLIF(REGEXP_REPLACE(b.client_rating::text, '[^0-9.]', '', 'g'), '') AS numeric), 0)), 1) as average_rating
       FROM therapists t
+      LEFT JOIN users u ON u.role = 'therapist' AND u.therapist_id = t.therapist_id
       LEFT JOIN bookings b ON (
         TRIM(b.booking_host_name) ILIKE '%' || SPLIT_PART(t.name, ' ', 1) || '%'
         OR TRIM(b.booking_host_name) ILIKE t.name
       )
       WHERE LOWER(t.name) != 'safestories'
-      GROUP BY t.therapist_id, t.name, t.specialization, t.contact_info, t.profile_picture_url, t.phone_number, t.is_active, t.google_refresh_token
-      ORDER BY COALESCE(t.is_active, true) DESC, t.name ASC
+      GROUP BY t.therapist_id, t.name, t.specialization, t.contact_info, t.profile_picture_url, t.phone_number, t.is_active, t.google_refresh_token, u.is_active
+      ORDER BY (COALESCE(t.is_active, true) AND COALESCE(u.is_active, true)) DESC, t.name ASC
     `);
 
     res.json(result.rows);
@@ -6718,7 +6737,7 @@ app.post('/api/send-booking-link', async (req, res) => {
     }
 
     try {
-      let campaignName = 'free_consultation_bookinglink_n8n';
+      let campaignName = 'panel_free_consultation';
 
       if (therapy && therapy !== 'Free Consultation' && therapistName && therapistName !== 'Safestories') {
         const campaignResult = await pool.query(
@@ -6735,7 +6754,7 @@ app.post('/api/send-booking-link', async (req, res) => {
         }
       }
 
-      const params = campaignName === 'free_consultation_bookinglink_n8n' ? [] : [clientName];
+      const params = campaignName === 'panel_free_consultation' ? [] : [clientName];
 
       await sendAiSensyMessage(
         "manual_booking_link",
@@ -7061,64 +7080,54 @@ app.post('/api/fetch-slots', async (req, res) => {
       })
       .filter(slot => slot.clientDateStr === payload.selectedDate)
       .map(slot => slot.absoluteIso);
-    // Query and prefill session charges from therapy_services
-    // 4-level fallback: most specific → least specific
+    // Session charges, via the same resolver every other path uses.
+    //
+    // This replaced a 4-level ILIKE fallback ladder that ended in "any active
+    // service by this therapist, ORDER BY id DESC" — which happily returned a
+    // different therapy's price. Identifying the service first, then pricing it,
+    // means this quote cannot disagree with what create-order charges.
     let sessionCharges = 0;
+    let sessionPriceSource = 'none';
     const selectedTherapy = payload.selectedTherapy;
     try {
-      let chargeRow = null;
+      // Narrow to one service before pricing. Two candidates means the label was
+      // ambiguous, and guessing would quote the wrong therapy.
+      const svc = await pool.query(
+        `SELECT id FROM therapy_services
+          WHERE is_active = true
+            AND ($1::text IS NULL OR therapist_id = $1::text)
+            AND ($2::text IS NULL OR title ILIKE '%' || $2::text || '%')`,
+        [therapistId || null, selectedTherapy || null]
+      );
 
-      // Step 1: Match by therapist_id + therapy title (most precise)
-      if (therapistId && selectedTherapy) {
-        const r1 = await pool.query(
-          `SELECT charges FROM therapy_services WHERE therapist_id = $1 AND title ILIKE $2 AND is_active = true LIMIT 1`,
-          [therapistId, `%${selectedTherapy}%`]
-        );
-        if (r1.rows.length > 0) chargeRow = r1.rows[0];
-      }
+      const serviceId = svc.rows.length === 1
+        ? svc.rows[0].id
+        : await resolveServiceIdFromLabel(pool, therapistId, selectedTherapy);
 
-      // Step 2: Match by therapist_name (first word) + therapy title
-      if (!chargeRow && therapistName && selectedTherapy) {
-        const r2 = await pool.query(
-          `SELECT charges FROM therapy_services WHERE therapist_name ILIKE $1 AND title ILIKE $2 AND is_active = true LIMIT 1`,
-          [`%${therapistName.split(' ')[0]}%`, `%${selectedTherapy}%`]
-        );
-        if (r2.rows.length > 0) chargeRow = r2.rows[0];
-      }
-
-      // Step 3: Match by full therapist_name only (when therapy title doesn't match)
-      if (!chargeRow && therapistName) {
-        const r3 = await pool.query(
-          `SELECT charges FROM therapy_services WHERE therapist_name ILIKE $1 AND is_active = true ORDER BY id DESC LIMIT 1`,
-          [`%${therapistName.split(' ')[0]}%`]
-        );
-        if (r3.rows.length > 0) chargeRow = r3.rows[0];
-      }
-
-      // Step 4: Match by therapy title alone (last resort)
-      if (!chargeRow && selectedTherapy) {
-        const r4 = await pool.query(
-          `SELECT charges FROM therapy_services WHERE title ILIKE $1 AND is_active = true LIMIT 1`,
-          [`%${selectedTherapy}%`]
-        );
-        if (r4.rows.length > 0) chargeRow = r4.rows[0];
-      }
-
-      if (chargeRow) {
-        const rawCharges = String(chargeRow.charges || '0');
-        const cleanCharges = parseInt(rawCharges.replace(/[^0-9]/g, ''), 10);
-        if (!isNaN(cleanCharges) && cleanCharges > 0) {
-          sessionCharges = cleanCharges;
-          console.log(`[Fetch Slots] Resolved session charges for "${therapistName}" / "${selectedTherapy}": ${cleanCharges}`);
-        }
+      if (serviceId) {
+        const price = await resolvePrice(pool, {
+          serviceId,
+          // Present when the admin booking form has already captured the client;
+          // absent on the first load, which then quotes list price.
+          clientEmail: payload.clientEmail,
+          clientPhone: payload.clientPhone || payload.clientWhatsApp,
+        });
+        sessionCharges = price.amount;
+        sessionPriceSource = price.source;
+        console.log(`[Fetch Slots] Resolved ₹${price.amount} (${price.source}) for service ${serviceId} / "${selectedTherapy}"`);
       } else {
-        console.warn(`[Fetch Slots] No service found for therapist="${therapistName}", therapy="${selectedTherapy}"`);
+        console.warn(`[Fetch Slots] No unambiguous service for therapist="${therapistName}", therapy="${selectedTherapy}"`);
       }
     } catch (chargeErr) {
-      console.error('[Fetch Slots] Failed to lookup session charges (non-fatal):', chargeErr);
+      console.error('[Fetch Slots] Failed to resolve session charges (non-fatal):', chargeErr);
     }
 
-    res.json([{ "Available Slots": formattedSlots, "session charges": sessionCharges, success: true }]);
+    res.json([{
+      "Available Slots": formattedSlots,
+      "session charges": sessionCharges,
+      price_source: sessionPriceSource,
+      success: true,
+    }]);
   } catch (error) {
     console.error('Error in native fetch-slots:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -7154,6 +7163,13 @@ app.get('/api/public/services/:slug', async (req, res) => {
       return res.status(404).json({ error: 'Service not found' });
     }
     const s = result.rows[0];
+
+    // The list price, resolved from therapy_price_schedule. This is the
+    // anonymous quote — the visitor has not identified themselves yet, so no
+    // grandfathered rate or client override can apply. BookingPage re-quotes
+    // via /api/public/resolve-price once an email or phone is entered.
+    const listPrice = await resolvePrice(pool, { serviceId: s.id });
+
     res.json({
       id: s.id,
       title: s.title,
@@ -7163,7 +7179,10 @@ app.get('/api/public/services/:slug', async (req, res) => {
       description: s.description,
       // "detailedDescription" is what BookingPage renders — use the description column
       detailedDescription: s.description || '',
-      charges: s.charges,
+      charges: `₹${listPrice.amount}`,
+      list_amount: listPrice.amount,
+      // Tells the client this figure may drop once they identify themselves.
+      price_is_provisional: true,
       slug: s.slug,
       owner: s.therapist_name,
       therapist_id: s.therapist_id,
@@ -7176,6 +7195,523 @@ app.get('/api/public/services/:slug', async (req, res) => {
   } catch (error) {
     console.error('Error fetching public service:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/public/resolve-price
+ *
+ * What THIS client pays for THIS therapy, right now. Called from the public
+ * booking page on the same debounce that already fires /api/public/client-history,
+ * as soon as a valid email or phone is entered.
+ *
+ * Public on purpose (the booking page is unauthenticated), and safe to be:
+ * it is read-only and reveals only a price the client is about to be quoted
+ * anyway. It deliberately does NOT report whether the client exists — that
+ * would turn it into an account-enumeration oracle. `is_existing_client` is
+ * derived from the price rule that won, which the client can see regardless.
+ */
+app.post('/api/public/resolve-price', async (req, res) => {
+  try {
+    const { slug, serviceId, email, phone } = req.body || {};
+    if (!slug && !serviceId) {
+      return res.status(400).json({ error: 'slug or serviceId is required' });
+    }
+
+    const price = await resolvePrice(pool, {
+      serviceId: serviceId ? Number(serviceId) : null,
+      slug: slug || null,
+      clientEmail: email,
+      clientPhone: phone,
+    });
+
+    // Fire-and-forget; a failed audit write must not fail the quote.
+    logPriceResolution(pool, price, { context: 'quote', clientEmail: email, clientPhone: phone })
+      .catch(() => {});
+
+    res.json({
+      success: true,
+      amount: price.amount,
+      currency: price.currency,
+      list_amount: price.listAmount,
+      is_special_price: price.amount !== price.listAmount,
+      is_grandfathered: price.isGrandfathered,
+      // 'lock' means an existing client on their original rate; 'override'
+      // means an admin set this client's price by hand.
+      price_source: price.source,
+    });
+  } catch (error: any) {
+    console.error('Error resolving price:', error);
+    res.status(500).json({ error: 'Failed to resolve price' });
+  }
+});
+
+/* ================================================================== *
+ * Admin pricing (User Settings -> Pricing tab)
+ *
+ * Every write here goes through requireRole, which sits behind the global
+ * activity-logging middleware — so price changes and client overrides show up
+ * in Organization Settings -> Audit Logs without any extra wiring.
+ * ================================================================== */
+
+/**
+ * GET /api/admin/pricing/therapies
+ * One row per therapy: the price in force, when it started, the next scheduled
+ * change if any, and how many clients are grandfathered on an older rate.
+ *
+ * Deactivated therapies and deactivated therapists are excluded — they cannot
+ * be booked, so a price for them is not a thing anyone can act on.
+ *
+ * "Deactivated" means either of two independent flags, matching how the
+ * Therapists and Therapies tabs read it:
+ *   therapists.is_active — the therapist record
+ *   users.is_active      — whether they can log in; /api/services keys off this
+ *                          one to disable public booking links
+ * COALESCE defaults both to true so a therapy whose therapist has no matching
+ * row (the SafeStories platform calendar) is not silently dropped.
+ */
+app.get('/api/admin/pricing/therapies', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        s.id            AS service_id,
+        s.title,
+        s.therapist_id,
+        s.therapist_name,
+        s.is_active,
+        s.is_payment_enabled,
+        s.charges       AS legacy_charges,
+        cur.amount      AS current_amount,
+        cur.effective_from AS current_since,
+        nxt.id          AS next_id,
+        nxt.amount      AS next_amount,
+        nxt.effective_from AS next_effective_from,
+        nxt.grandfather_existing AS next_grandfathers,
+        COALESCE(lk.locked_clients, 0) AS locked_clients,
+        COALESCE(ov.override_count, 0) AS override_count
+      FROM therapy_services s
+      LEFT JOIN therapists th ON th.therapist_id = s.therapist_id
+      LEFT JOIN users u ON u.role = 'therapist' AND u.therapist_id = s.therapist_id
+      LEFT JOIN LATERAL (
+        SELECT amount, effective_from FROM therapy_price_schedule
+         WHERE service_id = s.id AND revoked_at IS NULL AND effective_from <= NOW()
+         ORDER BY effective_from DESC, id DESC LIMIT 1
+      ) cur ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT id, amount, effective_from, grandfather_existing FROM therapy_price_schedule
+         WHERE service_id = s.id AND revoked_at IS NULL AND effective_from > NOW()
+         ORDER BY effective_from ASC, id ASC LIMIT 1
+      ) nxt ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS locked_clients FROM client_price_lock
+         WHERE service_id = s.id AND released_at IS NULL
+      ) lk ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)::int AS override_count FROM client_price_override
+         WHERE service_id = s.id AND revoked_at IS NULL
+      ) ov ON TRUE
+      WHERE COALESCE(s.is_active, true) = true
+        AND COALESCE(th.is_active, true) = true
+        AND COALESCE(u.is_active, true) = true
+      ORDER BY s.therapist_name ASC, s.title ASC
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error listing pricing therapies:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/** GET /api/admin/pricing/schedule/:serviceId — full price history for one therapy. */
+app.get('/api/admin/pricing/schedule/:serviceId', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, amount, effective_from, grandfather_existing, note, created_by, created_at, revoked_at
+         FROM therapy_price_schedule
+        WHERE service_id = $1
+        ORDER BY effective_from DESC, id DESC`,
+      [req.params.serviceId]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching price schedule:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * POST /api/admin/pricing/schedule — set a new price from a given date.
+ * Body: { service_id, amount, effective_from: 'YYYY-MM-DD', grandfather_existing, note }
+ */
+app.post('/api/admin/pricing/schedule', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const { service_id, amount, effective_from, grandfather_existing = true, note } = req.body || {};
+
+    const amt = Number(amount);
+    if (!service_id || !Number.isFinite(amt) || amt < 0) {
+      return res.status(400).json({ error: 'service_id and a non-negative amount are required' });
+    }
+    if (!effective_from || !/^\d{4}-\d{2}-\d{2}$/.test(effective_from)) {
+      return res.status(400).json({ error: 'effective_from must be a YYYY-MM-DD date' });
+    }
+
+    const svc = await pool.query('SELECT id, title FROM therapy_services WHERE id = $1', [service_id]);
+    if (svc.rows.length === 0) return res.status(404).json({ error: 'Therapy not found' });
+
+    // The admin picks a calendar date; they mean IST midnight, not the server's
+    // idea of midnight. Pinning the offset here keeps a change from landing 5.5
+    // hours early or late if this ever runs outside IST.
+    const effectiveTs = istDateToTimestamp(effective_from);
+
+    const { rows } = await pool.query(
+      `INSERT INTO therapy_price_schedule
+         (service_id, amount, effective_from, grandfather_existing, note, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (service_id, effective_from) WHERE revoked_at IS NULL
+       DO UPDATE SET amount = EXCLUDED.amount,
+                     grandfather_existing = EXCLUDED.grandfather_existing,
+                     note = EXCLUDED.note,
+                     created_by = EXCLUDED.created_by,
+                     created_at = NOW()
+       RETURNING *`,
+      [service_id, amt, effectiveTs, grandfather_existing !== false, note || null, (req as any).user?.username || 'admin']
+    );
+
+    // Keep the legacy column in step with whatever is now in force. A
+    // future-dated change must NOT move it yet, which syncLegacyCharges handles
+    // by re-resolving rather than writing the submitted amount blindly.
+    await syncLegacyCharges(pool, Number(service_id));
+
+    res.json({ success: true, schedule: rows[0] });
+  } catch (error: any) {
+    console.error('Error creating price schedule:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/** POST /api/admin/pricing/schedule/:id/revoke — cancel a price change. */
+app.post('/api/admin/pricing/schedule/:id/revoke', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE therapy_price_schedule
+          SET revoked_at = NOW(), revoked_by = $2
+        WHERE id = $1 AND revoked_at IS NULL
+        RETURNING *`,
+      [req.params.id, (req as any).user?.username || 'admin']
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Price change not found or already revoked' });
+
+    // Revoking a change that had ALREADY taken effect rolls the price back to
+    // the previous row, so the displayed figure has to follow it back down.
+    await syncLegacyCharges(pool, Number(rows[0].service_id));
+
+    res.json({ success: true, schedule: rows[0] });
+  } catch (error) {
+    console.error('Error revoking price schedule:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * GET /api/admin/pricing/impact?service_id=&amount=
+ * What a proposed change would actually do, before it is saved.
+ */
+app.get('/api/admin/pricing/impact', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const serviceId = Number(req.query.service_id);
+    const amount = Number(req.query.amount);
+    if (!serviceId) return res.status(400).json({ error: 'service_id is required' });
+
+    const cur = await resolvePrice(pool, { serviceId });
+    const locked = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM client_price_lock
+        WHERE service_id = $1 AND released_at IS NULL`,
+      [serviceId]
+    );
+    const overrides = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM client_price_override
+        WHERE revoked_at IS NULL AND (service_id = $1 OR service_id IS NULL)`,
+      [serviceId]
+    );
+
+    res.json({
+      current_amount: cur.amount,
+      proposed_amount: Number.isFinite(amount) ? amount : null,
+      grandfathered_clients: locked.rows[0].n,
+      overridden_clients: overrides.rows[0].n,
+    });
+  } catch (error) {
+    console.error('Error computing pricing impact:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * GET /api/admin/pricing/clients?search=
+ * Client picker for per-client pricing. Sourced from bookings, which is the
+ * real client record here — all_clients_table is not written by the booking
+ * flow and would miss most people.
+ */
+app.get('/api/admin/pricing/clients', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim().toLowerCase();
+    const { rows } = await pool.query(
+      `SELECT
+         LOWER(TRIM(invitee_email)) AS email,
+         NULLIF(RIGHT(REGEXP_REPLACE(COALESCE(invitee_phone, ''), '[^0-9]', '', 'g'), 10), '') AS phone_digits,
+         MAX(invitee_name)  AS name,
+         COUNT(*)::int      AS bookings,
+         MAX(booking_host_name) AS last_therapist
+       FROM bookings
+       WHERE invitee_email IS NOT NULL AND TRIM(invitee_email) <> ''
+         AND booking_status NOT IN ('cancelled', 'canceled', 'payment_failed')
+         AND ($1 = '' OR LOWER(invitee_email) LIKE '%' || $1 || '%'
+                      OR LOWER(COALESCE(invitee_name, '')) LIKE '%' || $1 || '%'
+                      OR REGEXP_REPLACE(COALESCE(invitee_phone, ''), '[^0-9]', '', 'g') LIKE '%' || $1 || '%')
+       GROUP BY 1, 2
+       ORDER BY bookings DESC, name ASC
+       LIMIT 50`,
+      [search]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('Error searching pricing clients:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * GET /api/admin/pricing/client-context?email=&phone=
+ *
+ * Everything the Client Pricing dialog needs about one client, so the admin is
+ * not setting a price blind: which therapies this client actually books, what
+ * each of them costs THEM right now, whether they count as existing or new for
+ * that therapy, and any custom price already in force.
+ *
+ * Therapies are drawn from the client's own booking history rather than the
+ * full catalogue — a per-client price is only meaningful for a therapy they
+ * use. Deactivated therapies and therapists are excluded, matching the tab.
+ */
+app.get('/api/admin/pricing/client-context', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const email = normalizeEmail(String(req.query.email || ''));
+    const phone = normalizePhoneDigits(String(req.query.phone || ''));
+    if (!email && !phone) {
+      return res.status(400).json({ error: 'email or phone is required' });
+    }
+
+    // Which therapies has this client actually booked, and how often.
+    // service_id is NULL on bookings the migration could not map unambiguously
+    // (see migrations/2026-08-06_pricing_engine.sql) — those are skipped rather
+    // than guessed at.
+    const { rows: history } = await pool.query(
+      `SELECT b.service_id,
+              COUNT(*)::int                AS bookings,
+              MAX(b.invitee_created_at)    AS last_booked,
+              s.title, s.therapist_name
+         FROM bookings b
+         JOIN therapy_services s ON s.id = b.service_id
+         LEFT JOIN therapists th ON th.therapist_id = s.therapist_id
+         LEFT JOIN users u ON u.role = 'therapist' AND u.therapist_id = s.therapist_id
+        WHERE b.service_id IS NOT NULL
+          AND b.booking_status NOT IN ('cancelled', 'canceled', 'payment_failed')
+          AND COALESCE(s.is_active, true) = true
+          AND COALESCE(s.is_payment_enabled, true) = true
+          AND COALESCE(th.is_active, true) = true
+          AND COALESCE(u.is_active, true) = true
+          AND ( ($1::text IS NOT NULL AND LOWER(b.invitee_email) = $1::text)
+             OR ($2::text IS NOT NULL AND RIGHT(REGEXP_REPLACE(COALESCE(b.invitee_phone, ''), '[^0-9]', '', 'g'), 10) = $2::text) )
+        GROUP BY b.service_id, s.title, s.therapist_name
+        ORDER BY bookings DESC`,
+      [email, phone]
+    );
+
+    const therapies = [];
+    for (const h of history) {
+      const price = await resolvePrice(pool, {
+        serviceId: h.service_id,
+        clientEmail: email,
+        clientPhone: phone,
+      });
+
+      const { rows: ovr } = await pool.query(
+        `SELECT id, amount, reason, effective_until, created_by, created_at
+           FROM client_price_override
+          WHERE revoked_at IS NULL
+            AND (service_id = $1 OR service_id IS NULL)
+            AND ( ($2::text IS NOT NULL AND client_email = $2::text)
+               OR ($3::text IS NOT NULL AND client_phone_digits = $3::text) )
+          ORDER BY (service_id IS NOT NULL) DESC, created_at DESC
+          LIMIT 1`,
+        [h.service_id, email, phone]
+      );
+
+      therapies.push({
+        service_id: h.service_id,
+        title: h.title,
+        therapist_name: h.therapist_name,
+        bookings: h.bookings,
+        last_booked: h.last_booked,
+        amount: price.amount,
+        list_amount: price.listAmount,
+        price_source: price.source,
+        // 'lock' is the grandfathered rate, which only an existing client has.
+        is_existing_client: price.source === 'lock',
+        // Null unless a custom price is actually set — nothing is shown for it
+        // in the dialog otherwise.
+        existing_override: ovr.length > 0 ? ovr[0] : null,
+      });
+    }
+
+    res.json({
+      is_existing_client: history.length > 0,
+      total_bookings: history.reduce((n, h) => n + h.bookings, 0),
+      therapies,
+    });
+  } catch (error) {
+    console.error('Error fetching client pricing context:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/** GET /api/admin/pricing/overrides — all active per-client prices. */
+app.get('/api/admin/pricing/overrides', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT o.*, s.title AS service_title, s.therapist_name
+         FROM client_price_override o
+         LEFT JOIN therapy_services s ON s.id = o.service_id
+        WHERE o.revoked_at IS NULL
+        ORDER BY o.created_at DESC`
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('Error listing price overrides:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * POST /api/admin/pricing/overrides — set a price for one or many clients.
+ * Body: { clients: [{ email, phone_digits, name }], service_id | null, amount, reason, effective_until }
+ *
+ * All-or-nothing: a partial apply across a batch of clients would leave the
+ * admin with no way to tell who got the new price.
+ */
+app.post('/api/admin/pricing/overrides', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { clients, service_id, amount, reason, effective_until } = req.body || {};
+    const amt = Number(amount);
+
+    if (!Array.isArray(clients) || clients.length === 0) {
+      return res.status(400).json({ error: 'At least one client is required' });
+    }
+    if (!Number.isFinite(amt) || amt < 0) {
+      return res.status(400).json({ error: 'A non-negative amount is required' });
+    }
+
+    const createdBy = (req as any).user?.username || 'admin';
+    await client.query('BEGIN');
+
+    const created: any[] = [];
+    for (const c of clients) {
+      const email = normalizeEmail(c?.email);
+      const phone = normalizePhoneDigits(c?.phone_digits || c?.phone);
+      if (!email && !phone) continue;
+
+      // One active override per client per therapy. Re-applying replaces the
+      // old figure rather than stacking a second rule the resolver would have
+      // to arbitrate between.
+      await client.query(
+        `UPDATE client_price_override
+            SET revoked_at = NOW(), revoked_by = $1
+          WHERE revoked_at IS NULL
+            AND service_id IS NOT DISTINCT FROM $2
+            AND ( ($3::text IS NOT NULL AND client_email = $3::text)
+               OR ($4::text IS NOT NULL AND client_phone_digits = $4::text) )`,
+        [createdBy, service_id || null, email, phone]
+      );
+
+      const { rows } = await client.query(
+        `INSERT INTO client_price_override
+           (client_email, client_phone_digits, client_name, service_id, amount, reason, effective_until, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
+        [email, phone, c?.name || null, service_id || null, amt, reason || null, effective_until || null, createdBy]
+      );
+      created.push(rows[0]);
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true, created: created.length, overrides: created });
+  } catch (error: any) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Error creating price overrides:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  } finally {
+    client.release();
+  }
+});
+
+/** POST /api/admin/pricing/overrides/:id/revoke */
+app.post('/api/admin/pricing/overrides/:id/revoke', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE client_price_override
+          SET revoked_at = NOW(), revoked_by = $2
+        WHERE id = $1 AND revoked_at IS NULL
+        RETURNING *`,
+      [req.params.id, (req as any).user?.username || 'admin']
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Override not found or already revoked' });
+    res.json({ success: true, override: rows[0] });
+  } catch (error) {
+    console.error('Error revoking price override:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * GET /api/admin/pricing/locks?service_id=
+ * Who is grandfathered on this therapy, and at what rate.
+ */
+app.get('/api/admin/pricing/locks', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const serviceId = req.query.service_id ? Number(req.query.service_id) : null;
+    const { rows } = await pool.query(
+      `SELECT l.id, l.client_email, l.client_phone_digits, l.service_id, l.locked_amount,
+              l.source, l.locked_at, s.title AS service_title, s.therapist_name
+         FROM client_price_lock l
+         LEFT JOIN therapy_services s ON s.id = l.service_id
+        WHERE l.released_at IS NULL
+          AND ($1::int IS NULL OR l.service_id = $1::int)
+        ORDER BY l.locked_at DESC
+        LIMIT 500`,
+      [serviceId]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('Error listing price locks:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/** POST /api/admin/pricing/locks/:id/release — move one client onto list price. */
+app.post('/api/admin/pricing/locks/:id/release', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE client_price_lock
+          SET released_at = NOW(), released_by = $2
+        WHERE id = $1 AND released_at IS NULL
+        RETURNING *`,
+      [req.params.id, (req as any).user?.username || 'admin']
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Lock not found or already released' });
+    res.json({ success: true, lock: rows[0] });
+  } catch (error) {
+    console.error('Error releasing price lock:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -7217,13 +7753,123 @@ app.post('/api/payment-settings', requireRole(['admin','superadmin','fluidadmin'
   }
 });
 
+// ==================== ORGANIZATION SETTINGS ====================
+// Stored as rows in the existing admin_settings key/value table (PK on
+// setting_key), so no schema migration is needed. That table also holds the
+// payment keys, which is exactly why writes below are restricted to an explicit
+// allowlist — an unfiltered upsert here would let this endpoint overwrite
+// razorpay_key_id / active_gateway.
+const ORG_SETTING_KEYS = [
+  'org_name',
+  'org_logo_url',
+  'org_support_email',
+  'org_support_phone',
+  'org_address',
+  'org_website',
+  'org_timezone',
+  'org_gstin',
+] as const;
 
-// POST /api/razorpay/create-order
+// GET /api/org-settings
+app.get('/api/org-settings', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT setting_key, setting_value FROM admin_settings WHERE setting_key = ANY($1)`,
+      [ORG_SETTING_KEYS]
+    );
+    const settings: Record<string, string> = {};
+    for (const key of ORG_SETTING_KEYS) settings[key] = '';
+    for (const row of rows) settings[row.setting_key] = row.setting_value ?? '';
+    res.json({ settings });
+  } catch (error) {
+    console.error('Error fetching org settings:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/org-settings (Admin)
+app.post('/api/org-settings', requireRole(['admin', 'superadmin', 'fluidadmin']), async (req, res) => {
+  try {
+    const { settings } = req.body;
+    if (!settings || typeof settings !== 'object') {
+      return res.status(400).json({ error: 'settings object is required' });
+    }
+
+    const updates = ORG_SETTING_KEYS.filter(key => settings[key] !== undefined);
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No recognised organization settings supplied' });
+    }
+
+    for (const key of updates) {
+      await pool.query(
+        `INSERT INTO admin_settings (setting_key, setting_value, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (setting_key)
+         DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = NOW()`,
+        [key, String(settings[key] ?? '')]
+      );
+    }
+
+    res.json({ message: 'Organization settings saved successfully', updated: updates });
+  } catch (error) {
+    console.error('Error saving org settings:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+/**
+ * POST /api/razorpay/create-order
+ *
+ * The amount is resolved SERVER-SIDE and is never taken from the request body.
+ *
+ * This endpoint previously did `const { amount } = req.body` and created the
+ * Razorpay order for whatever number arrived, while verify-payment checked only
+ * the HMAC signature and never the amount. A modified request could therefore
+ * book a ₹3000 session for ₹1 and it would confirm cleanly through the whole
+ * pipeline. Callers now identify WHAT is being paid for, not HOW MUCH:
+ *
+ *   { slug | serviceId, email, phone }  — public booking page
+ *   { bookingId }                       — admin payment link, amount already
+ *                                         pinned on the booking row by an
+ *                                         authenticated admin
+ */
 app.post('/api/razorpay/create-order', async (req, res) => {
   try {
-    const { amount } = req.body;
-    if (!amount || isNaN(amount)) {
-      return res.status(400).json({ error: 'Valid amount is required' });
+    const { slug, serviceId, email, phone, bookingId } = req.body || {};
+
+    let amount: number;
+    let priceMeta: { source: string; serviceId: number | null } = { source: 'booking', serviceId: null };
+
+    if (bookingId) {
+      // Admin payment-link path: the admin already set and stored the amount.
+      const bRes = await pool.query(
+        `SELECT invitee_payment_amount, service_id, booking_status
+           FROM bookings WHERE booking_id = $1 LIMIT 1`,
+        [bookingId]
+      );
+      if (bRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Booking not found' });
+      }
+      amount = Number(bRes.rows[0].invitee_payment_amount || 0);
+      priceMeta = { source: 'booking', serviceId: bRes.rows[0].service_id ?? null };
+    } else if (slug || serviceId) {
+      const price = await resolvePrice(pool, {
+        serviceId: serviceId ? Number(serviceId) : null,
+        slug: slug || null,
+        clientEmail: email,
+        clientPhone: phone,
+      });
+      amount = price.amount;
+      priceMeta = { source: price.source, serviceId: price.serviceId };
+      logPriceResolution(pool, price, { context: 'order', clientEmail: email, clientPhone: phone })
+        .catch(() => {});
+    } else {
+      return res.status(400).json({ error: 'slug, serviceId or bookingId is required' });
+    }
+
+    if (!(amount > 0)) {
+      return res.status(400).json({ error: 'This session has no payable amount.' });
     }
 
     const { rows } = await pool.query('SELECT razorpay_key_id, razorpay_key_secret FROM payment_settings ORDER BY id ASC LIMIT 1');
@@ -7250,7 +7896,15 @@ app.post('/api/razorpay/create-order', async (req, res) => {
       return res.status(500).json({ error: 'Failed to create order with Razorpay' });
     }
 
-    res.json({ order_id: order.id, amount: order.amount, currency: order.currency });
+    res.json({
+      order_id: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      // Rupees, for the client to display. order.amount is in paise.
+      resolved_amount: amount,
+      price_source: priceMeta.source,
+      service_id: priceMeta.serviceId,
+    });
   } catch (error: any) {
     console.error('Error creating Razorpay order:', error);
     res.status(500).json({ error: error.message || 'Error communicating with Razorpay' });
@@ -7684,6 +8338,36 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
       }
     }
 
+    // 9. Lock in this client's rate for this therapy.
+    //
+    // Runs inside the same transaction, and only for the winner of the atomic
+    // claim above — so the webhook, the browser's verify-payment call, and the
+    // pending-payment cron racing to confirm the same booking cannot produce
+    // duplicate or conflicting locks.
+    //
+    // From here on this client keeps this price for this therapy, and a future
+    // price rise reaches only people who have never booked it.
+    try {
+      const priced = await client.query(
+        `SELECT service_id, invitee_payment_amount, invitee_email, invitee_phone, price_source
+           FROM bookings WHERE booking_id = $1`,
+        [bookingId]
+      );
+      const row = priced.rows[0];
+      if (row?.service_id) {
+        await recordPriceLock(client, {
+          serviceId: row.service_id,
+          clientEmail: row.invitee_email,
+          clientPhone: row.invitee_phone,
+          amount: Number(row.invitee_payment_amount || 0),
+          bookingId,
+          resolvedFrom: row.price_source,
+        });
+      }
+    } catch (lockErr) {
+      console.error('[processConfirmedBooking] price lock write failed (non-fatal):', lockErr);
+    }
+
     // Commit transaction if all database operations succeed
     await client.query('COMMIT');
     console.log(`[verify-payment] ✅ Database transaction committed for booking ${bookingId}`);
@@ -7865,6 +8549,38 @@ app.post('/api/razorpay/verify-payment', async (req, res) => {
       }
     } catch (fetchErr) {
       console.error('[verify-payment] Failed to fetch payment deep details:', fetchErr);
+    }
+
+    // 3. Assert the client actually paid what the booking says they owe.
+    //
+    // The signature proves Razorpay authorised THIS payment for THIS order; it
+    // says nothing about the amount. With the order amount now resolved
+    // server-side this should never fire, so treat it as a tripwire.
+    //
+    // Deliberately does NOT reject: the money has already moved, and refusing
+    // to confirm would leave a paid client with no booking. Flag it and let an
+    // admin decide.
+    if (paymentInfo && paymentInfo.amount != null) {
+      const paidPaise = Number(paymentInfo.amount);
+      const owedPaise = Math.round(Number(booking.invitee_payment_amount || 0) * 100);
+      if (owedPaise > 0 && paidPaise !== owedPaise) {
+        console.error(
+          `[verify-payment] AMOUNT MISMATCH on booking ${bookingId}: ` +
+          `paid ₹${paidPaise / 100} but booking says ₹${owedPaise / 100}. Flagging for review.`
+        );
+        await pool.query(
+          `UPDATE payments SET failure_reason = $1, updated_at = NOW() WHERE booking_id = $2`,
+          [`Amount mismatch: paid ${paidPaise / 100}, expected ${owedPaise / 100}`, bookingId]
+        ).catch(() => {});
+        try {
+          await notifyAllAdmins(
+            'payment_amount_mismatch',
+            'Payment amount mismatch',
+            `Booking ${bookingId}: client paid ₹${paidPaise / 100} but the booking was priced at ₹${owedPaise / 100}.`,
+            bookingId
+          );
+        } catch { /* notification failure must not block confirmation */ }
+      }
     }
 
     await processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrderId, booking, payload, paymentInfo);
@@ -8303,6 +9019,48 @@ app.post('/api/create-booking', async (req, res) => {
 
     const publicBookingCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
 
+    const bookingResourceName = payload.isFreeConsultation
+      ? (payload.therapyName || 'Free Consultation')
+      : canonicalTherapyLabel(payload.therapyName);
+
+    const bookingServiceId = payload.serviceId
+      ? Number(payload.serviceId)
+      : await resolveServiceIdFromLabel(pool, therapistId, bookingResourceName);
+
+    const bookingPrice = await resolvePrice(pool, {
+      serviceId: bookingServiceId,
+      clientEmail: payload.clientEmail,
+      clientPhone: payload.clientWhatsApp,
+    });
+
+    // This endpoint is reached without a payment step in three legitimate cases:
+    // a genuinely free session, an admin recording a QR/cash payment, and a
+    // Razorpay booking arriving with a verified payment id.
+    //
+    // `isFreeConsultation` is computed in the BROWSER from the charges string,
+    // so on its own it let a tampered request book a ₹3000 session for free —
+    // the same class of hole as the client-supplied amount in create-order.
+    // A public caller claiming "free" is now checked against the resolved price.
+    const claimsPaid = Boolean(payload.payment_id || payload.razorpay_payment_id)
+      || payload.paymentMode === 'qr' || payload.paymentMode === 'cash';
+    if (!payload.isAdmin && !claimsPaid && bookingPrice.amount > 0) {
+      console.warn(
+        `[Create Booking] Rejected unpaid booking for a chargeable therapy. ` +
+        `service=${bookingServiceId} resolved=₹${bookingPrice.amount} client=${payload.clientEmail}`
+      );
+      return res.status(402).json({
+        error: 'This session requires payment. Please complete checkout to confirm your booking.',
+        amount: bookingPrice.amount,
+      });
+    }
+
+    // An admin may deliberately charge something other than list price (a
+    // concession, a package rate). Their figure wins; everyone else gets the
+    // resolved one.
+    const finalAmount = payload.isAdmin
+      ? Number(payload.amount ?? payload.paymentDetails?.amount ?? 0)
+      : bookingPrice.amount;
+
     await pool.query(
       `INSERT INTO bookings (
         booking_id, invitee_id, source, invitee_name, invitee_email, invitee_phone, invitee_timezone,
@@ -8311,8 +9069,9 @@ app.post('/api/create-booking', async (req, res) => {
         booking_status, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id, google_event_id,
         payment_id, payment_status, invitee_payment_gateway, invitee_question,
+        service_id, price_source, quoted_amount,
         invitee_created_at, booking_updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, NOW(), NOW())`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, NOW(), NOW())`,
       [
         booking_id,
         invitee_id,
@@ -8321,12 +9080,12 @@ app.post('/api/create-booking', async (req, res) => {
         payload.clientEmail,
         payload.clientWhatsApp,
         payload.timezone || 'Asia/Kolkata',
-        payload.isFreeConsultation ? (payload.therapyName || 'Free Consultation') : canonicalTherapyLabel(payload.therapyName),
+        bookingResourceName,
         startAt.toISOString(),
         endAt.toISOString(),
         inviteeTime,
         hostTime,
-        payload.amount || payload.paymentDetails?.amount || 0,
+        finalAmount,
         payload.currency || 'INR',
         'confirmed',
         publicBookingCheckinUrl,
@@ -8339,12 +9098,20 @@ app.post('/api/create-booking', async (req, res) => {
         payload.payment_id || payload.razorpay_payment_id || null,
         (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') ? 'Paid' : (payload.payment_id ? 'Paid' : (payload.isFreeConsultation ? 'Free' : 'Pending')),
         (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') ? (payload.paymentMode === 'qr' ? 'QR' : 'Cash') : (payload.payment_gateway || null),
-        payload.invitee_question || payload.notes || null
+        payload.invitee_question || payload.notes || null,
+        bookingPrice.serviceId,
+        payload.isAdmin ? 'admin_manual' : bookingPrice.source,
+        bookingPrice.amount
       ]
     );
 
+    logPriceResolution(pool, bookingPrice, {
+      context: 'booking', bookingId: booking_id,
+      clientEmail: payload.clientEmail, clientPhone: payload.clientWhatsApp,
+    }).catch(() => {});
+
     // If payment was made directly (QR/Cash) or it's a Free Consultation, record it in the payments table
-    const paymentAmount = payload.amount || payload.paymentDetails?.amount || 0;
+    const paymentAmount = finalAmount;
     if (payload.paymentMode === 'qr' || payload.paymentMode === 'cash' || payload.isFreeConsultation || paymentAmount === 0) {
       await pool.query(
         `INSERT INTO payments (
@@ -8539,6 +9306,25 @@ app.post('/api/create-pending-booking', async (req, res) => {
     const origin = req.get('origin') || 'http://localhost:3004';
     const publicBookingCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
 
+    const resourceName = payload.isFreeConsultation
+      ? (payload.therapyName || 'Free Consultation')
+      : canonicalTherapyLabel(payload.therapyName);
+
+    // Re-resolve rather than trusting payload.amount. The browser has already
+    // been quoted this price and the Razorpay order was created for it
+    // server-side, but the booking row is what refunds and reporting read, so
+    // it gets its own authoritative resolution.
+    const serviceId = payload.serviceId
+      ? Number(payload.serviceId)
+      : (await resolvePrice(pool, { slug: payload.slug || null })).serviceId
+        ?? await resolveServiceIdFromLabel(pool, therapistId, resourceName);
+
+    const price = await resolvePrice(pool, {
+      serviceId,
+      clientEmail: payload.clientEmail,
+      clientPhone: payload.clientWhatsApp,
+    });
+
     await pool.query(
       `INSERT INTO bookings (
         booking_id, invitee_id, source, invitee_name, invitee_email, invitee_phone, invitee_timezone,
@@ -8548,17 +9334,18 @@ app.post('/api/create-pending-booking', async (req, res) => {
         razorpay_order_id, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, mask_id,
         booking_invitee_time, booking_host_time, invitee_question,
+        service_id, price_source, quoted_amount,
         invitee_created_at, booking_updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, NOW(), NOW())`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27, NOW(), NOW())`,
       [
         booking_id, invitee_id, 'Direct Booking',
         payload.clientName || 'Unknown Client',
         payload.clientEmail,
         payload.clientWhatsApp,
         payload.timezone || 'Asia/Kolkata',
-        payload.isFreeConsultation ? (payload.therapyName || 'Free Consultation') : canonicalTherapyLabel(payload.therapyName),
+        resourceName,
         startAt.toISOString(), endAt.toISOString(),
-        payload.amount || 0, 'INR',
+        price.amount, 'INR',
         'payment_pending', 'Pending', 'Razorpay',
         payload.razorpayOrderId,
         publicBookingCheckinUrl,
@@ -8566,9 +9353,15 @@ app.post('/api/create-pending-booking', async (req, res) => {
         payload.sessionMode === 'online' ? 'Online Video Call' : 'In Person (Pune)',
         maskId,
         '', '',
-        payload.invitee_question || payload.notes || null
+        payload.invitee_question || payload.notes || null,
+        price.serviceId, price.source, price.amount
       ]
     );
+
+    logPriceResolution(pool, price, {
+      context: 'booking', bookingId: booking_id,
+      clientEmail: payload.clientEmail, clientPhone: payload.clientWhatsApp,
+    }).catch(() => {});
 
     // Insert pending payment record
     await pool.query(
@@ -8580,7 +9373,7 @@ app.post('/api/create-pending-booking', async (req, res) => {
         booking_id,
         payload.clientName || 'Unknown Client',
         payload.clientEmail,
-        payload.amount || 0,
+        price.amount,
         'INR',
         'Razorpay',
         payload.razorpayOrderId
@@ -10462,18 +11255,31 @@ app.post('/api/admin/generate-payment-link', requireRole(['admin','superadmin','
     );
     const maskId = maskRes.rows[0].id;
 
+    const linkResourceName = /free consultation/i.test(serviceType || '')
+      ? serviceType
+      : canonicalTherapyLabel(serviceType);
+
+    // The amount stays whatever this authenticated admin entered — a
+    // concession or package rate is a legitimate reason to depart from list
+    // price. service_id is still recorded so the booking joins the pricing
+    // tables, and price_source marks it as a hand-set figure rather than
+    // something the engine produced.
+    const linkServiceId = await resolveServiceIdFromLabel(pool, resolvedTherapistId, linkResourceName);
+
     await pool.query(
       `INSERT INTO bookings (
         booking_id, therapist_id, invitee_name, invitee_email, invitee_phone,
         booking_start_at, booking_end_at, booking_status, payment_status, invitee_payment_amount,
         invitee_payment_currency, booking_resource_name, booking_mode, invitee_timezone,
-        booking_invitee_time, booking_host_time, booking_host_name, mask_id, invitee_created_at, booking_updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, $12, $13, $14, $15, $16, $17, NOW(), NOW())`,
+        booking_invitee_time, booking_host_time, booking_host_name, mask_id,
+        service_id, price_source, quoted_amount, invitee_created_at, booking_updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW(), NOW())`,
       [
         bookingId, resolvedTherapistId, clientName, clientEmail, clientPhone,
         startObj.toISOString(), endObj.toISOString(), 'waiting_for_payment', 'Pending', amount,
-        (/free consultation/i.test(serviceType || '') ? serviceType : canonicalTherapyLabel(serviceType)),
-        bookingMode, clientTz, inviteeTime, hostTime, therapistName, maskId
+        linkResourceName,
+        bookingMode, clientTz, inviteeTime, hostTime, therapistName, maskId,
+        linkServiceId, 'admin_manual', amount
       ]
     );
 

@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { User, Search, Loader, Plus, Copy, ExternalLink, ChevronDown, Trash2, Power, MoreVertical } from 'lucide-react';
+import { User, Search, Loader, Plus, Copy, ExternalLink, ChevronDown, Trash2, Power, MoreVertical, Ban, Edit, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { TherapyDetailsModal } from './TherapyDetailsModal';
+import { displayTherapistName, isPlatformTherapist } from '../lib/platformTherapist';
 interface TherapyService {
   id: number;
   title: string;
@@ -27,13 +29,16 @@ export function TherapyCalendars() {
   const [error, setError] = useState('');
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [confirmDialog, setConfirmDialog] = useState<{ type: 'delete' | 'deactivate' | 'activate', id: number, title: string } | null>(null);
+  // Only deletion is confirmed from this page now; activate/deactivate moved
+  // into the therapy's edit page.
+  const [confirmDialog, setConfirmDialog] = useState<{ type: 'delete', id: number, title: string } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [otpModalVisible, setOtpModalVisible] = useState(false);
   const [otpInput, setOtpInput] = useState('');
   const [otpLoading, setOtpLoading] = useState(false);
   const [pendingOtpId, setPendingOtpId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const [selectedTherapy, setSelectedTherapy] = useState<TherapyService | null>(null);
   const navigate = useNavigate();
 
   const handleCopy = (e: React.MouseEvent, link: string, id: number) => {
@@ -63,10 +68,47 @@ export function TherapyCalendars() {
     }
   };
 
-  const filteredCalendars = calendars.filter(item =>
+  // Two independent "active" flags matter here: therapist_is_active (whole
+  // therapist switched off) and is_active (this one calendar switched off).
+  const isCalendarActive = (c: TherapyService) => c.is_active !== false;
+  const isTherapistActive = (c: TherapyService) => c.therapist_is_active !== false;
+
+  // A deactivated therapist's calendars are dead — their booking links are
+  // already disabled — so they are hidden from this page entirely rather than
+  // listed as unusable entries. Counted so the omission is visible, not silent.
+  const hiddenTherapists = new Set(
+    calendars.filter(c => !isTherapistActive(c)).map(c => c.therapist_name || 'Unassigned')
+  );
+  const visibleCalendars = calendars.filter(isTherapistActive);
+
+  const filteredCalendars = visibleCalendars.filter(item =>
     item.therapist_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     item.title?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const groupedCalendars = Object.entries(
+    filteredCalendars.reduce((acc, calendar) => {
+      const therapistName = calendar.therapist_name || 'Unassigned';
+      if (!acc[therapistName]) acc[therapistName] = [];
+      acc[therapistName].push(calendar);
+      return acc;
+    }, {} as Record<string, TherapyService[]>)
+  )
+    .map(([therapistName, therapistCalendars]) => [
+      therapistName,
+      [...therapistCalendars].sort((a, b) => {
+        if (isCalendarActive(a) !== isCalendarActive(b)) return isCalendarActive(a) ? -1 : 1;
+        return (a.title || '').localeCompare(b.title || '');
+      }),
+    ] as [string, TherapyService[]])
+    // Every remaining group belongs to an active therapist, so ordering is by
+    // whether the group still has a live calendar, then by name.
+    .sort(([nameA, calsA], [nameB, calsB]) => {
+      const aHasLive = calsA.some(isCalendarActive);
+      const bHasLive = calsB.some(isCalendarActive);
+      if (aHasLive !== bHasLive) return aHasLive ? -1 : 1;
+      return nameA.localeCompare(nameB);
+    });
 
   const handleDeleteCalendar = async () => {
     if (!confirmDialog || confirmDialog.type !== 'delete') return;
@@ -125,50 +167,24 @@ export function TherapyCalendars() {
     }
   };
 
-  const handleDeactivateCalendar = async () => {
-    if (!confirmDialog || confirmDialog.type !== 'deactivate') return;
-    try {
-      setActionLoading(true);
-      const res = await fetch(`/api/therapy-calendars/${confirmDialog.id}/deactivate`, { method: 'PATCH' });
-      if (!res.ok) throw new Error('Failed to deactivate calendar');
-      setCalendars(calendars.map(c =>
-        c.id === confirmDialog.id ? { ...c, is_active: false } : c
-      ));
-      setConfirmDialog(null);
-      setExpandedId(null);
-    } catch (err: any) {
-      setError(err.message || 'Failed to deactivate calendar');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
-  const handleActivateCalendar = async () => {
-    if (!confirmDialog || confirmDialog.type !== 'activate') return;
-    try {
-      setActionLoading(true);
-      const res = await fetch(`/api/therapy-calendars/${confirmDialog.id}/activate`, { method: 'PATCH' });
-      if (!res.ok) throw new Error('Failed to activate calendar');
-      setCalendars(calendars.map(c =>
-        c.id === confirmDialog.id ? { ...c, is_active: true } : c
-      ));
-      setConfirmDialog(null);
-      setExpandedId(null);
-    } catch (err: any) {
-      setError(err.message || 'Failed to activate calendar');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
   return (
-    <div className="h-full flex flex-col p-6 animate-fade-in bg-gray-50">
+    // Scrolling lives on this outer element rather than on the card list, so the
+    // header row (description, search, Add New Therapy) scrolls away with the
+    // content instead of staying pinned.
+    <div className="h-full flex flex-col p-6 animate-fade-in bg-gray-50 overflow-y-auto">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-teal-800">Therapy Calendars</h1>
-          <p className="text-gray-500 text-sm mt-1">Manage and view all therapist booking calendars</p>
+          <p className="text-gray-500 text-sm">
+            Manage and view all therapies
+            {hiddenTherapists.size > 0 && (
+              <span className="text-gray-400">
+                {' '}· {hiddenTherapists.size} deactivated therapist
+                {hiddenTherapists.size === 1 ? '' : 's'} hidden
+              </span>
+            )}
+          </p>
         </div>
-        
+
         <div className="flex items-center gap-4">
           <div className="relative">
             <input
@@ -182,11 +198,11 @@ export function TherapyCalendars() {
           </div>
           {user?.username !== 'Test' && (
             <button
-              onClick={() => navigate('/admin/therapy-calendars/new')}
+              onClick={() => navigate('/admin/userSettings/therapies/new')}
               className="flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors"
             >
               <Plus size={18} />
-              Create New Calendar
+              Add New Therapy
             </button>
           )}
         </div>
@@ -204,28 +220,50 @@ export function TherapyCalendars() {
           <Loader className="animate-spin text-teal-600" size={32} />
         </div>
       ) : (
-        <div className="flex-1 flex flex-col overflow-y-auto pr-2 pb-10">
+        <div className="flex-1 flex flex-col pr-2 pb-10">
           {filteredCalendars.length > 0 ? (
             <div className="space-y-8">
-              {Object.entries(
-                filteredCalendars.reduce((acc, calendar) => {
-                  const therapistName = calendar.therapist_name || 'Unassigned';
-                  if (!acc[therapistName]) acc[therapistName] = [];
-                  acc[therapistName].push(calendar);
-                  return acc;
-                }, {} as Record<string, TherapyService[]>)
-              ).map(([therapistName, therapistCalendars]) => (
+              {groupedCalendars.map(([therapistName, therapistCalendars]) => {
+                const first = therapistCalendars[0];
+                const therapistInactive =
+                  therapistCalendars.length > 0 && first.therapist_is_active === false;
+                const therapistId = first?.therapist_id || '';
+                const isPlatform = isPlatformTherapist(therapistName, therapistId);
+                const shownName = displayTherapistName(therapistName, therapistId);
+                // "Unassigned" has no therapist to prefill, and a deactivated
+                // therapist would only get dead calendars, so the add card is
+                // withheld in both cases.
+                const canAddTherapy =
+                  user?.username !== 'Test' && !!therapistId && therapistName !== 'Unassigned';
+                return (
                 <div key={therapistName} className="bg-transparent">
                   {/* Therapist Header */}
-                  <div className="flex items-center gap-4 mb-4 bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                    <div className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-sm" style={{ backgroundColor: '#21615D' }}>
-                      {therapistName !== 'Unassigned' ? therapistName.charAt(0).toUpperCase() : '?'}
+                  <div className={`flex items-center gap-4 mb-4 p-4 rounded-lg shadow-sm border ${
+                    therapistInactive
+                      ? 'bg-gray-50 border-gray-200 border-l-4 border-l-red-400'
+                      : 'bg-white border-gray-200'
+                  }`}>
+                    <div
+                      className="w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg shadow-sm"
+                      style={{ backgroundColor: therapistInactive ? '#9CA3AF' : '#21615D' }}
+                    >
+                      {isPlatform
+                        ? <Sparkles size={22} />
+                        : therapistName !== 'Unassigned' ? shownName.charAt(0).toUpperCase() : '?'}
                     </div>
                     <div className="flex-1 flex items-center gap-3">
-                      <h2 className="text-lg font-bold text-gray-900">{therapistName}</h2>
-                      {therapistCalendars.length > 0 && therapistCalendars[0].therapist_is_active === false && (
-                        <span className="text-[10px] font-bold text-red-700 bg-red-100 px-2 py-1 rounded-md uppercase tracking-wider">
-                          Inactive
+                      <h2 className={`text-lg font-bold ${therapistInactive ? 'text-gray-500' : 'text-gray-900'}`}>
+                        {shownName}
+                      </h2>
+                      {isPlatform && (
+                        <span className="text-[10px] font-bold text-teal-800 bg-teal-100 border border-teal-200 px-2 py-1 rounded-md uppercase tracking-wider">
+                          Platform
+                        </span>
+                      )}
+                      {therapistInactive && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-2 py-1 rounded-md uppercase tracking-wider">
+                          <Ban size={10} />
+                          Deactivated
                         </span>
                       )}
                     </div>
@@ -236,17 +274,31 @@ export function TherapyCalendars() {
                     {therapistCalendars.map((item, index) => {
                       const cleanSlug = item.slug ? item.slug.replace(/^\/+/, '') : '';
                       const fullLink = `${window.location.origin}/book/${cleanSlug}`;
+                      const calendarInactive = item.is_active === false;
 
                       return (
                         <div
                           key={`${item.id}-${index}`}
-                          className="bg-white rounded-xl shadow-sm border hover:shadow-md transition-all overflow-hidden flex flex-col cursor-pointer"
-                          style={{ borderColor: '#E5E7EB' }}
-                          onClick={() => navigate(`/admin/therapy-calendars/${item.id}`)}
+                          className={`rounded-xl shadow-sm border transition-all overflow-hidden flex flex-col cursor-pointer ${
+                            calendarInactive
+                              ? 'bg-gray-50 border-gray-200 border-l-4 border-l-red-400 opacity-75 hover:opacity-100'
+                              : 'bg-white border-gray-200 hover:shadow-md'
+                          }`}
+                          onClick={() => setSelectedTherapy(item)}
                         >
                           <div className="p-5 flex-1">
                             <div className="flex justify-between items-start mb-3">
-                              <h3 className="text-base font-bold text-gray-900 pr-4 leading-tight">{item.title}</h3>
+                              <div className="pr-4 flex-1 min-w-0">
+                                <h3 className={`text-base font-bold leading-tight ${calendarInactive ? 'text-gray-500' : 'text-gray-900'}`}>
+                                  {item.title}
+                                </h3>
+                                {calendarInactive && (
+                                  <span className="inline-flex items-center gap-1 mt-1.5 text-[10px] font-bold text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded-md uppercase tracking-wider">
+                                    <Ban size={10} />
+                                    Deactivated
+                                  </span>
+                                )}
+                              </div>
                               {user?.username !== 'Test' && (
                                 <div className="relative group flex-shrink-0" onClick={(e) => e.stopPropagation()}>
                                   <button className="text-gray-400 hover:text-gray-600 p-1">
@@ -271,6 +323,13 @@ export function TherapyCalendars() {
                                       <ExternalLink size={12} />
                                       Open Link
                                     </a>
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); navigate(`/admin/userSettings/therapies/${item.id}`); }}
+                                      className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
+                                    >
+                                      <Edit size={12} />
+                                      Edit
+                                    </button>
                                     <button
                                       onClick={(e) => { e.stopPropagation(); setConfirmDialog({ type: 'delete', id: item.id, title: item.title }); }}
                                       className="w-full text-left px-4 py-2 hover:bg-red-50 text-red-600 text-xs flex items-center gap-2"
@@ -324,28 +383,48 @@ export function TherapyCalendars() {
                                 </div>
                               </>
                             )}
-                            <div className="flex items-center gap-4 ml-4">
-                              {/* Toggle switch for active/inactive */}
-                              {user?.username !== 'Test' && (
-                                <div 
-                                  className={`w-10 h-5 flex items-center rounded-full p-1 cursor-pointer transition-colors ${item.is_active !== false ? 'bg-teal-600' : 'bg-gray-300'}`}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setConfirmDialog({ type: item.is_active !== false ? 'deactivate' : 'activate', id: item.id, title: item.title });
-                                  }}
-                                  title={item.is_active !== false ? 'Active' : 'Inactive'}
-                                >
-                                  <div className={`bg-white w-3.5 h-3.5 rounded-full shadow-sm transform transition-transform ${item.is_active !== false ? 'translate-x-4' : 'translate-x-0'}`}></div>
-                                </div>
-                              )}
-                            </div>
                           </div>
                         </div>
                       );
                     })}
+
+                    {/* Add-therapy card. Carries therapistId so the create page
+                        prefills the therapist, which in turn cascades into their
+                        schedule, availability and therapy-type options. */}
+                    {canAddTherapy && (
+                      <button
+                        onClick={() => navigate(`/admin/userSettings/therapies/new?therapistId=${encodeURIComponent(therapistId)}`)}
+                        disabled={therapistInactive}
+                        title={
+                          therapistInactive
+                            ? `${shownName} is deactivated — reactivate before adding therapies`
+                            : `Add a new therapy for ${shownName}`
+                        }
+                        className={`rounded-xl border-2 border-dashed flex flex-col items-center justify-center text-center p-5 min-h-[190px] transition-all ${
+                          therapistInactive
+                            ? 'border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed'
+                            : 'border-gray-300 bg-white/50 hover:border-teal-400 hover:bg-teal-50/40 cursor-pointer group'
+                        }`}
+                      >
+                        <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-3 transition-colors ${
+                          therapistInactive
+                            ? 'bg-gray-200 text-gray-400'
+                            : 'bg-teal-100 text-teal-700 group-hover:bg-teal-600 group-hover:text-white'
+                        }`}>
+                          <Plus size={24} />
+                        </div>
+                        <span className={`font-semibold text-sm ${therapistInactive ? 'text-gray-400' : 'text-gray-800'}`}>
+                          Add New Therapy
+                        </span>
+                        <span className={`text-xs mt-1 ${therapistInactive ? 'text-gray-400' : 'text-gray-500'}`}>
+                          for {shownName}
+                        </span>
+                      </button>
+                    )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="flex-1 flex items-center justify-center">
@@ -358,19 +437,11 @@ export function TherapyCalendars() {
       {confirmDialog && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">
-              {confirmDialog.type === 'delete' ? 'Delete Calendar' : confirmDialog.type === 'activate' ? 'Activate Calendar' : 'Deactivate Calendar'}
-            </h3>
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Delete Calendar</h3>
             <p className="text-gray-600 mb-2">
               <strong>{confirmDialog.title}</strong>
             </p>
-            <p className="text-gray-600 mb-6">
-              {confirmDialog.type === 'delete'
-                ? 'This will delete the calendar permanently.'
-                : confirmDialog.type === 'activate'
-                ? 'This will activate the calendar and allow accepting bookings.'
-                : 'This will deactivate the calendar and stop accepting bookings.'}
-            </p>
+            <p className="text-gray-600 mb-6">This will delete the calendar permanently.</p>
             <div className="flex gap-3">
               <button
                 onClick={() => setConfirmDialog(null)}
@@ -380,17 +451,11 @@ export function TherapyCalendars() {
                 Cancel
               </button>
               <button
-                onClick={confirmDialog.type === 'delete' ? handleDeleteCalendar : confirmDialog.type === 'activate' ? handleActivateCalendar : handleDeactivateCalendar}
+                onClick={handleDeleteCalendar}
                 disabled={actionLoading}
-                className={`flex-1 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-50 ${
-                  confirmDialog.type === 'delete'
-                    ? 'bg-red-600 hover:bg-red-700'
-                    : confirmDialog.type === 'activate'
-                    ? 'bg-green-600 hover:bg-green-700'
-                    : 'bg-yellow-600 hover:bg-yellow-700'
-                }`}
+                className="flex-1 px-4 py-2 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-50 bg-red-600 hover:bg-red-700"
               >
-                {actionLoading ? 'Processing...' : confirmDialog.type === 'delete' ? 'Delete' : confirmDialog.type === 'activate' ? 'Activate' : 'Deactivate'}
+                {actionLoading ? 'Processing...' : 'Delete'}
               </button>
             </div>
           </div>
@@ -429,6 +494,14 @@ export function TherapyCalendars() {
             </div>
           </div>
         </div>
+      )}
+
+      {selectedTherapy && (
+        <TherapyDetailsModal
+          therapy={selectedTherapy}
+          onClose={() => setSelectedTherapy(null)}
+          onEdit={() => navigate(`/admin/userSettings/therapies/${selectedTherapy.id}`)}
+        />
       )}
     </div>
   );

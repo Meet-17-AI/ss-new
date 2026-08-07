@@ -18,14 +18,10 @@ const pool = new Pool({
   database: process.env.PGDATABASE,
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
-  max: 10, // Allowing up to 10 connections for concurrent requests
-  connectionTimeoutMillis: 10000,
-  idleTimeoutMillis: 30000,
+  max: 5, // Reduced pool size to avoid connection exhaustion
+  connectionTimeoutMillis: 30000, // Increased timeout to 30s for slow networks
+  idleTimeoutMillis: 60000, // Increased idle timeout
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-});
-
-pool.on('connect', (client) => {
-  client.query("SET timezone = 'Asia/Kolkata'");
 });
 
 pool.on('error', (err) => {

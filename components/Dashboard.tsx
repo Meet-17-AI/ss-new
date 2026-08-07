@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LayoutDashboard, Users, UserCog, Calendar, CreditCard, LogOut, PieChart, MessageCircle, ChevronUp, ChevronDown, FileText, Bell, Copy, Send, Plus, User, Eye, AlertCircle, X, RefreshCw, Settings, FileWarning, LifeBuoy, UserPlus, Headphones, Headset } from 'lucide-react';
+import { LayoutDashboard, Users, UserCog, Building2, Calendar, CreditCard, LogOut, PieChart, MessageCircle, ChevronUp, ChevronDown, FileText, Bell, Copy, Send, Plus, User, Eye, AlertCircle, X, RefreshCw, FileWarning, LifeBuoy, UserPlus, Headphones, Headset } from 'lucide-react';
 import { Logo } from './Logo';
 import { AllClients } from './AllClients';
 import { AllTherapists } from './AllTherapists';
@@ -17,9 +17,9 @@ import { AdminEditProfile } from './AdminEditProfile';
 import { CountUpNumber } from './CountUpNumber';
 import { ReportIssuePage } from './ReportIssuePage';
 import SettingsPage from './SettingsPage';
-import { TherapyCalendars } from './TherapyCalendars';
-import { TherapyCalendarDetails } from './TherapyCalendarDetails';
-import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom';
+import { UserSettingsPage } from './UserSettingsPage';
+import { OrgSettingsPage } from './OrgSettingsPage';
+import { Routes, Route, useNavigate, useLocation, Navigate, useParams } from 'react-router-dom';
 import { NotificationBell } from './NotificationBell';
 
 interface DashboardProps {
@@ -59,13 +59,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
     if (params.get('googleAuth') === 'success') {
       const newUrl = window.location.pathname + window.location.search.replace(/[?&]googleAuth=success/, '').replace(/^&/, '?');
       window.history.replaceState({}, '', newUrl);
-      navigate('/admin/appSettings/calendars');
+      navigate('/admin/orgSettings/integrations');
       alert('Google Calendar connected successfully!');
     } else if (params.get('googleAuth') === 'error') {
       const reason = params.get('reason');
       const newUrl = window.location.pathname + window.location.search.replace(/[?&]googleAuth=error/, '').replace(/[?&]reason=[^&]*/, '').replace(/^&/, '?');
       window.history.replaceState({}, '', newUrl);
-      navigate('/admin/appSettings/calendars');
+      navigate('/admin/orgSettings/integrations');
       if (reason === 'already_linked') {
         alert('This email or calendar is connected to another therapist. Please connect a different Google Calendar.');
       } else {
@@ -472,17 +472,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           </div>
           
           {user?.username !== 'Test' && (
-            <div
-              className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
-              style={{ backgroundColor: activeView === 'appSettings' ? '#F4A9365C' : 'transparent' }}
-              onClick={() => {
-                resetAllStates();
-                navigate('/admin/appSettings');
-              }}
-            >
-              <Settings size={20} className={activeView === 'appSettings' ? 'text-teal-700' : 'text-gray-700'} />
-              <span className={activeView === 'appSettings' ? 'text-teal-700' : 'text-gray-700'}>Settings</span>
-            </div>
+            <>
+              <div
+                className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
+                style={{ backgroundColor: activeView === 'userSettings' ? '#F4A9365C' : 'transparent' }}
+                onClick={() => {
+                  resetAllStates();
+                  navigate('/admin/userSettings/therapists');
+                }}
+              >
+                <UserCog size={20} className={activeView === 'userSettings' ? 'text-black' : 'text-gray-700'} />
+                <span className={activeView === 'userSettings' ? 'text-black' : 'text-gray-700'}>User Settings</span>
+              </div>
+              <div
+                className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
+                style={{ backgroundColor: activeView === 'orgSettings' ? '#F4A9365C' : 'transparent' }}
+                onClick={() => {
+                  resetAllStates();
+                  navigate('/admin/orgSettings/general');
+                }}
+              >
+                <Building2 size={20} className={activeView === 'orgSettings' ? 'text-black' : 'text-gray-700'} />
+                <span className={activeView === 'orgSettings' ? 'text-black' : 'text-gray-700'}>Organization Settings</span>
+              </div>
+            </>
           )}
         </nav>
       </div>
@@ -572,7 +585,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
 
         <div className="flex-1 overflow-auto relative p-0 m-0">
         <Routes>
-          <Route path="appSettings/*" element={<SettingsPage onBack={() => navigate('/admin/dashboard')} user={user} />} />
+          <Route path="userSettings/*" element={<UserSettingsPage user={user} />} />
+          <Route path="orgSettings/*" element={<OrgSettingsPage user={user} />} />
+          {/* Retired combined Settings shell — kept as redirects so old bookmarks
+              and the Google OAuth return URL still resolve. */}
+          <Route path="appSettings/*" element={<SettingsPage />} />
           <Route path="edit-profile" element={<AdminEditProfile user={user} onBack={() => navigate('/admin/dashboard')} />} />
           {/* One merged booking flow. Cash/QR books outright; "Send Payment Link" holds the
               slot until Razorpay confirms or the link expires. The old Create landing page
@@ -582,8 +599,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
           <Route path="create" element={<Navigate to="/admin/new-session" replace />} />
           <Route path="createBooking" element={<Navigate to="/admin/new-session" replace />} />
           <Route path="createBookingDirect" element={<Navigate to="/admin/new-session" replace />} />
-          {/* Add Therapist now lives in Settings; keep the old path working as a redirect */}
-          <Route path="newTherapist" element={<Navigate to="/admin/appSettings/new-therapist" replace />} />
+          {/* Add Therapist now lives in User Settings; keep the old path working as a redirect */}
+          <Route path="newTherapist" element={<Navigate to="/admin/userSettings/therapists/new" replace />} />
           <Route path="clients" element={
             <AllClients onClientClick={(client) => {
               const tabParam = client.tab === 'nri' ? '&tab=nri' : '';
@@ -604,9 +621,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             />
           } />
           <Route path="refunds" element={<RefundsCancellations initialTab={refundTab} />} />
-          <Route path="therapy-calendars" element={<TherapyCalendars />} />
-          <Route path="therapy-calendars/new" element={<TherapyCalendarDetails />} />
-          <Route path="therapy-calendars/:id" element={<TherapyCalendarDetails />} />
+          {/* Therapy calendars now render inside User Settings → Therapies, so they
+              keep the tab shell around them. These stay as redirects for old links. */}
+          <Route path="therapy-calendars" element={<Navigate to="/admin/userSettings/therapies" replace />} />
+          <Route path="therapy-calendars/new" element={<Navigate to="/admin/userSettings/therapies/new" replace />} />
+          <Route path="therapy-calendars/:id" element={<RedirectTherapyCalendar />} />
           <Route path="notifications" element={<Notifications userRole="admin" userId={user?.id} />} />
           <Route path="tickets" element={<TicketsPage />} />
           
@@ -1101,4 +1120,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
       </div>
     </div>
   );
+};
+
+// Preserves the :id when forwarding the retired top-level therapy-calendar
+// detail route into its new home under User Settings → Therapies.
+const RedirectTherapyCalendar: React.FC = () => {
+  const { id } = useParams();
+  return <Navigate to={`/admin/userSettings/therapies/${id}`} replace />;
 };
