@@ -1292,30 +1292,18 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
                   <h3 className="bp-section-title">Select Price</h3>
                   <div className="bp-option-card active">
                     <div className="bp-option-header">
+                      {/* Exactly one figure: whatever this client will actually be
+                          charged. The resolver already decides that — an existing
+                          client gets their held rate, a new one gets the current
+                          rate — so showing a struck-through list price alongside it,
+                          or naming which rule applied, only invites the question of
+                          why two numbers are on screen. */}
                       <div className="bp-option-icon">
                         <strong>₹{parseFloat((sessionCharges || session.charges).replace('₹', '') || '0').toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
-                        {/* A client on a rate below list — grandfathered through a
-                            price rise, or priced individually by an admin — sees
-                            the list price struck through so the difference is
-                            visible rather than silent. */}
-                        {resolvedPrice && resolvedPrice.amount < resolvedPrice.list_amount && (
-                          <span style={{ marginLeft: 8, textDecoration: 'line-through', opacity: 0.5, fontWeight: 400 }}>
-                            ₹{resolvedPrice.list_amount.toLocaleString('en-IN')}
-                          </span>
-                        )}
                       </div>
                       <Check size={16} className="bp-check-icon" />
                     </div>
-                    <p className="bp-option-desc">
-                      Session Charges
-                      {resolvedPrice?.is_special_price && (
-                        <span style={{ display: 'block', marginTop: 4, color: '#0f766e', fontWeight: 600 }}>
-                          {resolvedPrice.price_source === 'lock'
-                            ? 'Your existing client rate has been applied.'
-                            : 'A special rate has been applied to your account.'}
-                        </span>
-                      )}
-                    </p>
+                    <p className="bp-option-desc">Session Charges</p>
                   </div>
                 </div>
               )}
