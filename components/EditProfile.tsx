@@ -35,8 +35,20 @@ export const EditProfile: React.FC<EditProfileProps> = ({ user, onBack }) => {
     }
   }, [user.therapist_id]);
 
-  const handleConnectCalendar = () => {
-    window.location.href = `/api/auth/google?therapistId=${user.therapist_id}`;
+  // Ask the API for the consent URL, then navigate. A plain navigation to
+  // /api/auth/google cannot carry the auth token, so it always 401'd and the
+  // button did nothing — the identity now comes from the token server-side.
+  const handleConnectCalendar = async () => {
+    try {
+      const res = await fetch('/api/auth/google/url');
+      if (!res.ok) throw new Error(`Auth URL request failed: ${res.status}`);
+      const { url } = await res.json();
+      if (!url) throw new Error('No authorisation URL returned');
+      window.location.href = url;
+    } catch (err) {
+      console.error('Error starting Google authorisation:', err);
+      setToast({ message: 'Could not open Google authorisation. Please try again.', type: 'error' });
+    }
   };
 
   const handleDisconnectCalendar = async () => {

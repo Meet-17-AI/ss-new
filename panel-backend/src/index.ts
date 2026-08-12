@@ -350,25 +350,69 @@ const getOAuth2Client = () => {
   );
 };
 
-app.get('/api/auth/google', (req, res) => {
-  const therapistId = (req.query.therapistId as string) || 'SafeStories';
-  const adminRedirect = req.query.adminRedirect === 'true';
-  const oauth2Client = getOAuth2Client();
-  
-  const scopes = [
-    'https://www.googleapis.com/auth/calendar',
-    'https://www.googleapis.com/auth/calendar.events',
-    'https://www.googleapis.com/auth/userinfo.email'
-  ];
-  
-  const authUrl = oauth2Client.generateAuthUrl({
+const GOOGLE_OAUTH_SCOPES = [
+  'https://www.googleapis.com/auth/calendar',
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/userinfo.email'
+];
+
+// Which therapist a connect request is for. Identity comes from the verified
+// token, NEVER from the query string: therapistId in a URL is caller-controlled,
+// so the previous version let any logged-in user attach their own Google account
+// to someone else's therapist record — or read whose calendar was connected.
+//
+// Admins are the deliberate exception: the admin settings page legitimately
+// connects other therapists and the shared 'SafeStories' platform calendar.
+// adminRedirect only decides which dashboard to land on afterwards, so it is safe
+// to honour from the caller — but only for admins, so a therapist cannot be
+// bounced into the admin view.
+function resolveConnectTarget(req: any): { therapistId: string; adminRedirect: boolean } | null {
+  const isAdmin = req.user?.role === 'admin';
+  const requested = typeof req.query.therapistId === 'string' ? req.query.therapistId : '';
+  const adminRedirect = isAdmin && req.query.adminRedirect === 'true';
+
+  if (isAdmin && requested) return { therapistId: requested, adminRedirect: true };
+  if (req.user?.therapist_id) return { therapistId: String(req.user.therapist_id), adminRedirect };
+  return null;
+}
+
+function buildGoogleAuthUrl(therapistId: string, adminRedirect: boolean): string {
+  return getOAuth2Client().generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
-    scope: scopes,
+    scope: GOOGLE_OAUTH_SCOPES,
     state: JSON.stringify({ therapistId, adminRedirect })
   });
-  
-  res.redirect(authUrl);
+}
+
+// Returns the consent URL rather than redirecting to it.
+//
+// This route exists because a browser navigation cannot carry an Authorization
+// header. The older GET /api/auth/google below redirects, so it can only be
+// reached by pointing the browser at it — which the global auth gate then
+// rejects with 401. The reconnect button was therefore broken at exactly the
+// moment a therapist needed it: token dies, dashboard says "Disconnected",
+// clicking Connect does nothing.
+//
+// The frontend fetches this (fetch carries the token automatically via
+// lib/authFetch), then navigates to the returned URL.
+app.get('/api/auth/google/url', (req: any, res) => {
+  const target = resolveConnectTarget(req);
+  if (!target) {
+    return res.status(403).json({ error: 'No therapist profile is linked to this account.' });
+  }
+  res.json({ url: buildGoogleAuthUrl(target.therapistId, target.adminRedirect) });
+});
+
+// Superseded by /api/auth/google/url above. Kept so any bookmarked or cached
+// link still works when opened from an authenticated context; it now derives
+// identity the same safe way rather than trusting the query string.
+app.get('/api/auth/google', (req: any, res) => {
+  const target = resolveConnectTarget(req);
+  if (!target) {
+    return res.status(403).send('No therapist profile is linked to this account.');
+  }
+  res.redirect(buildGoogleAuthUrl(target.therapistId, target.adminRedirect));
 });
 
 app.get('/api/auth/google/callback', async (req, res) => {
@@ -464,7 +508,22 @@ app.get('/api/auth/google/callback', async (req, res) => {
   }
 });
 
-async function getAuthenticatedClient(therapist: any) {
+// Returns an authenticated client, or NULL when the therapist's Google grant can
+// no longer be used. Never returns a client whose token refresh failed — handing
+// back a dead client is what turned a routine token expiry into a silent outage:
+// callers could not tell it apart from a working one, so every downstream failure
+// was caught, logged, and ignored while the dashboard still reported "connected".
+//
+// On invalid_grant the grant is genuinely dead (revoked, expired, or the consent
+// was withdrawn) and only the therapist can restore it by reconnecting. We clear
+// the stored tokens so /api/auth/google/status reports the truth and the UI shows
+// "Disconnected" — that is what prompts the therapist to reconnect unprompted.
+//
+// Transient failures (network, 5xx, rate limit) must NOT clear tokens: the grant
+// is still good and will work on the next attempt. In that case we fall back to
+// the cached access token when it is still valid, so a brief blip at Google's
+// token endpoint does not take calendar features down.
+async function getAuthenticatedClient(therapist: any): Promise<any | null> {
   const oauth2Client = getOAuth2Client();
   oauth2Client.setCredentials({
     refresh_token: therapist.google_refresh_token,
@@ -495,10 +554,37 @@ async function getAuthenticatedClient(therapist: any) {
       });
     } else {
       console.error(`❌ [Token Refresh] No access_token in refresh response for ${therapist.name}. Credentials:`, credentials);
+      return null;
     }
   } catch (e: any) {
+    // googleapis surfaces the OAuth error code in the response body; older
+    // versions only put it in the message, so check both.
+    const reason = String(e?.response?.data?.error || e?.message || '');
     console.error(`❌ [Token Refresh] Failed to refresh token for ${therapist.name}:`, e?.message || e);
     console.error(`[Token Refresh] Error code: ${e?.code}, Error status: ${e?.status}`);
+
+    if (reason.includes('invalid_grant')) {
+      // Dead grant. Clear it so the panel stops claiming this calendar works.
+      await pool.query(
+        `UPDATE therapists
+         SET google_refresh_token = NULL, google_access_token = NULL, google_token_expiry = NULL
+         WHERE therapist_id = $1`,
+        [therapist.therapist_id]
+      );
+      console.warn(`⚠️ [Token Refresh] Grant is dead for ${therapist.name} (${therapist.therapist_id}) — cleared stored tokens. Therapist must reconnect Google Calendar.`);
+      // TODO: notify admin here (lib/email.ts + TICKET_NOTIFY_EMAILS) so a
+      // disconnect is noticed without waiting for a therapist to report it.
+      return null;
+    }
+
+    // Transient failure — the grant is still valid, so keep the tokens. Reuse the
+    // cached access token if it has real time left on it (60s safety margin).
+    const expiryMs = therapist.google_token_expiry ? new Date(therapist.google_token_expiry).getTime() : 0;
+    if (therapist.google_access_token && expiryMs > Date.now() + 60_000) {
+      console.warn(`[Token Refresh] Transient refresh failure for ${therapist.name}; using cached access token.`);
+      return oauth2Client;
+    }
+    return null;
   }
   return oauth2Client;
 }
@@ -521,6 +607,8 @@ async function getCalendarClientForBooking(bookingDetails: any): Promise<{ calen
   }
   if (!therapist || !therapist.google_refresh_token) return null;
   const oauth2Client = await getAuthenticatedClient(therapist);
+  // Grant is dead or unusable — same outcome as "no calendar connected".
+  if (!oauth2Client) return null;
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
   return { calendar, therapist };
 }
@@ -530,6 +618,16 @@ app.post('/api/auth/google/disconnect', async (req, res) => {
     const { therapistId } = req.body;
     if (!therapistId) {
       return res.status(400).json({ error: 'Therapist ID is required' });
+    }
+
+    // Ownership check. Without it any authenticated user could wipe any
+    // therapist's calendar tokens just by posting their id — disconnecting
+    // someone else's calendar silently, which looks identical to the token
+    // failure this whole change is about.
+    const isAdmin = (req as any).user?.role === 'admin';
+    const ownId = (req as any).user?.therapist_id;
+    if (!isAdmin && String(ownId ?? '') !== String(therapistId)) {
+      return res.status(403).json({ error: 'You can only disconnect your own Google Calendar.' });
     }
 
     await pool.query(
@@ -4773,6 +4871,13 @@ app.get('/api/therapist/calendar-blocks', async (req, res) => {
     const therapist = tRes.rows[0];
     const { google } = require('googleapis');
     const oauth2ClientFb = await getAuthenticatedClient(therapist);
+    if (!oauth2ClientFb) {
+      // Deliberately NO `blocks` key: an empty array here reads as "this therapist
+      // has nothing booked", which the grid renders as fully available — the exact
+      // lie this fix exists to remove. Absent means unknown; the caller must treat
+      // it as such rather than as free time.
+      return res.status(503).json({ error: 'calendar_unavailable' });
+    }
     const calendarFb = google.calendar({ version: 'v3', auth: oauth2ClientFb });
 
     const fb = await calendarFb.freebusy.query({
@@ -6997,8 +7102,15 @@ app.post('/api/fetch-slots', async (req, res) => {
           // Note: Ensure google API requires are available in scope.
           const { google } = require('googleapis');
           const oauth2ClientFb = await getAuthenticatedClient(therapist);
+          // NOTE: still fails open (slots are offered without Google blocks) —
+          // unchanged from before, but now it is an explicit decision rather than
+          // an accident. See the fail-closed discussion before changing this.
+          if (!oauth2ClientFb) {
+            console.warn(`[Slots] Google Calendar unavailable for ${therapist.name} — slots generated WITHOUT calendar blocks.`);
+            throw new Error('calendar_unavailable');
+          }
           const calendarFb = google.calendar({ version: 'v3', auth: oauth2ClientFb });
-          
+
           const timeMin = new Date(`${daysToCheck[0]}T00:00:00+05:30`);
           const timeMax = new Date(`${daysToCheck[2]}T23:59:59+05:30`);
           
@@ -7493,6 +7605,7 @@ async function processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrd
   if (therapist && therapist.google_refresh_token && !claimedEventId) {
     try {
       const oauth2Client = await getAuthenticatedClient(therapist);
+      if (!oauth2Client) throw new Error('calendar_unavailable: token refresh failed');
       const { google } = require('googleapis');
       const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
       const isOnline = (payload.sessionMode || '') === 'online' ||
@@ -8211,6 +8324,10 @@ app.post('/api/create-booking', async (req, res) => {
     if (therapist && therapist.google_refresh_token) {
       try {
         const oauth2ClientFb = await getAuthenticatedClient(therapist);
+        // NOTE: still fails open — a dead token means the booking proceeds without
+        // a Google conflict check, exactly as before. Deliberate for now; making
+        // this fail closed is a separate, revenue-affecting decision.
+        if (!oauth2ClientFb) throw new Error('calendar_unavailable: token refresh failed');
         const calendarFb = google.calendar({ version: 'v3', auth: oauth2ClientFb });
         const fb = await calendarFb.freebusy.query({
           requestBody: {
@@ -8272,6 +8389,7 @@ app.post('/api/create-booking', async (req, res) => {
       try {
         console.log(`[Create Booking] Getting authenticated client for ${therapist.name}...`);
         const oauth2Client = await getAuthenticatedClient(therapist);
+        if (!oauth2Client) throw new Error('calendar_unavailable: token refresh failed');
         console.log(`[Create Booking] Got OAuth2 client, creating calendar service...`);
         const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
