@@ -4066,27 +4066,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
               Please connect your Google Calendar to sync your availability and manage sessions seamlessly.
             </p>
             <div className="flex flex-col gap-3">
-              {/* Was an <a href> straight to /api/auth/google, which a browser
-                  loads without the auth token — the API gate returned 401 and
-                  the button appeared to do nothing. Fetch the consent URL first
-                  (the token rides along automatically), then navigate. */}
-              <button
-                onClick={async () => {
-                  try {
-                    const res = await fetch('/api/auth/google/url');
-                    if (!res.ok) throw new Error(`Auth URL request failed: ${res.status}`);
-                    const { url } = await res.json();
-                    if (!url) throw new Error('No authorisation URL returned');
-                    window.location.href = url;
-                  } catch (err) {
-                    console.error('Error starting Google authorisation:', err);
-                    alert('Could not open Google authorisation. Please try again.');
-                  }
-                }}
+              <a
+                href={`/api/auth/google?therapistId=${user.therapist_id}`}
                 className="w-full py-3 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors"
               >
                 Connect Calendar Now
-              </button>
+              </a>
               <button
                 onClick={() => setShowCalendarPopup(false)}
                 className="w-full py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"

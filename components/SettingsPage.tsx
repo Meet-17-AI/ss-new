@@ -46,23 +46,8 @@ const CalendarConnectionsAdmin: React.FC = () => {
     fetchCalendars();
   }, []);
 
-  // Fetch the consent URL first: a bare navigation carries no auth token and is
-  // rejected by the API gate. therapistId is still sent because an admin may
-  // connect on another therapist's behalf, but the server only honours it for
-  // admins and falls back to the caller's own id otherwise.
-  const handleConnect = async (therapistId: string) => {
-    try {
-      const res = await fetch(
-        `/api/auth/google/url?therapistId=${encodeURIComponent(therapistId)}&adminRedirect=true`
-      );
-      if (!res.ok) throw new Error(`Auth URL request failed: ${res.status}`);
-      const { url } = await res.json();
-      if (!url) throw new Error('No authorisation URL returned');
-      window.location.href = url;
-    } catch (err) {
-      console.error('Error starting Google authorisation:', err);
-      alert('Could not open Google authorisation. Please try again.');
-    }
+  const handleConnect = (therapistId: string) => {
+    window.location.href = `/api/auth/google?therapistId=${therapistId}&adminRedirect=true`;
   };
 
   const handleDisconnect = async (therapistId: string) => {
