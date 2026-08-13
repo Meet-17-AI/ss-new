@@ -55,7 +55,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
   const [allowedTherapists, setAllowedTherapists] = useState<string[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [hasRestrictions, setHasRestrictions] = useState(false);
-  const [paymentMode, setPaymentMode] = useState<'link' | 'qr' | 'cash' | ''>('');
+  const [paymentMode, setPaymentMode] = useState<'link' | 'qr' | 'cash' | 'wallet' | ''>('');
   const [customAmount, setCustomAmount] = useState<string>('');
   // Server-resolved price for the selected client + therapy: which rule won,
   // and what a new client would pay for comparison.
@@ -75,6 +75,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
   const [currency, setCurrency] = useState<string>('INR');
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
   const [clientType, setClientType] = useState<string>('Indian');
+  // Wallet credit held from a previously cancelled Cash/QR booking. Redeemable
+  // only here, on a dashboard-created booking.
+  const [wallet, setWallet] = useState<{ balance: number; lastCredit: any } | null>(null);
+  const [useWallet, setUseWallet] = useState(false);
+  const [walletAmount, setWalletAmount] = useState<string>('');
 
   // Guard against selecting a past date — the date picker's earliest allowed day is today.
   const todayStr = (() => {
@@ -345,6 +350,35 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
     }
   };
 
+  // Reset wallet state whenever the client identity changes, so a balance from a
+  // previously-selected client can never be applied to someone else's booking.
+  const clearWallet = () => {
+    setWallet(null);
+    setUseWallet(false);
+    setWalletAmount('');
+  };
+
+  const fetchWallet = async (phone?: string, email?: string) => {
+    if (!phone && !email) { clearWallet(); return; }
+    try {
+      const params = new URLSearchParams();
+      if (phone) params.set('phone', phone);
+      if (email) params.set('email', email);
+      const res = await fetch(`/api/wallet?${params.toString()}`);
+      if (!res.ok) { clearWallet(); return; }
+      const data = await res.json();
+      const balance = Number(data.balance) || 0;
+      if (balance <= 0) { clearWallet(); return; }
+      setWallet({
+        balance,
+        lastCredit: (data.transactions || []).find((t: any) => t.reason === 'CANCELLATION_CREDIT') || null,
+      });
+    } catch (err) {
+      console.error('Error fetching wallet:', err);
+      clearWallet();
+    }
+  };
+
   const handleExistingClientSelect = async (client: any) => {
     try {
       setIsLoadingHistory(true);
@@ -358,6 +392,9 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
       const history = await response.json();
 
       setClientBookingHistory(history);
+
+      // Same trigger as the history load — the client identity is settled here.
+      await fetchWallet(client.invitee_phone, client.invitee_email);
 
       // Restrict and auto-select based on the client's last booking history, unless it was a Free Consultation
       if (
@@ -664,6 +701,36 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
     }
   };
 
+  // How much wallet credit this booking will actually consume. Clamped to both
+  // the balance and the session price; the server clamps again independently.
+  const walletAppliedNow = (() => {
+    if (isFreeConsultation || !useWallet || !wallet || paymentMode === 'link') return 0;
+    const sessionPrice = Number(customAmount) || sessionCharges || 0;
+    return Math.max(0, Math.min(Number(walletAmount) || 0, wallet.balance, sessionPrice));
+  })();
+
+  // Remainder the client still has to hand over after wallet credit is applied.
+  const amountStillDue = Math.max((Number(customAmount) || sessionCharges || 0) - walletAppliedNow, 0);
+
+  // The price the wallet is being measured against — the admin's figure if they
+  // typed one, otherwise the rate the pricing engine resolved for this client.
+  const sessionPriceNow = Number(customAmount) || sessionCharges || 0;
+
+  // Wallet stands alone as the payment method only when it settles the session
+  // in full. A partial balance still needs Cash or QR for the remainder, and the
+  // server records that split as Wallet+Cash / Wallet+QR — so offering "Wallet"
+  // on its own there would label money as collected that nobody collected.
+  const walletCoversFull = Boolean(
+    wallet && wallet.balance > 0 && sessionPriceNow > 0 && wallet.balance >= sessionPriceNow
+  );
+
+  // Editing the amount upward after choosing Wallet can leave it no longer
+  // covering the session. Fall back to an unselected method rather than let the
+  // booking be filed as Wallet+Cash for a remainder no one agreed to take.
+  useEffect(() => {
+    if (paymentMode === 'wallet' && !walletCoversFull) setPaymentMode('');
+  }, [paymentMode, walletCoversFull]);
+
   const handleSendPaymentLink = async () => {
     if (isSubmitting) return;
     // Require an explicit session-mode choice when more than one mode is available
@@ -753,7 +820,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
       amount: !isFreeConsultation ? (Number(customAmount) || sessionCharges) : 0,
       currency: !isFreeConsultation ? currency : 'INR',
       paymentScreenshot: uploadedScreenshotUrl,
-      clientType
+      clientType,
+      // Server re-reads the live balance and clamps this; it is a request, not
+      // an instruction.
+      useWallet: !isFreeConsultation && useWallet && walletAppliedNow > 0,
+      walletAmount: !isFreeConsultation && useWallet ? walletAppliedNow : 0,
     };
     
     try {
@@ -769,7 +840,22 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
         setShowSuccessModal(true);
       } else if (response.status === 409) {
         const data = await response.json().catch(() => ({}));
-        toast.error(data.error || 'This time slot is no longer available. Please choose another slot.');
+        if (data.conflict === 'wallet') {
+          // Another admin settled this client's wallet while the form was open.
+          toast.error(data.error || 'Wallet balance has changed. Please review and try again.');
+          const refreshed = Number(data.availableBalance) || 0;
+          if (refreshed > 0) {
+            setWallet(w => (w ? { ...w, balance: refreshed } : w));
+            setWalletAmount(String(Math.min(refreshed, Number(customAmount) || sessionCharges || 0)));
+          } else {
+            clearWallet();
+          }
+        } else {
+          toast.error(data.error || 'This time slot is no longer available. Please choose another slot.');
+        }
+      } else if (response.status === 403) {
+        const data = await response.json().catch(() => ({}));
+        toast.error(data.error || 'Not permitted to create this booking.');
       } else {
         toast.error('Failed to create booking');
       }
@@ -785,7 +871,10 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
     const isTherapistSelected = isFreeConsultation || selectedTherapist;
     const baseValid = isTherapistSelected && selectedSlot && clientName.trim() && clientEmail.trim() && clientWhatsApp.trim();
     if (!isFreeConsultation) {
-      return baseValid && paymentMode !== '' && customAmount.trim() !== '';
+      // When wallet credit covers the session in full there is nothing left to
+      // collect, so a payment method is no longer required.
+      const fullyCoveredByWallet = walletAppliedNow > 0 && amountStillDue === 0;
+      return baseValid && customAmount.trim() !== '' && (fullyCoveredByWallet || paymentMode !== '');
     }
     return baseValid;
   };
@@ -1003,6 +1092,7 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
                     setCountryCode('+91');
                     // Reset booking history for cleared input
                     setClientBookingHistory(null);
+                    clearWallet();
                     setAllowedTherapies([]);
                     setAllowedTherapists([]);
                     setSelectedTherapy('');
@@ -1144,6 +1234,116 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
           <div className="pt-6 border-t">
             {!isFreeConsultation && (
               <div className="flex flex-col gap-6 mb-6">
+                {/* Wallet credit from a previously cancelled Cash/QR session. */}
+                {wallet && wallet.balance > 0 && (() => {
+                  const sessionPrice = Number(customAmount) || sessionCharges || 0;
+                  const maxApplicable = Math.min(wallet.balance, sessionPrice);
+                  const applied = useWallet ? Math.min(Number(walletAmount) || 0, maxApplicable) : 0;
+                  const remaining = Math.max(sessionPrice - applied, 0);
+                  const isLinkMode = paymentMode === 'link';
+
+                  return (
+                    <div className="p-4 rounded-lg bg-amber-50 border border-amber-200">
+                      <div className="flex items-start gap-2 mb-3">
+                        <span className="text-amber-500 font-bold">💰</span>
+                        <div className="text-sm text-amber-900">
+                          <span className="font-semibold">Wallet credit available:</span>{' '}
+                          ₹{wallet.balance.toLocaleString('en-IN')}
+                          {wallet.lastCredit && (
+                            <span className="block text-xs text-amber-700 mt-0.5">
+                              From a cancelled session
+                              {wallet.lastCredit.source_payment_mode ? ` (paid by ${wallet.lastCredit.source_payment_mode})` : ''}.
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {isLinkMode ? (
+                        <p className="text-xs text-amber-700">
+                          Wallet credit can't be combined with a payment link. Choose Cash or QR to apply it.
+                        </p>
+                      ) : (
+                        <>
+                          <label className="flex items-center gap-2 cursor-pointer mb-3">
+                            <input
+                              type="checkbox"
+                              checked={useWallet}
+                              onChange={(e) => {
+                                const on = e.target.checked;
+                                setUseWallet(on);
+                                setWalletAmount(on ? String(maxApplicable) : '');
+
+                                // The resolved rate normally fills the Amount box
+                                // already; this covers the case where it hasn't,
+                                // so the wallet is never measured against a blank.
+                                if (on && !customAmount && sessionCharges > 0) {
+                                  setCustomAmount(String(sessionCharges));
+                                }
+
+                                // Ticking this answers "how is this being paid?"
+                                // whenever the credit settles the whole session,
+                                // so select Wallet rather than making the admin
+                                // pick it separately. When the credit only covers
+                                // part, the remainder still needs Cash or QR, so
+                                // the choice is left to them.
+                                if (on && walletCoversFull) setPaymentMode('wallet');
+                                if (!on && paymentMode === 'wallet') setPaymentMode('');
+                              }}
+                              className="w-4 h-4"
+                            />
+                            <span className="text-sm font-medium text-amber-900">
+                              Apply wallet credit to this booking
+                            </span>
+                          </label>
+
+                          {useWallet && (
+                            <>
+                              <div className="flex items-center gap-3 mb-3">
+                                <label className="text-sm text-amber-900">Apply</label>
+                                <input
+                                  type="number"
+                                  value={walletAmount}
+                                  min={0}
+                                  max={maxApplicable}
+                                  onChange={(e) => {
+                                    const raw = Number(e.target.value) || 0;
+                                    // Clamped here as well as server-side: a wallet can
+                                    // never pay more than it holds, or more than the session costs.
+                                    setWalletAmount(String(Math.max(0, Math.min(raw, maxApplicable))));
+                                  }}
+                                  className="w-32 px-3 py-2 border rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                                />
+                                <span className="text-xs text-amber-700">
+                                  of ₹{maxApplicable.toLocaleString('en-IN')} applicable
+                                </span>
+                              </div>
+
+                              <div className="text-sm border-t border-amber-200 pt-3 space-y-1">
+                                <div className="flex justify-between text-amber-900">
+                                  <span>Session total</span>
+                                  <span>₹{sessionPrice.toLocaleString('en-IN')}</span>
+                                </div>
+                                <div className="flex justify-between text-amber-900">
+                                  <span>From wallet</span>
+                                  <span>− ₹{applied.toLocaleString('en-IN')}</span>
+                                </div>
+                                <div className="flex justify-between font-semibold text-amber-900 border-t border-amber-200 pt-1">
+                                  <span>
+                                    {remaining > 0
+                                      ? `To collect via ${paymentMode === 'qr' ? 'QR' : paymentMode === 'cash' ? 'Cash' : 'Cash/QR'}`
+                                      : 'To collect'}
+                                  </span>
+                                  <span>₹{remaining.toLocaleString('en-IN')}</span>
+                                </div>
+                              </div>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <label className="block text-sm font-medium mb-2">
@@ -1152,10 +1352,26 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
                     <div className="relative">
                       <select
                         value={paymentMode}
-                        onChange={(e) => setPaymentMode(e.target.value as any)}
+                        onChange={(e) => {
+                          const next = e.target.value as typeof paymentMode;
+                          setPaymentMode(next);
+                          // Picking Wallet from the dropdown is the same intent as
+                          // ticking the box above, so keep the two in step.
+                          if (next === 'wallet') {
+                            setUseWallet(true);
+                            setWalletAmount(String(Math.min(wallet?.balance ?? 0, sessionPriceNow)));
+                          } else if (next === 'link') {
+                            // Wallet credit cannot ride along with a payment link.
+                            setUseWallet(false);
+                            setWalletAmount('');
+                          }
+                        }}
                         className="w-full px-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 appearance-none bg-white pr-10"
                       >
                         <option value="">Select Payment Method</option>
+                        {/* Offered only when the balance settles the whole session
+                            — see walletCoversFull. */}
+                        {walletCoversFull && <option value="wallet">Wallet (Paid)</option>}
                         <option value="cash">Cash (Paid)</option>
                         <option value="qr">QR (Paid)</option>
                         <option value="link">Send Payment Link</option>
@@ -1254,7 +1470,11 @@ export const CreateBooking: React.FC<CreateBookingProps> = ({ onBack }) => {
               {isSubmitting
                 ? 'Processing...'
                 : (!isFreeConsultation
-                    ? (paymentMode === 'link' ? 'Send Payment Link' : (paymentMode ? 'Create Booking' : 'Select Payment Mode'))
+                    ? (paymentMode === 'link'
+                        ? 'Send Payment Link'
+                        : (walletAppliedNow > 0 && amountStillDue === 0
+                            ? 'Create Booking (Paid from Wallet)'
+                            : (paymentMode ? 'Create Booking' : 'Select Payment Mode')))
                     : 'Create Booking'
                   )
               }

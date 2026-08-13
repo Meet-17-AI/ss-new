@@ -23,6 +23,11 @@ import {
   resolvePrice, recordPriceLock, logPriceResolution, resolveServiceIdFromLabel,
   normalizeEmail, normalizePhoneDigits, parseCharges, istDateToTimestamp, syncLegacyCharges,
 } from './lib/pricing';
+import {
+  buildClientKey, isWalletEligible, getBalance, getBalanceForClient, creditWallet,
+  debitWallet, getTransactions, listWallets, getTotalLiability, remapClientKey,
+  consolidateWallet, InsufficientWalletBalance,
+} from './lib/wallet';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -295,6 +300,24 @@ app.use((req: any, res: any, next: any) => {
   });
   next();
 });
+
+// Decode the bearer token when one is present, without requiring it.
+//
+// Needed by routes on the PUBLIC_API_ROUTES allowlist that are public overall but
+// have privileged branches inside them — the global gate calls next() for those
+// paths without populating req.user, so the handler has no identity to check.
+// Returns null for missing, malformed or expired tokens; never throws.
+const getOptionalUser = (req: any): any | null => {
+  const token = req.headers?.authorization?.replace('Bearer ', '');
+  if (!token) return null;
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
+  }
+};
+
+const WALLET_REDEEM_ROLES = ['admin', 'superadmin', 'fluidadmin'];
 
 // Authorization middleware - check user role
 const requireRole = (allowedRoles: string[]) => {
@@ -4172,6 +4195,46 @@ app.post('/api/cancel-booking', async (req, res) => {
       }
     }
 
+    // 5b. Cash/QR bookings created from the dashboard have payment_id = NULL, so
+    // step 5 above skipped them entirely — there is no gateway payment to refund
+    // and by policy we do not issue one. Credit the amount to the client's wallet
+    // instead, for use against a future dashboard-created booking.
+    //
+    // The 24h rule deliberately does NOT apply here: it governs gateway refunds.
+    // Wallet credit is held money, not a refund, so a late cancellation still
+    // keeps its value.
+    //
+    // Best-effort, matching the calendar/WhatsApp/email blocks in this handler —
+    // a wallet failure must never leave the booking half-cancelled.
+    let walletCredit: { amount: number; balance: number } | null = null;
+    if (!isRefundInitiated && isWalletEligible(bookingDetails)) {
+      try {
+        const txn = await creditWallet({
+          name: bookingDetails.invitee_name,
+          phone: bookingDetails.invitee_phone,
+          email: bookingDetails.invitee_email,
+          bookingId: booking_id,
+          amount: Number(bookingDetails.invitee_payment_amount),
+          currency: bookingDetails.invitee_payment_currency || 'INR',
+          reason: 'CANCELLATION_CREDIT',
+          sourcePaymentMode: bookingDetails.invitee_payment_gateway,
+          notes: reason || null,
+        });
+        if (txn) {
+          const key = buildClientKey(bookingDetails.invitee_phone, bookingDetails.invitee_email);
+          walletCredit = {
+            amount: Number(txn.amount),
+            balance: key ? await getBalance(key) : Number(txn.amount),
+          };
+          console.log(`[Cancel Booking] Credited ₹${walletCredit.amount} to wallet for ${bookingDetails.invitee_name} (balance ₹${walletCredit.balance})`);
+        } else {
+          console.log(`[Cancel Booking] Wallet already credited for ${booking_id}; skipped.`);
+        }
+      } catch (walletErr: any) {
+        console.error('[Cancel Booking] Wallet credit failed (non-fatal):', walletErr?.message || walletErr);
+      }
+    }
+
     // 6. Send WhatsApp via AiSensy + cancellation email
     if (notify !== false) {
       // Compute a human-friendly session time once for both WhatsApp and email.
@@ -4282,7 +4345,7 @@ app.post('/api/cancel-booking', async (req, res) => {
       }
     }
 
-    res.json({ success: true, message: 'Booking cancellation forwarded successfully' });
+    res.json({ success: true, message: 'Booking cancellation forwarded successfully', walletCredit });
 
   } catch (error: any) {
     console.error('[Cancel Booking] Error:', error);
@@ -6581,6 +6644,10 @@ app.post('/api/bookings/cancel', async (req, res) => {
       return res.status(400).json({ error: 'Booking ID is required' });
     }
 
+    // Read before updating so the wallet credit below sees the payment details.
+    const existing = await pool.query('SELECT * FROM bookings WHERE booking_id = $1', [booking_id]);
+    const bookingRow = existing.rows[0];
+
     // Update booking status
     await pool.query(
       'UPDATE bookings SET booking_status = $1 WHERE booking_id = $2',
@@ -6595,10 +6662,163 @@ app.post('/api/bookings/cancel', async (req, res) => {
         `Cancelled booking for ${client_name}${reason ? ': ' + reason : ''}`, client_name, getCurrentISTTimestamp()]
     );
 
-    res.json({ success: true });
+    // Mirror the wallet credit from /api/cancel-booking. This endpoint has no
+    // frontend caller today, but leaving the two cancel paths divergent is how
+    // they silently drift apart later. The unique index makes it safe for both
+    // to run against the same booking.
+    let walletCredit: { amount: number; balance: number } | null = null;
+    if (bookingRow && isWalletEligible(bookingRow)) {
+      try {
+        const txn = await creditWallet({
+          name: bookingRow.invitee_name,
+          phone: bookingRow.invitee_phone,
+          email: bookingRow.invitee_email,
+          bookingId: booking_id,
+          amount: Number(bookingRow.invitee_payment_amount),
+          currency: bookingRow.invitee_payment_currency || 'INR',
+          reason: 'CANCELLATION_CREDIT',
+          sourcePaymentMode: bookingRow.invitee_payment_gateway,
+          notes: reason || null,
+        });
+        if (txn) {
+          const key = buildClientKey(bookingRow.invitee_phone, bookingRow.invitee_email);
+          walletCredit = {
+            amount: Number(txn.amount),
+            balance: key ? await getBalance(key) : Number(txn.amount),
+          };
+        }
+      } catch (walletErr: any) {
+        console.error('[Cancel Booking] Wallet credit failed (non-fatal):', walletErr?.message || walletErr);
+      }
+    }
+
+    res.json({ success: true, walletCredit });
   } catch (error) {
     console.error('Error cancelling booking:', error);
     res.status(500).json({ error: 'Failed to cancel booking' });
+  }
+});
+
+// ── Client wallet ────────────────────────────────────────────────────────────
+// Balance + recent statement for one client. Called by the booking form for
+// EVERY client, so a client with no wallet is a 200 with a zero balance, never
+// a 404.
+app.get('/api/wallet', async (req, res) => {
+  try {
+    const phone = typeof req.query.phone === 'string' ? req.query.phone : '';
+    const email = typeof req.query.email === 'string' ? req.query.email : '';
+    // Self-healing: pulls credit off any older phone number this client used
+    // before returning the balance, so the booking form never shows a stale zero.
+    const clientKey = await consolidateWallet(phone, email);
+
+    if (!clientKey) {
+      return res.json({ client_key: null, balance: 0, currency: 'INR', transactions: [] });
+    }
+
+    const [balance, transactions] = await Promise.all([
+      getBalance(clientKey),
+      getTransactions(clientKey, 10, 0),
+    ]);
+
+    res.json({
+      client_key: clientKey,
+      balance,
+      currency: transactions[0]?.currency || 'INR',
+      client_name: transactions[0]?.client_name || null,
+      transactions,
+    });
+  } catch (error) {
+    console.error('Error fetching wallet:', error);
+    res.status(500).json({ error: 'Failed to fetch wallet' });
+  }
+});
+
+// Full statement for the client-profile Wallet tab.
+app.get('/api/wallet/transactions', async (req, res) => {
+  try {
+    const phone = typeof req.query.phone === 'string' ? req.query.phone : '';
+    const email = typeof req.query.email === 'string' ? req.query.email : '';
+    const clientKey = typeof req.query.clientKey === 'string' && req.query.clientKey
+      ? req.query.clientKey
+      : buildClientKey(phone, email);
+
+    if (!clientKey) return res.json({ balance: 0, transactions: [] });
+
+    const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
+    const offset = parseInt(String(req.query.offset || '0'), 10) || 0;
+
+    const [balance, transactions] = await Promise.all([
+      getBalance(clientKey),
+      getTransactions(clientKey, limit, offset),
+    ]);
+    res.json({ client_key: clientKey, balance, transactions });
+  } catch (error) {
+    console.error('Error fetching wallet transactions:', error);
+    res.status(500).json({ error: 'Failed to fetch wallet transactions' });
+  }
+});
+
+// Admin view: every client currently holding credit, plus total liability.
+app.get('/api/wallets', requireRole(['admin', 'superadmin', 'fluidadmin']), async (req, res) => {
+  try {
+    const minBalance = parseFloat(String(req.query.minBalance || '0.01')) || 0.01;
+    const [wallets, totalLiability] = await Promise.all([
+      listWallets(minBalance),
+      getTotalLiability(),
+    ]);
+    res.json({ wallets, totalLiability });
+  } catch (error) {
+    console.error('Error fetching wallets:', error);
+    res.status(500).json({ error: 'Failed to fetch wallets' });
+  }
+});
+
+// Manual credit / payout. This mints money, so unlike most endpoints in this
+// file it is role-gated. Do not relax that.
+app.post('/api/wallet/adjust', requireRole(['admin', 'superadmin', 'fluidadmin']), async (req: any, res) => {
+  try {
+    const { phone, email, name, direction, amount, reason, notes } = req.body;
+
+    const numericAmount = Number(amount);
+    if (!(numericAmount > 0)) {
+      return res.status(400).json({ error: 'Amount must be greater than zero' });
+    }
+    if (direction !== 'CREDIT' && direction !== 'DEBIT') {
+      return res.status(400).json({ error: "direction must be 'CREDIT' or 'DEBIT'" });
+    }
+    // Only these two reasons are manually assignable. CANCELLATION_CREDIT and
+    // BOOKING_SETTLEMENT are written by their own flows and carry a booking id.
+    if (reason !== 'MANUAL_ADJUSTMENT' && reason !== 'REFUND_OUT') {
+      return res.status(400).json({ error: "reason must be 'MANUAL_ADJUSTMENT' or 'REFUND_OUT'" });
+    }
+    if (!buildClientKey(phone, email)) {
+      return res.status(400).json({ error: 'A phone number or email is required to identify the wallet' });
+    }
+
+    const movement = {
+      name, phone, email,
+      amount: numericAmount,
+      reason: reason as 'MANUAL_ADJUSTMENT' | 'REFUND_OUT',
+      notes: notes || null,
+      userId: req.user?.id ?? null,
+      userName: req.user?.name || req.user?.username || null,
+    };
+
+    const txn = direction === 'CREDIT'
+      ? await creditWallet(movement)
+      : await debitWallet(movement);
+
+    const balance = await getBalanceForClient(phone, email);
+    res.json({ success: true, transaction: txn, balance });
+  } catch (error: any) {
+    if (error instanceof InsufficientWalletBalance) {
+      return res.status(409).json({
+        error: 'Wallet balance is not sufficient for this adjustment',
+        availableBalance: error.availableBalance,
+      });
+    }
+    console.error('Error adjusting wallet:', error);
+    res.status(500).json({ error: 'Failed to adjust wallet' });
   }
 });
 
@@ -6704,6 +6924,9 @@ app.get('/api/refunds', async (req, res) => {
         cash: 'Cash',
         qr: 'QR',
         upi: 'UPI',
+        wallet: 'Wallet',
+        'wallet+cash': 'Wallet + Cash',
+        'wallet+qr': 'Wallet + QR',
       };
       const payment_gateway = rawGateway
         ? (gatewayLabels[rawGateway.toLowerCase()] || rawGateway)
@@ -8401,6 +8624,19 @@ async function reconcileClientContact(email?: string | null, phone?: string | nu
     const e = (email || '').trim();
     const p = (phone || '').trim();
     if (e && p) {
+      // Wallet credit is keyed on the normalised phone (see lib/wallet.ts). This
+      // function is about to rewrite invitee_phone across this client's bookings,
+      // which would move the wallet key out from under any balance they hold and
+      // orphan it. Capture the phones we are about to replace so the ledger can
+      // follow the client.
+      const priorPhonesRes = await pool.query(
+        `SELECT DISTINCT invitee_phone FROM bookings
+         WHERE LOWER(invitee_email) = LOWER($1)
+           AND COALESCE(invitee_phone, '') <> ''
+           AND COALESCE(invitee_phone, '') <> $2`,
+        [e, p]
+      );
+
       // Same email → push the latest phone onto all of this client's bookings.
       await pool.query(
         `UPDATE bookings SET invitee_phone = $1
@@ -8408,6 +8644,14 @@ async function reconcileClientContact(email?: string | null, phone?: string | nu
            AND COALESCE(invitee_phone, '') <> $1`,
         [p, e]
       );
+
+      for (const row of priorPhonesRes.rows) {
+        try {
+          await remapClientKey(row.invitee_phone, e, p, e);
+        } catch (remapErr: any) {
+          console.error('[reconcileClientContact] Wallet remap failed (non-fatal):', remapErr?.message || remapErr);
+        }
+      }
 
       // Same phone → push the latest email onto all of this client's bookings,
       // unless the new email looks like a typo of the one already on record.
@@ -9237,6 +9481,54 @@ app.post('/api/create-booking', async (req, res) => {
       });
     }
 
+    // ── Wallet settlement (validate early, debit late) ──
+    // Validated here, before the Google Calendar event is created, so an invalid
+    // wallet request cannot orphan a calendar event. The actual debit happens
+    // after the booking row exists, so a failed insert cannot burn the balance.
+    //
+    // The price is checked against payload.amount rather than the resolved
+    // finalAmount because finalAmount is not computed until after the calendar
+    // step — and for an admin (the only role allowed to redeem) finalAmount IS
+    // Number(payload.amount). It is clamped against finalAmount again at the
+    // point of use below.
+    let walletApplied = 0;
+    let walletActor: any = null;
+    if (payload.useWallet && !payload.isFreeConsultation) {
+      // This route is on the PUBLIC allowlist because it also serves the /book/*
+      // client-facing flow, so req.user is never populated here. Wallet credit is
+      // redeemable ONLY by an admin creating a booking from the dashboard —
+      // without this check anyone who knows a client's phone and email could
+      // spend that client's balance. payload.isAdmin is client-supplied and is
+      // NOT sufficient.
+      walletActor = getOptionalUser(req);
+      if (!walletActor || !WALLET_REDEEM_ROLES.includes(walletActor.role)) {
+        return res.status(403).json({
+          error: 'Wallet credit can only be applied by an admin from the dashboard.',
+          conflict: 'wallet',
+        });
+      }
+
+      // Pulls credit off any older phone number this client used, so a recent
+      // contact change does not hide their balance.
+      const clientKey = await consolidateWallet(payload.clientWhatsApp, payload.clientEmail);
+      const balance = clientKey ? await getBalance(clientKey) : 0;
+      const quotedPrice = Number(payload.amount || payload.paymentDetails?.amount) || 0;
+      const requested = Number(payload.walletAmount) || 0;
+
+      // A wallet can never over-pay a session, and never pay more than it holds.
+      walletApplied = Math.min(requested, balance, quotedPrice);
+
+      if (requested > walletApplied) {
+        // The browser's copy of the balance is stale — another admin settled this
+        // client's wallet, or the amount was tampered with in transit.
+        return res.status(409).json({
+          error: 'Wallet balance has changed. Please review the amount and try again.',
+          conflict: 'wallet',
+          availableBalance: balance,
+        });
+      }
+    }
+
     let startAt: Date;
 
     // Handle both formats: date+slot OR startTime
@@ -9431,6 +9723,30 @@ app.post('/api/create-booking', async (req, res) => {
       ? Number(payload.amount ?? payload.paymentDetails?.amount ?? 0)
       : bookingPrice.amount;
 
+    // ── Wallet-aware payment fields ──
+    // Re-clamp against the authoritative resolved price. The early check above
+    // ran before finalAmount existed, so this is what guarantees the wallet can
+    // never over-pay the session actually being booked.
+    //
+    // NOTE: invitee_payment_amount below stays the FULL session price even when
+    // the wallet covers all of it. That is deliberate and load-bearing: revenue
+    // is SUM(invitee_payment_amount) over non-cancelled bookings, and the
+    // original booking dropped out of revenue when it was cancelled. Storing 0
+    // here would lose that money permanently instead of recognising it against
+    // the session that actually happens. The wallet portion is recorded
+    // separately in wallet_amount_applied.
+    walletApplied = Math.min(walletApplied, finalAmount);
+    const walletCoversAll = walletApplied > 0 && walletApplied >= finalAmount;
+    const manualModeLabel = payload.paymentMode === 'qr' ? 'QR' : (payload.paymentMode === 'cash' ? 'Cash' : null);
+
+    const resolvedPaymentStatus = (walletCoversAll || payload.paymentMode === 'qr' || payload.paymentMode === 'cash')
+      ? 'Paid'
+      : (payload.payment_id ? 'Paid' : (payload.isFreeConsultation ? 'Free' : 'Pending'));
+
+    const resolvedPaymentGateway = walletApplied > 0
+      ? (walletCoversAll ? 'Wallet' : `Wallet+${manualModeLabel || 'Cash'}`)
+      : (manualModeLabel || payload.payment_gateway || null);
+
     await pool.query(
       `INSERT INTO bookings (
         booking_id, invitee_id, source, invitee_name, invitee_email, invitee_phone, invitee_timezone,
@@ -9466,8 +9782,8 @@ app.post('/api/create-booking', async (req, res) => {
         maskId,
         google_event_id,
         payload.payment_id || payload.razorpay_payment_id || null,
-        (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') ? 'Paid' : (payload.payment_id ? 'Paid' : (payload.isFreeConsultation ? 'Free' : 'Pending')),
-        (payload.paymentMode === 'qr' || payload.paymentMode === 'cash') ? (payload.paymentMode === 'qr' ? 'QR' : 'Cash') : (payload.payment_gateway || null),
+        resolvedPaymentStatus,
+        resolvedPaymentGateway,
         payload.invitee_question || payload.notes || null,
         bookingPrice.serviceId,
         payload.isAdmin ? 'admin_manual' : bookingPrice.source,
@@ -9475,14 +9791,52 @@ app.post('/api/create-booking', async (req, res) => {
       ]
     );
 
+    // Spend the wallet credit only now that the booking row exists, so a failed
+    // insert above cannot burn the client's balance. The debit takes an advisory
+    // lock on the client key, so two admins settling the same client serialise.
+    if (walletApplied > 0) {
+      try {
+        await debitWallet({
+          name: payload.clientName,
+          phone: payload.clientWhatsApp,
+          email: payload.clientEmail,
+          bookingId: booking_id,
+          amount: walletApplied,
+          currency: payload.currency || 'INR',
+          reason: 'BOOKING_SETTLEMENT',
+          notes: `Applied to booking ${booking_id}`,
+          userId: walletActor?.id ?? null,
+          userName: walletActor?.username || null,
+        });
+        await pool.query(
+          'UPDATE bookings SET wallet_amount_applied = $1 WHERE booking_id = $2',
+          [walletApplied, booking_id]
+        );
+        console.log(`[Create Booking] Applied ₹${walletApplied} wallet credit to ${booking_id}`);
+      } catch (walletErr: any) {
+        // The balance was validated above, so reaching here means a genuine race
+        // or a ledger problem. The booking is already created and the slot held,
+        // so do not fail the request — record the shortfall loudly instead and
+        // let an admin settle it with a manual adjustment.
+        console.error(`[Create Booking] Wallet debit FAILED for ${booking_id} (₹${walletApplied} not deducted):`, walletErr?.message || walletErr);
+        walletApplied = 0;
+        await pool.query(
+          `UPDATE bookings SET invitee_payment_gateway = $1, payment_status = $2 WHERE booking_id = $3`,
+          [manualModeLabel || payload.payment_gateway || null,
+           manualModeLabel ? 'Paid' : 'Pending',
+           booking_id]
+        ).catch(() => {});
+      }
+    }
+
     logPriceResolution(pool, bookingPrice, {
       context: 'booking', bookingId: booking_id,
       clientEmail: payload.clientEmail, clientPhone: payload.clientWhatsApp,
     }).catch(() => {});
 
-    // If payment was made directly (QR/Cash) or it's a Free Consultation, record it in the payments table
+    // If payment was made directly (QR/Cash/Wallet) or it's a Free Consultation, record it in the payments table
     const paymentAmount = finalAmount;
-    if (payload.paymentMode === 'qr' || payload.paymentMode === 'cash' || payload.isFreeConsultation || paymentAmount === 0) {
+    if (payload.paymentMode === 'qr' || payload.paymentMode === 'cash' || walletApplied > 0 || payload.isFreeConsultation || paymentAmount === 0) {
       await pool.query(
         `INSERT INTO payments (
           booking_id, invitee_name, invitee_email, amount, currency,
@@ -9494,7 +9848,9 @@ app.post('/api/create-booking', async (req, res) => {
           payload.clientEmail,
           paymentAmount,
           payload.currency || 'INR',
-          payload.paymentMode === 'qr' ? 'QR' : (payload.paymentMode === 'cash' ? 'Cash' : 'Free'),
+          walletApplied > 0
+            ? (walletApplied >= paymentAmount ? 'Wallet' : `Wallet+${manualModeLabel || 'Cash'}`)
+            : (payload.paymentMode === 'qr' ? 'QR' : (payload.paymentMode === 'cash' ? 'Cash' : 'Free')),
           payload.paymentScreenshot || null
         ]
       );

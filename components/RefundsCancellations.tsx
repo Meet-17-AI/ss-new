@@ -127,6 +127,161 @@ interface Payment {
   therapist_name?: string;
 }
 
+// A client holding wallet credit — money we owe them, not revenue.
+interface WalletRow {
+  client_key: string;
+  client_name?: string | null;
+  client_phone?: string | null;
+  client_email?: string | null;
+  currency?: string | null;
+  balance: number | string;
+  last_activity_at?: string | null;
+}
+
+interface WalletTxn {
+  txn_id: number;
+  direction: 'CREDIT' | 'DEBIT';
+  reason: string;
+  amount: number | string;
+  balance_after: number | string;
+  source_booking_id?: string | null;
+  source_payment_mode?: string | null;
+  notes?: string | null;
+  created_by_name?: string | null;
+  created_at: string;
+}
+
+// Ledger reasons are stored as enum-ish constants; render them as English.
+const WALLET_REASON_LABELS: Record<string, string> = {
+  CANCELLATION_CREDIT: 'Cancelled session',
+  BOOKING_SETTLEMENT: 'Applied to booking',
+  REFUND_OUT: 'Paid back to client',
+  MANUAL_ADJUSTMENT: 'Manual adjustment',
+};
+
+const formatMoney = (v: number | string | null | undefined): string =>
+  `₹${Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+
+/**
+ * Manual wallet credit or payout.
+ *
+ * Two distinct jobs, deliberately kept in one form because they are the same
+ * ledger movement with a different sign:
+ *  - "Paid back to client" (REFUND_OUT) records cash handed over outside the app.
+ *  - "Manual adjustment" (MANUAL_ADJUSTMENT) corrects a mistake in either direction.
+ */
+const WalletAdjustModal: React.FC<{
+  wallet: WalletRow;
+  onClose: () => void;
+  onDone: () => void;
+}> = ({ wallet, onClose, onDone }) => {
+  const balance = Number(wallet.balance || 0);
+  const [mode, setMode] = useState<'REFUND_OUT' | 'CREDIT' | 'DEBIT'>('REFUND_OUT');
+  const [amount, setAmount] = useState<string>('');
+  const [notes, setNotes] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const direction = mode === 'CREDIT' ? 'CREDIT' : 'DEBIT';
+  const reason = mode === 'REFUND_OUT' ? 'REFUND_OUT' : 'MANUAL_ADJUSTMENT';
+  const numericAmount = Number(amount) || 0;
+  // Only outgoing movements are capped — a correction upward has no ceiling.
+  const exceedsBalance = direction === 'DEBIT' && numericAmount > balance;
+
+  const submit = async () => {
+    setError(null);
+    if (!(numericAmount > 0)) { setError('Enter an amount greater than zero.'); return; }
+    if (exceedsBalance) { setError(`Cannot take more than the ${formatMoney(balance)} available.`); return; }
+    if (!notes.trim()) { setError('A short note is required so the ledger stays auditable.'); return; }
+
+    setSaving(true);
+    try {
+      const res = await fetch('/api/wallet/adjust', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: wallet.client_phone,
+          email: wallet.client_email,
+          name: wallet.client_name,
+          direction,
+          amount: numericAmount,
+          reason,
+          notes: notes.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data?.error || 'Failed to adjust wallet.');
+        return;
+      }
+      onDone();
+    } catch (err) {
+      setError('Failed to adjust wallet.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl max-w-md w-full relative p-8" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute top-4 right-4 text-gray-500 hover:text-gray-800 text-2xl font-bold">&times;</button>
+        <h2 className="text-xl font-bold mb-1 text-teal-800">Adjust Wallet</h2>
+        <p className="text-sm text-gray-600 mb-1">{wallet.client_name || 'Unknown client'}</p>
+        <p className="text-xs text-gray-500 mb-6">Current balance {formatMoney(balance)}</p>
+
+        <label className="block text-sm font-medium mb-2">What happened?</label>
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as any)}
+          className="w-full px-4 py-3 border rounded-lg mb-4 bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+        >
+          <option value="REFUND_OUT">Paid back to the client (cash/transfer)</option>
+          <option value="DEBIT">Correction — reduce balance</option>
+          <option value="CREDIT">Correction — add balance</option>
+        </select>
+
+        <label className="block text-sm font-medium mb-2">Amount</label>
+        <input
+          type="number"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder={direction === 'DEBIT' ? `Up to ${balance}` : 'Amount to add'}
+          className="w-full px-4 py-3 border rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-teal-500"
+        />
+
+        <label className="block text-sm font-medium mb-2">
+          Note<span className="text-red-500">*</span>
+        </label>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={3}
+          placeholder="e.g. Paid back in cash at the office on 12 Aug"
+          className="w-full px-4 py-3 border rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-teal-500"
+        />
+
+        {error && (
+          <div className="mb-4 p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">{error}</div>
+        )}
+
+        <div className="flex justify-end gap-3">
+          <button onClick={onClose} className="px-5 py-2 bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200">
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={saving}
+            className="px-5 py-2 bg-teal-700 text-white font-medium rounded-lg hover:bg-teal-800 disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save Adjustment'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initialTab }) => {
   const [activeTab, setActiveTab] = useState(initialTab || 'all_payments');
   const [searchQuery, setSearchQuery] = useState('');
@@ -138,6 +293,14 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
   const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
+
+  // ── Wallets tab ──
+  const [wallets, setWallets] = useState<WalletRow[]>([]);
+  const [totalLiability, setTotalLiability] = useState(0);
+  const [selectedWallet, setSelectedWallet] = useState<WalletRow | null>(null);
+  const [statement, setStatement] = useState<WalletTxn[]>([]);
+  const [statementLoading, setStatementLoading] = useState(false);
+  const [adjustTarget, setAdjustTarget] = useState<WalletRow | null>(null);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -151,6 +314,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     { id: 'all', label: 'Cancellation' },
     { id: 'Pending', label: 'Refund Initiated' },
     { id: 'Failed', label: 'Refund Failed' },
+    { id: 'wallets', label: 'Wallets' },
   ];
 
   const fetchPayments = useCallback(async () => {
@@ -192,6 +356,30 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     }
   }, [activeTab]);
 
+  const fetchWallets = useCallback(async () => {
+    try {
+      setLoading(true);
+      const response = await fetch('/api/wallets?minBalance=0.01');
+      if (!response.ok) {
+        console.error('Wallets fetch failed:', response.status);
+        setWallets([]);
+        setTotalLiability(0);
+        return;
+      }
+      const data = await response.json();
+      setWallets(Array.isArray(data?.wallets) ? data.wallets : []);
+      setTotalLiability(Number(data?.totalLiability) || 0);
+      setPayments([]);
+      setRefunds([]);
+    } catch (error) {
+      console.error('Error fetching wallets:', error);
+      setWallets([]);
+      setTotalLiability(0);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     // Fetch payments for payment tabs
     if (['all_payments', 'completed', 'pending', 'expired'].includes(activeTab)) {
@@ -201,8 +389,14 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
     else if (['all', 'Pending', 'Failed'].includes(activeTab)) {
       fetchRefunds();
     }
-  }, [activeTab, fetchPayments, fetchRefunds]);
+    else if (activeTab === 'wallets') {
+      fetchWallets();
+    }
+  }, [activeTab, fetchPayments, fetchRefunds, fetchWallets]);
 
+  const isWalletTab = activeTab === 'wallets';
+  // NOTE: the wallets tab renders its own table, so isPaymentTab stays false for
+  // it and every existing payment/refund branch below is untouched.
   const isPaymentTab = ['all_payments', 'completed', 'pending', 'expired'].includes(activeTab);
   const safeRefunds = Array.isArray(refunds) ? refunds : [];
   const safePayments = Array.isArray(payments) ? payments : [];
@@ -263,11 +457,55 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
       })
     : [];
 
-  const totalPages = Math.max(1, Math.ceil((isPaymentTab ? filteredPayments.length : filteredRefunds.length) / itemsPerPage));
+  const filteredWallets = isWalletTab
+    ? wallets.filter(w => {
+        const q = searchQuery.toLowerCase().trim();
+        if (!q) return true;
+        return [w.client_name, w.client_phone, w.client_email]
+          .some(v => (v || '').toString().toLowerCase().includes(q));
+      })
+    : [];
+
+  const rowCount = isWalletTab
+    ? filteredWallets.length
+    : (isPaymentTab ? filteredPayments.length : filteredRefunds.length);
+  const totalPages = Math.max(1, Math.ceil(rowCount / itemsPerPage));
   const paginatedPayments = filteredPayments.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
   const paginatedRefunds = filteredRefunds.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const paginatedWallets = filteredWallets.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  const openStatement = async (wallet: WalletRow) => {
+    setSelectedWallet(wallet);
+    setStatement([]);
+    setStatementLoading(true);
+    try {
+      const params = new URLSearchParams({ clientKey: wallet.client_key, limit: '100' });
+      const res = await fetch(`/api/wallet/transactions?${params.toString()}`);
+      const data = await res.json();
+      setStatement(Array.isArray(data?.transactions) ? data.transactions : []);
+    } catch (err) {
+      console.error('Error fetching wallet statement:', err);
+    } finally {
+      setStatementLoading(false);
+    }
+  };
 
   const exportToCSV = () => {
+    if (isWalletTab) {
+      const headers = ['Client Name', 'Phone', 'Email', 'Balance', 'Last Activity'];
+      const rows = filteredWallets.map(w => [
+        w.client_name || '',
+        w.client_phone || '',
+        w.client_email || '',
+        Number(w.balance || 0),
+        formatISTDateTime(w.last_activity_at),
+      ]);
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Wallets')
+      XLSX.writeFile(wb, `wallet_balances_${new Date().toISOString().split('T')[0]}.xlsx`)
+      return;
+    }
     if (isPaymentTab) {
       const headers = ['Client Name', 'Contact', 'Therapy Type', 'Date & Time', 'Amount', 'Payment Status'];
       const rows = filteredPayments.map(payment => [
@@ -383,12 +621,87 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
         </div>
       )}
 
+      {/* Outstanding wallet liability. This is money collected for sessions that
+          were cancelled and not refunded — a liability, not revenue. */}
+      {isWalletTab && !loading && (
+        <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-white rounded-lg border p-5">
+            <p className="text-xs uppercase tracking-wider text-gray-500 mb-1">Total Outstanding</p>
+            <p className="text-2xl font-bold text-teal-800">{formatMoney(totalLiability)}</p>
+            <p className="text-xs text-gray-500 mt-1">Held on behalf of clients</p>
+          </div>
+          <div className="bg-white rounded-lg border p-5">
+            <p className="text-xs uppercase tracking-wider text-gray-500 mb-1">Clients with Credit</p>
+            <p className="text-2xl font-bold text-teal-800">{wallets.length}</p>
+            <p className="text-xs text-gray-500 mt-1">Redeemable on their next booking</p>
+          </div>
+          <div className="bg-amber-50 rounded-lg border border-amber-200 p-5">
+            <p className="text-xs uppercase tracking-wider text-amber-700 mb-1">How this works</p>
+            <p className="text-sm text-amber-900 leading-snug">
+              Cash/QR bookings cancelled from the dashboard are not refunded — the amount is held here
+              and applied to the client's next session.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Table */}
       <div className="bg-white rounded-lg border flex-1 flex flex-col">
         {loading ? (
           <div className="flex-1 flex items-center justify-center">
             <Loader className="animate-spin text-teal-600" size={32} />
           </div>
+        ) : isWalletTab ? (
+        <div className="overflow-x-auto flex-1">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b">
+              <tr>
+                <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Client Details</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Balance</th>
+                <th className="px-6 py-3 text-left text-sm font-medium text-gray-600">Last Activity</th>
+                <th className="px-6 py-3 text-right text-sm font-medium text-gray-600">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="align-top">
+              {paginatedWallets.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="text-center text-gray-400 py-8">
+                    {searchQuery ? 'No clients match your search' : 'No clients are holding wallet credit'}
+                  </td>
+                </tr>
+              ) : (
+                paginatedWallets.map((w) => (
+                  <tr key={w.client_key} className="border-b hover:bg-gray-50">
+                    <td className="px-6 py-4">
+                      <div className="font-medium text-gray-900">{w.client_name || 'Unknown client'}</div>
+                      <div className="text-xs text-gray-500">{w.client_phone || w.client_email || '—'}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="px-3 py-1 rounded-full text-sm font-semibold bg-green-100 text-green-700">
+                        {formatMoney(w.balance)}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-600">{formatISTDateTime(w.last_activity_at)}</td>
+                    <td className="px-6 py-4 text-right whitespace-nowrap">
+                      <button
+                        onClick={() => openStatement(w)}
+                        className="text-sm text-teal-700 hover:text-teal-900 underline mr-4"
+                      >
+                        Statement
+                      </button>
+                      <button
+                        onClick={() => setAdjustTarget(w)}
+                        className="text-sm text-gray-600 hover:text-gray-900 underline"
+                      >
+                        Adjust
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
         ) : (
         <div className="overflow-x-auto flex-1">
           <table className="w-full">
@@ -525,7 +838,7 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
         )}
         <div className="px-6 py-4 border-t flex justify-between items-center">
           <span className="text-sm text-gray-600">
-            Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, isPaymentTab ? filteredPayments.length : filteredRefunds.length)} of {isPaymentTab ? filteredPayments.length : filteredRefunds.length} results
+            Showing {rowCount === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, rowCount)} of {rowCount} results
           </span>
           <div className="flex gap-2">
             <button 
@@ -546,6 +859,91 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
           </div>
         </div>
       </div>
+
+      {/* Wallet statement */}
+      {selectedWallet && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4" onClick={() => setSelectedWallet(null)}>
+          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-y-auto relative p-8" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={() => setSelectedWallet(null)}
+              className="absolute top-4 right-4 text-gray-500 hover:text-gray-800 text-2xl font-bold"
+            >
+              &times;
+            </button>
+            <h2 className="text-2xl font-bold mb-1 text-teal-800">Wallet Statement</h2>
+            <p className="text-sm text-gray-600 mb-1">{selectedWallet.client_name || 'Unknown client'}</p>
+            <p className="text-xs text-gray-500 mb-6 border-b pb-4">
+              {selectedWallet.client_phone || '—'}{selectedWallet.client_email ? ` · ${selectedWallet.client_email}` : ''}
+            </p>
+
+            <div className="flex items-baseline gap-2 mb-6">
+              <span className="text-sm text-gray-500">Current balance</span>
+              <span className="text-2xl font-bold text-teal-800">{formatMoney(selectedWallet.balance)}</span>
+            </div>
+
+            {statementLoading ? (
+              <div className="py-10 flex justify-center"><Loader className="animate-spin text-teal-600" size={28} /></div>
+            ) : statement.length === 0 ? (
+              <p className="text-gray-400 text-sm py-6 text-center">No transactions</p>
+            ) : (
+              <div className="overflow-x-auto border rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b">
+                    <tr>
+                      <th className="px-4 py-2 text-left font-medium text-gray-600">Date</th>
+                      <th className="px-4 py-2 text-left font-medium text-gray-600">Description</th>
+                      <th className="px-4 py-2 text-right font-medium text-gray-600">Credit</th>
+                      <th className="px-4 py-2 text-right font-medium text-gray-600">Debit</th>
+                      <th className="px-4 py-2 text-right font-medium text-gray-600">Balance</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {statement.map(t => (
+                      <tr key={t.txn_id} className="border-b last:border-b-0">
+                        <td className="px-4 py-2 text-gray-600 whitespace-nowrap">{formatISTDateTime(t.created_at)}</td>
+                        <td className="px-4 py-2">
+                          <div className="text-gray-900">{WALLET_REASON_LABELS[t.reason] || t.reason}</div>
+                          <div className="text-xs text-gray-500">
+                            {t.source_booking_id ? `Booking ${t.source_booking_id}` : ''}
+                            {t.source_payment_mode ? ` · ${t.source_payment_mode}` : ''}
+                            {t.created_by_name ? ` · by ${t.created_by_name}` : ''}
+                          </div>
+                          {t.notes && <div className="text-xs text-gray-400 italic mt-0.5">{t.notes}</div>}
+                        </td>
+                        <td className="px-4 py-2 text-right text-green-700 font-medium">
+                          {t.direction === 'CREDIT' ? formatMoney(t.amount) : ''}
+                        </td>
+                        <td className="px-4 py-2 text-right text-red-600 font-medium">
+                          {t.direction === 'DEBIT' ? formatMoney(t.amount) : ''}
+                        </td>
+                        <td className="px-4 py-2 text-right text-gray-900">{formatMoney(t.balance_after)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="mt-8 flex justify-end">
+              <button
+                onClick={() => setSelectedWallet(null)}
+                className="px-6 py-2 bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manual adjustment / payout */}
+      {adjustTarget && (
+        <WalletAdjustModal
+          wallet={adjustTarget}
+          onClose={() => setAdjustTarget(null)}
+          onDone={() => { setAdjustTarget(null); fetchWallets(); }}
+        />
+      )}
 
       {/* Payment Details Lightbox */}
       {selectedPayment && (

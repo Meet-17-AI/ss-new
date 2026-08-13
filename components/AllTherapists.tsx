@@ -8,6 +8,7 @@ import { CaseHistoryTab } from './CaseHistoryTab';
 import { ProgressNotesTab } from './ProgressNotesTab';
 import { ProgressNoteDetail } from './ProgressNoteDetail';
 import { GoalTrackingTab } from './GoalTrackingTab';
+import { ClientWalletTab } from './ClientWalletTab';
 import { FreeConsultationDetail } from './FreeConsultationDetail';
 import { therapistData } from '../lib/sessionData';
 import { isAwaitingPayment, statusLabel, statusBadgeClass } from '../lib/bookingStatus';
@@ -120,7 +121,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
   const [assignedClientStatusFilter, setAssignedClientStatusFilter] = useState<'all' | 'active' | 'inactive' | 'drop-out'>('all');
   const [appointmentsPage, setAppointmentsPage] = useState(1);
   const appointmentsPerPage = 10;
-  const [clientViewTab, setClientViewTab] = useState<'overview' | 'sessions' | 'documents' | 'caseHistory'>('overview');
+  const [clientViewTab, setClientViewTab] = useState<'overview' | 'sessions' | 'documents' | 'caseHistory' | 'wallet'>('overview');
   const [clientStats, setClientStats] = useState({ bookings: 0, sessionsCompleted: 0, noShows: 0, cancelled: 0 });
   const [isCaseHistoryVisible, setIsCaseHistoryVisible] = useState(false);
   const [caseHistoryData, setCaseHistoryData] = useState<any>(null);
@@ -1280,7 +1281,8 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                 [
                   { id: 'overview' as const, label: 'Overview' },
                   { id: 'sessions' as const, label: 'Progress Notes' },
-                  { id: 'documents' as const, label: 'Goal Tracking' }
+                  { id: 'documents' as const, label: 'Goal Tracking' },
+                  { id: 'wallet' as const, label: 'Wallet' }
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -1692,6 +1694,15 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
             {clientViewTab === 'documents' && clientSessionType.hasPaidSessions && (
               <GoalTrackingTab
                 clientId={selectedClient.invitee_phone}
+                clientName={selectedClient.invitee_name}
+              />
+            )}
+
+            {/* Wallet Tab */}
+            {clientViewTab === 'wallet' && clientSessionType.hasPaidSessions && (
+              <ClientWalletTab
+                clientPhone={selectedClient.invitee_phone}
+                clientEmail={selectedClient.invitee_email}
                 clientName={selectedClient.invitee_name}
               />
             )}

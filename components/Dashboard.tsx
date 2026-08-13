@@ -1060,7 +1060,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
                         })
                       });
                       if (res.ok) {
-                        setToast({ message: 'Booking cancelled successfully!', type: 'success' });
+                        // Cash/QR bookings are not refunded through a gateway — the
+                        // amount is held as wallet credit instead, so say so.
+                        const data = await res.json().catch(() => ({} as any));
+                        setToast({
+                          message: data?.walletCredit
+                            ? `Booking cancelled. ₹${Number(data.walletCredit.amount).toLocaleString('en-IN')} credited to the client's wallet (balance ₹${Number(data.walletCredit.balance).toLocaleString('en-IN')}).`
+                            : 'Booking cancelled successfully!',
+                          type: 'success'
+                        });
                         setShowCancelModal(false);
                         setCancelTarget(null);
                         setSelectedBookingIndex(null);
