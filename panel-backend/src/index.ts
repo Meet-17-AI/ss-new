@@ -13,7 +13,7 @@ import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { convertToIST } from './lib/timezone';
 import { uploadFile } from './lib/minio';
-import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendTherapistBookingConfirmationEmail, sendClientBookingCancellationEmail, sendPaymentLinkEmail, sendIssueReportEmail } from './lib/email';
+import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendTherapistBookingConfirmationEmail, sendClientBookingCancellationEmail, sendPaymentLinkEmail, sendIssueReportEmail, sendBookingLinkEmail } from './lib/email';
 import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage, sendSessionFeedbackRequest, sendPostSessionTherapistForm } from './automations/index';
 import { generateAdminOTP, verifyAdminOTP } from './otp';
 import { logWebhookApi } from './lib/webhookApiLogger.js';
@@ -181,6 +181,40 @@ const authMiddleware = async (req: any, res: any, next: any) => {
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
+};
+
+/**
+ * Identity for routes on the public allowlist, where authMiddleware never runs.
+ *
+ * /api/cancel-booking serves both an admin cancelling from the panel and a client
+ * cancelling their own booking from the confirmation link. Both are legitimate,
+ * but only the first may decide what happens to money. Returns the decoded user
+ * when a valid token happens to be present, and null otherwise — never throws,
+ * because an absent or bad token is the normal client case, not an error.
+ */
+const optionalUser = (req: any): any | null => {
+  const token = req.headers?.authorization?.replace('Bearer ', '');
+  if (!token) return null;
+  try {
+    return jwt.verify(token, JWT_SECRET);
+  } catch {
+    return null;
+  }
+};
+
+const ADMIN_ROLES = ['admin', 'superadmin', 'fluidadmin'];
+const isAdminUser = (user: any): boolean => Boolean(user && ADMIN_ROLES.includes(user.role));
+
+/**
+ * Display text for each cancellation action, defined once so the Payments page,
+ * the audit trail and the API all name the same thing identically. These strings
+ * are written into refund_cancellation_table.refund_status, so changing one
+ * renames it for historic rows too — treat them as stored values, not labels.
+ */
+const CANCELLATION_STATUS_LABEL: Record<string, string> = {
+  no_refund: 'No Refund',
+  wallet_credit: 'Added to Wallet',
+  offline_refund: 'Offline Refund',
 };
 
 // ==================== PUBLIC ROUTE ALLOWLIST ====================
@@ -3267,13 +3301,24 @@ app.get('/api/dashboard/stats', async (req, res) => {
     // rows with a NULL resource_name in (NULL NOT ILIKE ... would otherwise drop them).
     const NOT_FREE = "AND (COALESCE(booking_resource_name,'') || ' ' || COALESCE(booking_subject,'')) NOT ILIKE '%Free Consultation%'";
 
+    // Cancelling normally takes a booking out of revenue, which is right when the
+    // money went back to the client. It is wrong for a Cash/QR cancellation the
+    // admin marked "No refund": that money was collected and is being kept, so it
+    // stays counted even though the session never happened.
+    //
+    // Scoped to Paid rows so an unpaid booking can never be revived into revenue
+    // by the action column alone. Wallet credits and offline refunds are NOT
+    // listed here — they leave revenue, which is what dropping out already does.
+    // A wallet credit re-enters revenue when it is redeemed against a real session.
+    const KEPT_ON_CANCEL = `OR (cancellation_action = 'no_refund' AND payment_status = 'Paid')`;
+
     const revenue = hasDateFilter
       ? await pool.query(
-        `SELECT COALESCE(SUM(invitee_payment_amount), 0) as total FROM bookings WHERE booking_status NOT IN ($1, $2, $3, $4) ${EXCL_SS} AND booking_start_at BETWEEN $5 AND $6`,
+        `SELECT COALESCE(SUM(invitee_payment_amount), 0) as total FROM bookings WHERE (booking_status NOT IN ($1, $2, $3, $4) ${KEPT_ON_CANCEL}) ${EXCL_SS} AND booking_start_at BETWEEN $5 AND $6`,
         ['cancelled', 'canceled', 'payment_pending', 'payment_failed', start, `${end} 23:59:59`]
       )
       : await pool.query(
-        `SELECT COALESCE(SUM(invitee_payment_amount), 0) as total FROM bookings WHERE booking_status NOT IN ($1, $2, $3, $4) ${EXCL_SS}`,
+        `SELECT COALESCE(SUM(invitee_payment_amount), 0) as total FROM bookings WHERE (booking_status NOT IN ($1, $2, $3, $4) ${KEPT_ON_CANCEL}) ${EXCL_SS}`,
         ['cancelled', 'canceled', 'payment_pending', 'payment_failed']
       );
 
@@ -4094,7 +4139,7 @@ app.put('/api/dayschedule/schedules/:id', async (req, res) => {
 
 // Cancel Booking Backend (Dev Server)
 app.post('/api/cancel-booking', async (req, res) => {
-  const { booking_id, reason, notify } = req.body;
+  const { booking_id, reason, notify, action, otpId, otp } = req.body;
 
   if (!booking_id) {
     return res.status(400).json({ error: 'booking_id is required' });
@@ -4112,6 +4157,38 @@ app.post('/api/cancel-booking', async (req, res) => {
     }
 
     const bookingDetails = bookingResult.rows[0];
+
+    // ── Cancellation action (Cash/QR only) ──────────────────────────────────
+    // This route is on the public allowlist so a client can cancel their own
+    // booking. `action` decides what happens to money already collected, so it
+    // is honoured ONLY for an authenticated admin — otherwise a client could
+    // send no_refund to inflate revenue, or wallet_credit to mint themselves
+    // credit. A client's request simply carries no action and behaves as before.
+    const actor = optionalUser(req);
+    const actorIsAdmin = isAdminUser(actor);
+    const eligibleForAction = isWalletEligible(bookingDetails);
+
+    let cancellationAction: 'no_refund' | 'wallet_credit' | 'offline_refund' | null = null;
+    if (action && actorIsAdmin && eligibleForAction) {
+      if (!['no_refund', 'wallet_credit', 'offline_refund'].includes(action)) {
+        return res.status(400).json({ error: 'Unknown cancellation action.' });
+      }
+      cancellationAction = action;
+    } else if (action && !actorIsAdmin) {
+      console.warn(`[Cancel Booking] Ignoring action '${action}' from a non-admin caller on ${booking_id}.`);
+    }
+
+    // Handing cash back is irreversible and leaves no gateway trail, so it is
+    // confirmed with an OTP. Verified HERE rather than in the browser: a
+    // client-side check can simply be skipped by calling this endpoint directly.
+    if (cancellationAction === 'offline_refund') {
+      if (!otpId || !otp) {
+        return res.status(400).json({ error: 'OTP verification is required to record an offline refund.', needsOtp: true });
+      }
+      if (!verifyAdminOTP(String(otpId), String(otp))) {
+        return res.status(401).json({ error: 'That OTP is incorrect or has expired. Request a new one.', needsOtp: true });
+      }
+    }
     // 2. Natively cancel booking in the database
     const updateResult = await pool.query(
       `UPDATE bookings SET booking_status = 'cancelled', booking_cancel_reason = $1, invitee_cancelled_at = NOW() 
@@ -4206,8 +4283,17 @@ app.post('/api/cancel-booking', async (req, res) => {
     //
     // Best-effort, matching the calendar/WhatsApp/email blocks in this handler —
     // a wallet failure must never leave the booking half-cancelled.
+    // An admin who chose an action decides this outright; only wallet_credit
+    // credits the wallet, so "No refund" and "Offline refund" no longer leave
+    // the client holding credit for money they either forfeited or got back.
+    // With no action (client-initiated, or any pre-existing caller) the original
+    // automatic credit still applies, so existing behaviour is unchanged.
+    const shouldCreditWallet = cancellationAction
+      ? cancellationAction === 'wallet_credit'
+      : isWalletEligible(bookingDetails);
+
     let walletCredit: { amount: number; balance: number } | null = null;
-    if (!isRefundInitiated && isWalletEligible(bookingDetails)) {
+    if (!isRefundInitiated && shouldCreditWallet) {
       try {
         const txn = await creditWallet({
           name: bookingDetails.invitee_name,
@@ -4232,6 +4318,56 @@ app.post('/api/cancel-booking', async (req, res) => {
         }
       } catch (walletErr: any) {
         console.error('[Cancel Booking] Wallet credit failed (non-fatal):', walletErr?.message || walletErr);
+      }
+    }
+
+    // Record the decision. Written after the wallet attempt so a failed credit
+    // is never filed as a completed wallet_credit — money must not be reported
+    // as parked somewhere it isn't.
+    if (cancellationAction) {
+      const creditLanded = cancellationAction !== 'wallet_credit' || Boolean(walletCredit);
+
+      if (!creditLanded) {
+        console.error(`[Cancel Booking] Wallet credit failed for ${booking_id}; leaving action unset rather than claiming credit.`);
+      } else {
+        const actorName = actor?.username || actor?.email || 'admin';
+        const statusLabel = CANCELLATION_STATUS_LABEL[cancellationAction];
+
+        await pool.query(
+          `UPDATE bookings
+              SET cancellation_action = $1, cancellation_action_by = $2, cancellation_action_at = NOW()
+            WHERE booking_id = $3`,
+          [cancellationAction, actorName, booking_id]
+        );
+
+        // Deliberately NOT written to refund_cancellation_table. That table is
+        // maintained by the trg_sync_refund_cancellation trigger and only for
+        // gateway refunds (refund_status initiated/failed); its client_id is a
+        // foreign key into all_clients_table. Writing a second, parallel row
+        // from here would duplicate the trigger's job and give the Payments page
+        // two sources for one fact. The page reads bookings.cancellation_action
+        // instead, which /api/refunds now selects.
+
+        // Money decisions belong in the audit trail regardless of who is looking.
+        try {
+          await pool.query(
+            `INSERT INTO audit_logs (therapist_id, therapist_name, action_type, action_description, client_name, timestamp)
+             VALUES ($1, $2, $3, $4, $5, $6)`,
+            [
+              bookingDetails.therapist_id || null,
+              actorName,
+              `cancellation_${cancellationAction}`,
+              `${statusLabel} on cancelling ${booking_id} — ₹${Number(bookingDetails.invitee_payment_amount) || 0} ` +
+              `(${bookingDetails.invitee_payment_gateway || 'unknown'})${reason ? `: ${reason}` : ''}`,
+              bookingDetails.invitee_name || null,
+              getCurrentISTTimestamp(),
+            ]
+          );
+        } catch (auditErr: any) {
+          console.error('[Cancel Booking] audit log insert failed (non-fatal):', auditErr?.message || auditErr);
+        }
+
+        console.log(`[Cancel Booking] ${statusLabel} recorded for ${booking_id} by ${actorName}.`);
       }
     }
 
@@ -4345,7 +4481,13 @@ app.post('/api/cancel-booking', async (req, res) => {
       }
     }
 
-    res.json({ success: true, message: 'Booking cancellation forwarded successfully', walletCredit });
+    res.json({
+      success: true,
+      message: 'Booking cancellation forwarded successfully',
+      walletCredit,
+      cancellationAction,
+      cancellationStatus: cancellationAction ? CANCELLATION_STATUS_LABEL[cancellationAction] : null,
+    });
 
   } catch (error: any) {
     console.error('[Cancel Booking] Error:', error);
@@ -6699,6 +6841,74 @@ app.post('/api/bookings/cancel', async (req, res) => {
   }
 });
 
+/**
+ * Send the client the public booking directory so they can choose their own
+ * therapy and therapist.
+ *
+ * The counterpart to the "Let the client choose" option on the New Session page.
+ * No booking is created here — there is nothing to hold, because the choice that
+ * would define the booking has not been made yet. The client books themselves
+ * through the normal public flow, which already resolves their price, checks
+ * slot availability and takes payment.
+ */
+app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: any, res) => {
+  try {
+    const { clientName, clientEmail, note } = req.body || {};
+    const name = String(clientName || '').trim();
+    const email = String(clientEmail || '').trim();
+
+    if (!email) return res.status(400).json({ error: 'A client email is required to send the booking link.' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Enter a valid client email address.' });
+    }
+
+    // /book with no slug renders the public directory of every active therapy.
+    const link = `${(process.env.FRONTEND_URL || 'https://panel.safestories.in').replace(/\/$/, '')}/book`;
+
+    await sendBookingLinkEmail(email, { clientName: name || 'there', link, note: note || undefined });
+
+    console.log(`[Booking Link] Sent the public directory to ${email}`);
+    res.json({ success: true, link });
+  } catch (error: any) {
+    console.error('Error sending booking link:', error);
+    res.status(500).json({ error: error?.message || 'Failed to send the booking link.' });
+  }
+});
+
+/**
+ * What the cancel dialog needs to know before it can offer money options.
+ *
+ * A dedicated read rather than new columns on the bookings/appointments list
+ * queries: those feed several screens, and widening them to answer a question
+ * only this dialog asks is how unrelated pages start breaking.
+ */
+app.get('/api/bookings/:bookingId/cancellation-options', requireRole(ADMIN_ROLES), async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT invitee_name, invitee_payment_amount, invitee_payment_currency,
+              invitee_payment_gateway, payment_status, booking_status, cancellation_action
+         FROM bookings WHERE booking_id = $1`,
+      [req.params.bookingId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Booking not found' });
+
+    const b = rows[0];
+    res.json({
+      // Same rule the server enforces on cancel, so the dialog can never offer
+      // an option the write path would then refuse.
+      eligible: isWalletEligible(b),
+      clientName: b.invitee_name || 'this client',
+      amount: Number(b.invitee_payment_amount) || 0,
+      currency: b.invitee_payment_currency || 'INR',
+      paymentGateway: b.invitee_payment_gateway || null,
+      alreadyActioned: b.cancellation_action || null,
+    });
+  } catch (error) {
+    console.error('Error loading cancellation options:', error);
+    res.status(500).json({ error: 'Failed to load cancellation options' });
+  }
+});
+
 // ── Client wallet ────────────────────────────────────────────────────────────
 // Balance + recent statement for one client. Called by the booking form for
 // EVERY client, so a client with no wallet is a 200 with a zero balance, never
@@ -6836,6 +7046,12 @@ app.get('/api/refunds', async (req, res) => {
         b.booking_invitee_time,
         b.booking_host_name AS therapist_name,
         b.refund_status,
+        -- What the admin decided about the money on a Cash/QR cancellation.
+        -- NULL for gateway refunds and for cancellations made before this
+        -- existed, which the Payments page renders as plain "Cancelled".
+        b.cancellation_action,
+        b.cancellation_action_by,
+        b.cancellation_action_at,
         COALESCE(b.invitee_phone, '') as invitee_phone,
         COALESCE(b.invitee_email, '') as invitee_email,
         COALESCE(b.refund_amount, 0) as refund_amount,
@@ -7371,6 +7587,128 @@ app.post('/api/send-booking-link', async (req, res) => {
   } catch (error) {
     console.error('❌ Error in booking link endpoint:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Which calendar days a therapist works at all, over a range.
+ *
+ * /api/fetch-slots answers for ONE day and does real work per call — schedule
+ * lookup, booking deconfliction, sometimes a Google free/busy round trip — so
+ * probing it 30 times to paint a month is not an option. This reads the
+ * schedule once and applies only the day-level rules, in the same precedence
+ * fetch-slots uses: exclusion beats override beats weekly rule.
+ *
+ * A day listed here is OPEN, not necessarily FREE — every slot on it may already
+ * be booked. fetch-slots remains the authority on actual times; this only stops
+ * the picker offering days the therapist never works.
+ */
+app.get('/api/therapist-open-days', async (req, res) => {
+  try {
+    const therapistName = String(req.query.therapistName || '').trim();
+    const from = String(req.query.from || '');
+    const to = String(req.query.to || '');
+    if (!therapistName || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      return res.status(400).json({ error: 'therapistName, from and to (YYYY-MM-DD) are required' });
+    }
+
+    let scheduleId: number | null = null;
+    if (therapistName === 'SafeStories') {
+      scheduleId = 999999;
+    } else {
+      const tRes = await pool.query(
+        `SELECT tr.schedule_id FROM therapists t
+         LEFT JOIN therapist_resources tr ON t.therapist_id = tr.therapist_id
+         WHERE TRIM(LOWER(t.name)) = $1 ORDER BY tr.schedule_id DESC NULLS LAST LIMIT 1`,
+        [therapistName.toLowerCase()]
+      );
+      scheduleId = tRes.rows[0]?.schedule_id ?? null;
+    }
+    // No schedule on file means no rules to go on. Say so rather than returning
+    // an empty list, which the picker would render as "never available".
+    if (!scheduleId) return res.json({ days: null, unscheduled: true });
+
+    const schedRes = await pool.query(
+      'SELECT availability, date_overrides, exclusions FROM therapist_schedules WHERE schedule_id = $1',
+      [scheduleId]
+    );
+    if (schedRes.rows.length === 0) return res.json({ days: null, unscheduled: true });
+
+    const parse = (v: any, fallback: any) => {
+      if (typeof v === 'string') { try { return JSON.parse(v); } catch { return fallback; } }
+      return v ?? fallback;
+    };
+    const availabilityRules = parse(schedRes.rows[0].availability, []);
+    const dateOverrides = parse(schedRes.rows[0].date_overrides, []);
+    const exclusions = parse(schedRes.rows[0].exclusions, []);
+    if (!Array.isArray(availabilityRules) || availabilityRules.length === 0) {
+      return res.json({ days: null, unscheduled: true });
+    }
+
+    /** At least one window long enough to hold a 50-minute session. */
+    const hasRoom = (times: any) => Array.isArray(times) && times.some((t: any) => {
+      const [sh, sm] = String(t?.start || '').split(':').map(Number);
+      const [eh, em] = String(t?.end || '').split(':').map(Number);
+      if ([sh, sm, eh, em].some(n => !Number.isFinite(n))) return false;
+      return (eh * 60 + em) - (sh * 60 + sm) >= 50;
+    });
+
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
+    const start = from < today ? today : from;
+    const days: string[] = [];
+
+    for (let cur = new Date(`${start}T12:00:00Z`), guard = 0;
+         guard < 92 && cur.toISOString().split('T')[0] <= to;
+         cur = new Date(cur.getTime() + 86400000), guard++) {
+      const dStr = cur.toISOString().split('T')[0];
+
+      // 1. Exclusions block the whole day, across the full range — not just its
+      //    endpoints, or a multi-day holiday would leave its middle bookable.
+      const excluded = (Array.isArray(exclusions) ? exclusions : []).some((ex: any) => {
+        const f = ex?.start ?? ex?.date;
+        const t = ex?.end ?? ex?.start ?? ex?.date;
+        return f && dStr >= f && dStr <= t;
+      });
+      if (excluded) continue;
+
+      const dayOfWeek = cur.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'Asia/Kolkata' }).toLowerCase();
+      const weekly = availabilityRules.find((r: any) => (r.day || '').toLowerCase() === dayOfWeek);
+      const override = (Array.isArray(dateOverrides) ? dateOverrides : [])
+        .find((ov: any) => ov?.date === dStr || ov?.day === dStr);
+
+      let open: boolean;
+      if (override) {
+        // Anything ambiguous fails CLOSED — never silently open a day.
+        let isAvailable: boolean;
+        if (typeof override.is_available === 'boolean') isAvailable = override.is_available;
+        else if (typeof override.isAvailable === 'boolean') isAvailable = override.isAvailable;
+        else if (typeof override.availability === 'boolean') isAvailable = override.availability;
+        else isAvailable = Array.isArray(override.availability) && override.availability.length > 0;
+
+        const overrideTimes = Array.isArray(override.availability) ? override.availability
+          : (Array.isArray(override.times) ? override.times : []);
+
+        if (isAvailable) {
+          // An "available" override with no windows falls back to the weekly rule.
+          open = overrideTimes.length > 0 ? hasRoom(overrideTimes)
+            : Boolean(weekly?.is_available && hasRoom(weekly.times));
+        } else {
+          // A partial block still leaves the rest of the weekly day open; a full
+          // one closes it. Whether the remainder holds 50 minutes is left to
+          // fetch-slots, which does the interval arithmetic.
+          open = overrideTimes.length > 0 && Boolean(weekly?.is_available && hasRoom(weekly.times));
+        }
+      } else {
+        open = Boolean(weekly?.is_available && hasRoom(weekly.times));
+      }
+
+      if (open) days.push(dStr);
+    }
+
+    res.json({ days, unscheduled: false });
+  } catch (error) {
+    console.error('Error computing open days:', error);
+    res.status(500).json({ error: 'Failed to compute available days' });
   }
 });
 
@@ -12237,11 +12575,16 @@ if (process.env.READONLY_BOOT !== '1') {
 // ==================== END PAYMENT LINK EXPIRATION APIs ====================
 
 // ==================== OTP APIs ====================
-app.post('/api/otp/generate', async (req, res) => {
+app.post('/api/otp/generate', async (req: any, res) => {
   try {
     const { action } = req.body;
     if (!action) return res.status(400).json({ error: 'Action is required' });
-    const otpId = await generateAdminOTP(action);
+    // This route is authenticated, so req.user is the admin asking to confirm
+    // something. Send the code to them rather than to a fixed mailbox.
+    const otpId = await generateAdminOTP(action, {
+      email: req.user?.email || null,
+      name: req.user?.username || null,
+    });
     res.json({ success: true, otpId });
   } catch (error: any) {
     console.error('Error generating OTP:', error);

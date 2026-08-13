@@ -6,14 +6,17 @@ import crypto from 'crypto';
 // { [otpId]: { otp: string, expiresAt: number } }
 const otpStore: Record<string, { otp: string, expiresAt: number }> = {};
 
-const ADMIN_PHONE = '7775897124';
-const ADMIN_EMAIL = 'Meetpandya@fluid.live';
+// Fallbacks only. The OTP goes to whoever is performing the action when their
+// address is known — confirming an offline refund should reach the admin doing
+// it, not a fixed mailbox. These remain for callers that pass no recipient.
+const ADMIN_PHONE = process.env.ADMIN_OTP_PHONE || '7775897124';
+const ADMIN_EMAIL = process.env.ADMIN_OTP_EMAIL || 'Meetpandya@fluid.live';
 
 function generateRandomOTP(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-export async function generateAdminOTP(action: string): Promise<string> {
+export async function generateAdminOTP(action: string, recipient?: { email?: string | null; name?: string | null }): Promise<string> {
   const otp = generateRandomOTP();
   const otpId = crypto.randomUUID();
   
@@ -30,9 +33,11 @@ export async function generateAdminOTP(action: string): Promise<string> {
     }
   });
 
-  // 1. Send via Email
+  // 1. Send via Email — to the admin performing the action when we know them.
+  const toEmail = (recipient?.email || '').trim() || ADMIN_EMAIL;
   try {
-    await sendAdminOTPEmail(ADMIN_EMAIL, action, otp);
+    await sendAdminOTPEmail(toEmail, action, otp);
+    console.log(`[Admin OTP] Sent to ${toEmail} for: ${action}`);
   } catch (err) {
     console.error('Failed to send Admin OTP Email:', err);
   }

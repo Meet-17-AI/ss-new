@@ -21,6 +21,14 @@ interface InlineCalendarProps {
   min?: string;
   /** Latest selectable date, YYYY-MM-DD. */
   max?: string;
+  /**
+   * When given, ONLY these days are selectable — everything else is greyed out
+   * on top of the min/max rules. Omit it to leave every day in range open, which
+   * is what existing callers rely on.
+   */
+  enabledDates?: Set<string>;
+  /** Called when the visible month changes, so a caller can fetch its days. */
+  onMonthChange?: (firstOfMonth: string) => void;
 }
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -32,7 +40,9 @@ const MONTHS = [
 const pad = (n: number) => String(n).padStart(2, '0');
 const ymd = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
 
-export const InlineCalendar: React.FC<InlineCalendarProps> = ({ value, onChange, min, max }) => {
+export const InlineCalendar: React.FC<InlineCalendarProps> = ({
+  value, onChange, min, max, enabledDates, onMonthChange,
+}) => {
   // Open on the selected month, or the month containing `min`, or this month.
   const initial = value || min || '';
   const [cursor, setCursor] = useState(() => {
@@ -57,9 +67,11 @@ export const InlineCalendar: React.FC<InlineCalendarProps> = ({ value, onChange,
 
   const step = (delta: number) => {
     const m = month + delta;
-    if (m < 0) setCursor({ year: year - 1, month: 11 });
-    else if (m > 11) setCursor({ year: year + 1, month: 0 });
-    else setCursor({ year, month: m });
+    const next = m < 0 ? { year: year - 1, month: 11 }
+      : m > 11 ? { year: year + 1, month: 0 }
+      : { year, month: m };
+    setCursor(next);
+    onMonthChange?.(ymd(next.year, next.month, 1));
   };
 
   // Disable back-navigation once the visible month can hold no selectable day.
@@ -107,7 +119,8 @@ export const InlineCalendar: React.FC<InlineCalendarProps> = ({ value, onChange,
           if (day === null) return <div key={i} />;
 
           const date = ymd(year, month, day);
-          const disabled = (min && date < min) || (max && date > max);
+          const disabled = (min && date < min) || (max && date > max) ||
+            (enabledDates && !enabledDates.has(date));
           const selected = value === date;
           const isToday = date === min; // `min` is today for forward-only pickers
 

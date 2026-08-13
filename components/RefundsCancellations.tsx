@@ -159,6 +159,17 @@ const WALLET_REASON_LABELS: Record<string, string> = {
   MANUAL_ADJUSTMENT: 'Manual adjustment',
 };
 
+/**
+ * How a Cash/QR cancellation is shown once the admin has said what happens to
+ * the money. Keyed on bookings.cancellation_action; an absent key means the
+ * cancellation predates this and renders as plain "Cancelled".
+ */
+export const CANCELLATION_ACTION_STYLES: Record<string, { label: string; className: string }> = {
+  no_refund: { label: 'No Refund', className: 'bg-gray-200 text-gray-700' },
+  wallet_credit: { label: 'Added to Wallet', className: 'bg-amber-100 text-amber-800' },
+  offline_refund: { label: 'Offline Refund', className: 'bg-red-100 text-red-700' },
+};
+
 const formatMoney = (v: number | string | null | undefined): string =>
   `₹${Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
 
@@ -753,11 +764,15 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                               </span>
                             );
                           }
-                          // If the booking itself was cancelled, just show Cancelled
+                          // If the booking itself was cancelled, show what the
+                          // admin decided about the money where that was recorded.
+                          // Cancellations made before this existed carry no action
+                          // and keep reading as plain "Cancelled".
                           if (['cancelled', 'canceled'].includes(bs)) {
+                            const style = CANCELLATION_ACTION_STYLES[(payment as any).cancellation_action];
                             return (
-                              <span className="px-3 py-1 rounded-full text-xs font-medium bg-gray-200 text-gray-700">
-                                Cancelled
+                              <span className={`px-3 py-1 rounded-full text-xs font-medium ${style ? style.className : 'bg-gray-200 text-gray-700'}`}>
+                                {style ? style.label : 'Cancelled'}
                               </span>
                             );
                           }
@@ -809,11 +824,16 @@ export const RefundsCancellations: React.FC<{ initialTab?: string }> = ({ initia
                       </td>
                       <td className="px-6 py-4">
                         {(() => {
-                          // Cash/QR never went through a gateway, so there is no
-                          // gateway refund to report a status for.
+                          // Cash/QR never went through a gateway. There is no
+                          // gateway refund status, but there IS an admin decision
+                          // about the money once one has been recorded — show it
+                          // instead of the old bare dash.
                           const isManual = ['cash', 'qr'].includes((refund.payment_gateway || '').toLowerCase());
                           if (isManual) {
-                            return <span className="text-gray-500 font-medium">-</span>;
+                            const style = CANCELLATION_ACTION_STYLES[(refund as any).cancellation_action];
+                            return style
+                              ? <span className={`px-3 py-1 rounded-full text-xs font-medium ${style.className}`}>{style.label}</span>
+                              : <span className="text-gray-500 font-medium">-</span>;
                           }
                           const rs = (refund.refund_status || '').toLowerCase().trim();
                           if (!rs) {

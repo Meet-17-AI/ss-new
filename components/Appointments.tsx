@@ -6,6 +6,7 @@ import { Toast } from './Toast';
 import { Loader } from './Loader';
 import { deriveBookingStatus, statusLabel, statusBadgeClass } from '../lib/bookingStatus';
 import { InlineCalendar } from './InlineCalendar';
+import { CancellationActionPicker, type CancellationChoice } from './CancellationActionPicker';
 
 interface Appointment {
   booking_id?: number;
@@ -149,6 +150,11 @@ export const Appointments: React.FC<{ onClientClick?: (client: any) => void; onC
   const [cancelTarget, setCancelTarget] = useState<Appointment | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [cancelNotify, setCancelNotify] = useState(true);
+  // Money decision for Cash/QR bookings. `ready` stays true for every other
+  // booking, so the existing cancel flow is not gated by a choice it never shows.
+  const [cancelChoice, setCancelChoice] = useState<CancellationChoice>({
+    action: null, otpId: null, otp: null, ready: true,
+  });
   const [isCancelling, setIsCancelling] = useState(false);
 
   const tabs = [
@@ -502,17 +508,24 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
         body: JSON.stringify({
           booking_id: cancelTarget.booking_id,
           reason: cancelReason,
-          notify: cancelNotify
+          notify: cancelNotify,
+          // Null for every booking that isn't a paid Cash/QR one; the server
+          // ignores it unless the caller is an admin and the booking qualifies.
+          action: cancelChoice.action,
+          otpId: cancelChoice.otpId,
+          otp: cancelChoice.otp,
         })
       });
       if (response.ok) {
-        // Cash/QR bookings are not refunded through a gateway — the amount is
-        // held as wallet credit instead, so tell the admin it happened.
+        // Cash/QR bookings are not refunded through a gateway — say what was
+        // actually done with the money so the admin sees their choice land.
         const data = await response.json().catch(() => ({} as any));
         setToast({
           message: data?.walletCredit
             ? `Booking cancelled. ₹${Number(data.walletCredit.amount).toLocaleString('en-IN')} credited to the client's wallet (balance ₹${Number(data.walletCredit.balance).toLocaleString('en-IN')}).`
-            : 'Booking cancelled successfully!',
+            : data?.cancellationStatus
+              ? `Booking cancelled — recorded as ${data.cancellationStatus}.`
+              : 'Booking cancelled successfully!',
           type: 'success'
         });
         setShowCancelModal(false);
@@ -520,7 +533,10 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
         setSelectedRowIndex(null);
         fetchAppointments();
       } else {
-        setToast({ message: 'Failed to cancel booking', type: 'error' });
+        // Surface the server's reason — a rejected OTP is the common case here,
+        // and "Failed to cancel booking" would send the admin hunting.
+        const err = await response.json().catch(() => ({} as any));
+        setToast({ message: err?.error || 'Failed to cancel booking', type: 'error' });
       }
     } catch {
       setToast({ message: 'Failed to cancel booking', type: 'error' });
@@ -1312,6 +1328,12 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
                 />
               </div>
 
+              {/* Money decision — renders only for a paid Cash/QR booking. */}
+              <CancellationActionPicker
+                bookingId={cancelTarget.booking_id}
+                onChange={setCancelChoice}
+              />
+
               {/* Notify toggle */}
               <div className="flex items-center gap-3">
                 <button
@@ -1334,7 +1356,8 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
                 </button>
                 <button
                   onClick={handleCancelBooking}
-                  disabled={isCancelling}
+                  disabled={isCancelling || !cancelChoice.ready}
+                  title={!cancelChoice.ready ? 'Choose what happens to the money first' : undefined}
                   className="px-6 py-2.5 text-white rounded-lg text-sm font-medium disabled:opacity-50 flex items-center gap-2"
                   style={{ backgroundColor: '#ef4444' }}
                 >

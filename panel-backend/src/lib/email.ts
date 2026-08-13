@@ -805,6 +805,51 @@ export async function sendClientBookingCancellationEmail(
 }
 
 /**
+ * Send the general booking link — the client picks their own therapy, therapist
+ * and slot from the public directory.
+ *
+ * Used when an admin takes a booking request but the client hasn't decided who
+ * they want to see. Deliberately links to /book (the directory) rather than to
+ * one service, which is the whole point of this path.
+ */
+export async function sendBookingLinkEmail(
+  clientEmail: string,
+  details: { clientName: string; link: string; note?: string }
+): Promise<void> {
+  const htmlContent = `
+<div style="background:#f9f9f9;padding:24px 0;font-family:'Segoe UI',Arial,sans-serif;">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border:1px solid #d1d1d1;border-radius:12px;overflow:hidden;">
+    <div style="text-align:center;padding:32px 25px 8px;">
+      <div style="font-size:32px;font-weight:bold;"><span style="color:#f2c730;">Safe</span><span style="color:#1e6d63;">Stories</span></div>
+      <strong style="display:block;font-size:15px;color:#666;margin-top:8px;text-transform:uppercase;">Book your session</strong>
+    </div>
+    <div style="padding:0 30px 30px;">
+      <p style="font-size:15px;color:#555;line-height:1.6;">
+        Hello <strong>${details.clientName}</strong>, you can choose your therapy, your therapist and a
+        time that suits you using the link below.
+      </p>
+      ${details.note ? `<p style="font-size:14px;color:#555;line-height:1.6;">${details.note}</p>` : ''}
+      <a href="${details.link}" style="display:block;text-align:center;padding:14px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;background-color:#1e6d63;color:#ffffff;margin-top:16px;">
+        Choose and Book
+      </a>
+    </div>
+    <div style="text-align:center;padding:22px;border-top:1px solid #f0f0f0;">
+      <p style="font-style:italic;color:#1e6d63;margin:0;font-size:15px;">Always there for your mental health.</p>
+      <p style="margin-top:5px;font-size:14px;color:#888;"><strong>Team SafeStories</strong></p>
+    </div>
+  </div>
+</div>`;
+
+  await sendEmailWithLogging({
+    from: 'SafeStories <therapy@safestories.in>',
+    to: clientEmail,
+    subject: 'Book your SafeStories session',
+    html: htmlContent,
+    text: `Hello ${details.clientName},\n\nChoose your therapy, therapist and time here:\n${details.link}\n\nTeam SafeStories`,
+  }, 'Client Booking Link');
+}
+
+/**
  * Send payment link email to Client
  */
 export async function sendPaymentLinkEmail(
