@@ -11236,6 +11236,18 @@ app.get('/api/automation-logs/:id', async (req, res) => {
 // stays intact.
 const LOG_VIEWER_ROLES = ['admin', 'superadmin', 'fluidadmin'];
 
+// created_at on activity_logs and automation_logs is `timestamp WITHOUT time zone`
+// holding IST wall-clock: lib/db.ts sets the session to Asia/Kolkata, so NOW() is
+// stored as local time with the offset discarded. node-postgres then parses that
+// naked value in the SERVER process's timezone, which is UTC inside the container.
+// So 11:46 IST was serialized as 11:46Z, and the dashboard — formatting in
+// Asia/Kolkata — rendered it as 5:16 PM. Every timestamp appeared 5:30 late.
+//
+// Emitting an explicit +05:30 offset makes the instant unambiguous no matter what
+// timezone the container runs in. webhook_api_logs.created_at is already
+// `timestamp WITH time zone` and serializes correctly, so it is left alone.
+const IST_CREATED_AT = `to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS') || '+05:30' AS created_at`;
+
 app.get('/api/activity-logs', requireRole(LOG_VIEWER_ROLES), async (req: any, res) => {
   try {
     const source = String(req.query.source || 'activity');
@@ -11257,7 +11269,7 @@ app.get('/api/activity-logs', requireRole(LOG_VIEWER_ROLES), async (req: any, re
         where.push(`(automation_type ILIKE ${p} OR recipient ILIKE ${p} OR booking_id ILIKE ${p})`);
       }
       const sql = `SELECT id, booking_id, automation_type AS action, recipient, status,
-                          error_message, created_at
+                          error_message, ${IST_CREATED_AT}
                    FROM automation_logs
                    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                    ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
@@ -11291,7 +11303,7 @@ app.get('/api/activity-logs', requireRole(LOG_VIEWER_ROLES), async (req: any, re
     const clause = where.length ? 'WHERE ' + where.join(' AND ') : '';
     const rows = await pool.query(
       `SELECT id, category, actor_id, actor_name, actor_role, action, method, route, path,
-              entity_type, entity_id, status_code, duration_ms, ip_address, metadata, created_at
+              entity_type, entity_id, status_code, duration_ms, ip_address, metadata, ${IST_CREATED_AT}
        FROM activity_logs ${clause}
        ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`,
       params
