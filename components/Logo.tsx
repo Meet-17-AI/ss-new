@@ -2,9 +2,15 @@ import React from 'react';
 
 interface LogoProps {
   size?: 'small' | 'large';
+  /**
+   * "Panel 2.0" names the internal admin product. It belongs on staff screens,
+   * not on the public booking page a client lands on, so that page turns it
+   * off. Defaults to showing it, leaving every existing usage unchanged.
+   */
+  showTagline?: boolean;
 }
 
-export const Logo: React.FC<LogoProps> = ({ size = 'large' }) => {
+export const Logo: React.FC<LogoProps> = ({ size = 'large', showTagline = true }) => {
   const isSmall = size === 'small';
   
   return (
@@ -30,7 +36,9 @@ export const Logo: React.FC<LogoProps> = ({ size = 'large' }) => {
         </div>
       </div>
       <span className={`${isSmall ? 'text-3xl' : 'text-4xl md:text-5xl'} font-bold text-brand-teal tracking-tight -mt-2 font-sans`}>Stories</span>
-      <span className={`${isSmall ? 'text-xs' : 'text-sm'} font-semibold text-teal-800 tracking-widest mt-1 uppercase ml-1 opacity-80`} style={{ letterSpacing: '0.3em' }}>Panel 2.0</span>
+      {showTagline && (
+        <span className={`${isSmall ? 'text-xs' : 'text-sm'} font-semibold text-teal-800 tracking-widest mt-1 uppercase ml-1 opacity-80`} style={{ letterSpacing: '0.3em' }}>Panel 2.0</span>
+      )}
     </div>
   );
 };

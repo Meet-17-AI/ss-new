@@ -352,6 +352,24 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
     }).toUpperCase();
   };
 
+  /**
+   * ISO instant -> "10:00 AM" in IST, built from parts.
+   *
+   * toLocaleTimeString is not safe to feed back to the server: some ICU builds
+   * separate the meridiem with U+202F (narrow no-break space), which
+   * `new Date("... 10:00 AM GMT+0530")` cannot parse. Assembling it from
+   * formatToParts guarantees a plain space.
+   */
+  const istClock = (iso: string) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const parts = new Intl.DateTimeFormat('en-US', {
+      hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata',
+    }).formatToParts(d);
+    const get = (t: string) => parts.find(p => p.type === t)?.value || '';
+    return `${get('hour')}:${get('minute')} ${get('dayPeriod').toUpperCase()}`;
+  };
+
   /** "2026-08-20" -> "Thu, 20 Aug 2026" */
   const dateLabel = (ymd: string) => {
     const d = new Date(`${ymd}T00:00:00`);
@@ -394,11 +412,21 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
       if (clientWillChoose) {
         const r = await fetch('/api/admin/send-booking-link', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ clientName, clientEmail }),
+          body: JSON.stringify({
+            clientName, clientEmail, clientPhone: `${countryCode}${phone}`,
+            // Only a real selection travels. The sentinel means "the client
+            // decides", so leaving it out is exactly what it should mean.
+            therapy: therapy === CLIENT_CHOOSES ? undefined : therapy || undefined,
+            therapist: therapist === CLIENT_CHOOSES ? undefined : therapist || undefined,
+          }),
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.error || 'Could not send the booking link.');
-        toast.success(`Booking link sent to ${clientEmail}.`);
+        toast.success(d.whatsappCarriedLink
+          ? `Booking link sent to ${clientEmail} and WhatsApp.`
+          : d.whatsappSent
+          ? `Link emailed to ${clientEmail}. WhatsApp sent a generic prompt.`
+          : `Booking link sent to ${clientEmail}.`);
         return onBack();
       }
 
@@ -407,7 +435,10 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             therapistName: therapist, clientName, clientEmail,
-            clientPhone: `${countryCode}${phone}`, date, time: slot,
+            // This endpoint parses `date + time` as "YYYY-MM-DD h:mm A GMT+0530"
+            // and 400s on anything else, so the ISO slot has to become a clock
+            // time here rather than being passed through.
+            clientPhone: `${countryCode}${phone}`, date, time: istClock(slot),
             serviceType: therapy, amount: price, clientType,
             sessionMode: mode, timezone: 'Asia/Kolkata', isAdmin: true,
           }),
@@ -426,6 +457,12 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
           // re-resolves from the therapy label, which can pick a different row
           // and store a price the admin never saw.
           serviceId: serviceId ?? undefined,
+          // `slot` here is an ISO instant from /api/fetch-slots, which the
+          // server's `date + slot` branch cannot parse — it builds
+          // "2026-08-20 2026-08-20T04:30:00.000Z GMT+0530", gets Invalid Date,
+          // and silently falls back to NOW, booking the session at the moment
+          // it was created. `startTime` is the branch that takes an ISO instant.
+          startTime: slot,
           date, slot, clientName, clientEmail, clientWhatsApp: `${countryCode}${phone}`,
           sessionMode: mode, timezone: 'Asia/Kolkata', skipPayment: true, isAdmin: true,
           paymentMode, amount: price, currency: 'INR', clientType,
@@ -635,8 +672,11 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
                           <Link2 size={16} className="mt-0.5 shrink-0" />
                           <span>
                             No session will be booked now, so there is nothing to schedule or collect.
-                            {' '}{clientName || 'The client'} will be emailed a link to pick their therapy,
-                            therapist and time, and will book and pay themselves.
+                            {' '}{clientName || 'The client'} gets a link by email and WhatsApp with their
+                            name, number and email already filled in
+                            {therapy !== CLIENT_CHOOSES && therapy ? <> for <strong>{therapy}</strong></> : null}
+                            {therapist !== CLIENT_CHOOSES && therapist ? <> with <strong>{therapist}</strong></> : null}
+                            , and books and pays themselves.
                           </span>
                         </div>
                       )}

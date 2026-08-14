@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Search, Loader, Plus, Copy, ExternalLink, ChevronDown, Trash2, Power, MoreVertical, Ban, Edit, Sparkles } from 'lucide-react';
+import { User, Search, Loader, Plus, ChevronDown, Trash2, Power, MoreVertical, Ban, Edit, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { TherapyDetailsModal } from './TherapyDetailsModal';
@@ -27,7 +27,6 @@ export function TherapyCalendars() {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [error, setError] = useState('');
-  const [copiedId, setCopiedId] = useState<number | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   // Only deletion is confirmed from this page now; activate/deactivate moved
   // into the therapy's edit page.
@@ -43,14 +42,6 @@ export function TherapyCalendars() {
   // no therapy_services rows yet.
   const [therapists, setTherapists] = useState<any[]>([]);
   const navigate = useNavigate();
-
-  const handleCopy = (e: React.MouseEvent, link: string, id: number) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(link).then(() => {
-      setCopiedId(id);
-      setTimeout(() => setCopiedId(null), 2000);
-    });
-  };
 
   useEffect(() => {
     fetchData();
@@ -311,7 +302,6 @@ export function TherapyCalendars() {
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
                     {therapistCalendars.map((item, index) => {
                       const cleanSlug = item.slug ? item.slug.replace(/^\/+/, '') : '';
-                      const fullLink = `${window.location.origin}/book/${cleanSlug}`;
                       const calendarInactive = item.is_active === false;
 
                       return (
@@ -344,23 +334,6 @@ export function TherapyCalendars() {
                                   </button>
                                   {/* Dropdown Menu */}
                                   <div className="absolute right-0 mt-1 w-44 bg-white text-gray-800 rounded-lg shadow-lg border border-gray-200 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
-                                    <button
-                                      onClick={(e) => { e.stopPropagation(); handleCopy(new MouseEvent('click') as any, fullLink, item.id); }}
-                                      className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
-                                    >
-                                      <Copy size={12} />
-                                      Copy Link
-                                    </button>
-                                    <a
-                                      href={fullLink}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={(e) => e.stopPropagation()}
-                                      className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
-                                    >
-                                      <ExternalLink size={12} />
-                                      Open Link
-                                    </a>
                                     <button
                                       onClick={(e) => { e.stopPropagation(); navigate(`/admin/userSettings/therapies/${item.id}`); }}
                                       className="w-full text-left px-4 py-2 hover:bg-gray-50 text-xs flex items-center gap-2 border-b border-gray-100"
@@ -409,15 +382,6 @@ export function TherapyCalendars() {
                               <>
                                 <div className="text-sm text-gray-500 font-medium truncate flex-1 pr-4">
                                   /{cleanSlug}
-                                </div>
-                                <div className="flex items-center gap-4">
-                                  <button 
-                                    onClick={(e) => { e.stopPropagation(); handleCopy(e as any, fullLink, item.id); }}
-                                    className="text-gray-400 hover:text-gray-600"
-                                    title="Copy link"
-                                  >
-                                    {copiedId === item.id ? <span className="text-teal-600 text-xs font-bold">Copied!</span> : <Copy size={16} />}
-                                  </button>
                                 </div>
                               </>
                             )}

@@ -102,8 +102,37 @@ export const CancellationActionPicker: React.FC<Props> = ({ bookingId, onChange 
     );
   }
 
-  // Not a Cash/QR paid booking — nothing to decide, render nothing.
-  if (!info?.eligible) return null;
+  /**
+   * Not a Cash/QR paid booking, so there is no decision to make — but there is
+   * still an outcome, and the admin is about to take an irreversible action.
+   * Rendering nothing here left them cancelling with no statement of what
+   * happens to the money on ~94% of bookings, which reads as "nothing happens"
+   * rather than "the gateway handles it". Say it instead.
+   */
+  if (!info?.eligible) {
+    const paid = String(info?.paymentStatus || '').toLowerCase() === 'paid';
+    const gateway = String(info?.paymentGateway || '').trim();
+    const amount = Number(info?.amount) || 0;
+
+    const outcome =
+      amount <= 0
+        ? 'No payment was recorded for this session, so there is nothing to refund.'
+        : paid
+        ? `${rupees(amount)} was paid through ${gateway || 'the payment gateway'}. Cancelling refunds it the same way — it is not handled here.`
+        : `${rupees(amount)} was never collected, so there is nothing to refund. The amount leaves net revenue on cancellation.`;
+
+    return (
+      <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+        <div className="flex items-start gap-2.5">
+          <Wallet size={16} className="mt-0.5 shrink-0 text-gray-400" />
+          <div>
+            <p className="text-sm font-medium text-gray-800">What happens to the money</p>
+            <p className="text-xs text-gray-600 mt-0.5">{outcome}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const options: { value: CancellationAction; label: string; hint: string; icon: React.ReactNode }[] = [
     {

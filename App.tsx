@@ -13,6 +13,7 @@ import { PublicBookingContainer } from './components/PublicBookingContainer';
 import { BookingConfirmation } from './components/BookingConfirmation';
 import { SessionNotesPage } from './components/SessionNotesPage';
 import { PublicDirectory } from './components/PublicDirectory';
+import { PublicBooking } from './components/PublicBooking';
 import { FluidAdminLayout } from './components/FluidAdminLayout';
 import CRMApp from './src/crm/App';
 import { Monitor } from 'lucide-react';
@@ -182,7 +183,11 @@ const BookRouterWrapper = () => {
   const params = useParams();
   const slug = params['*'] || '';
   if (!slug) {
-    return <PublicDirectory />;
+    // /book is now the single public link: it identifies the client, resolves
+    // which service they are booking, and redirects to /book/<slug> below.
+    // PublicDirectory is no longer reachable — kept only so the old plain list
+    // can be restored quickly if this flow needs backing out.
+    return <PublicBooking />;
   }
   return <PublicBookingContainer slug={slug} />;
 };

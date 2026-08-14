@@ -232,8 +232,14 @@ const PUBLIC_API_ROUTES: { methods: string[]; pattern: RegExp }[] = [
 
   // --- public booking flow (/book/*) ---
   { methods: ['GET'],  pattern: /^\/api\/public\/services\/[^/]+$/ },
+  // The bookable catalogue for the single public booking page. Read-only, and
+  // carries no client data — only what a visitor is about to be shown.
+  { methods: ['GET'],  pattern: /^\/api\/public\/catalogue$/ },
   { methods: ['GET'],  pattern: /^\/api\/services$/ },
   { methods: ['GET'],  pattern: /^\/api\/therapist-availability$/ },
+  // Which days a therapist works, so the public date picker can grey out the
+  // rest. Read-only and no client data — it answers only from the schedule.
+  { methods: ['GET'],  pattern: /^\/api\/therapist-open-days$/ },
   { methods: ['POST'], pattern: /^\/api\/fetch-slots$/ },
   { methods: ['POST'], pattern: /^\/api\/create-booking$/ },
   { methods: ['POST'], pattern: /^\/api\/create-pending-booking$/ },
@@ -6853,9 +6859,10 @@ app.post('/api/bookings/cancel', async (req, res) => {
  */
 app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: any, res) => {
   try {
-    const { clientName, clientEmail, note } = req.body || {};
+    const { clientName, clientEmail, clientPhone, therapy, therapist, note } = req.body || {};
     const name = String(clientName || '').trim();
     const email = String(clientEmail || '').trim();
+    const phone = String(clientPhone || '').trim();
 
     if (!email) return res.status(400).json({ error: 'A client email is required to send the booking link.' });
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -6863,12 +6870,57 @@ app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: a
     }
 
     // /book with no slug renders the public directory of every active therapy.
-    const link = `${(process.env.FRONTEND_URL || 'https://panel.safestories.in').replace(/\/$/, '')}/book`;
+    // Whatever the admin already settled rides along as query parameters: the
+    // identity fields prefill the booking form, and therapy/therapist narrow the
+    // directory to what is still the client's to choose.
+    const base = `${(process.env.FRONTEND_URL || 'https://panel.safestories.in').replace(/\/$/, '')}/book`;
+    const q = new URLSearchParams();
+    if (name) q.set('name', name);
+    if (email) q.set('email', email);
+    if (phone) q.set('phone', phone);
+    if (therapy) q.set('therapy', String(therapy));
+    if (therapist) q.set('therapist', String(therapist));
+    const link = q.toString() ? `${base}?${q}` : base;
 
     await sendBookingLinkEmail(email, { clientName: name || 'there', link, note: note || undefined });
 
-    console.log(`[Booking Link] Sent the public directory to ${email}`);
-    res.json({ success: true, link });
+    // WhatsApp is best-effort: AiSensy being slow or down must not turn
+    // "link sent" into an error when the email has already gone.
+    //
+    // The prefilled URL rides as a BODY variable, the way the payment link and
+    // the session meeting link already do (send_paymentlink_client_n8n passes
+    // paymentLink as {{4}}). That is what lets the whole query string travel —
+    // a link in a template's *button* is fixed and cannot carry it.
+    //
+    // Needs a template with a slot for it, e.g. "Hi {{1}}, book your session
+    // here: {{2}}". Name that campaign in AISENSY_BOOKING_LINK_CAMPAIGN and the
+    // client gets the prefilled link. Without it we fall back to the existing
+    // no-variable template, which sends only a generic prompt — so the fallback
+    // is reported honestly rather than as a link delivered.
+    const linkCampaign = process.env.AISENSY_BOOKING_LINK_CAMPAIGN;
+    let whatsappSent = false;
+    let whatsappCarriedLink = false;
+    if (phone) {
+      try {
+        await sendAiSensyMessage(
+          'manual_booking_link',
+          linkCampaign || 'panel_free_consultation',
+          phone,
+          name || 'there',
+          linkCampaign ? [name || 'there', link] : []
+        );
+        whatsappSent = true;
+        whatsappCarriedLink = Boolean(linkCampaign);
+      } catch (waErr: any) {
+        console.warn(`[Booking Link] WhatsApp to ${phone} failed: ${waErr?.message || waErr}`);
+      }
+    }
+
+    console.log(
+      `[Booking Link] Sent to ${email}` +
+      `${whatsappSent ? ` and WhatsApp (${whatsappCarriedLink ? 'with link' : 'generic template'})` : ''}: ${link}`
+    );
+    res.json({ success: true, link, emailSent: true, whatsappSent, whatsappCarriedLink });
   } catch (error: any) {
     console.error('Error sending booking link:', error);
     res.status(500).json({ error: error?.message || 'Failed to send the booking link.' });
@@ -6901,6 +6953,10 @@ app.get('/api/bookings/:bookingId/cancellation-options', requireRole(ADMIN_ROLES
       amount: Number(b.invitee_payment_amount) || 0,
       currency: b.invitee_payment_currency || 'INR',
       paymentGateway: b.invitee_payment_gateway || null,
+      // Needed by the dialog to say what happens to an INELIGIBLE booking's
+      // money — a paid card booking refunds through the gateway, an unpaid one
+      // has nothing to return. Without it the dialog can only stay silent.
+      paymentStatus: b.payment_status || null,
       alreadyActioned: b.cancellation_action || null,
     });
   } catch (error) {
@@ -8126,6 +8182,114 @@ app.get('/api/public/services/:slug', async (req, res) => {
   } catch (error) {
     console.error('Error fetching public service:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/public/catalogue
+ *
+ * Everything bookable, grouped by therapy, for the single public booking page.
+ *
+ * Why this exists rather than reusing /api/services: the visitor picks a
+ * therapy and then a therapist, and each option must carry the service row it
+ * stands for. Matching a chosen therapy NAME back to a service later is the
+ * fragile step this endpoint removes — the id travels with the choice.
+ *
+ * The therapy name is parsed off the title ("Individual Therapy Session with
+ * Muskan Negi" -> "Individual Therapy Session") because therapy_type is NULL on
+ * most rows and cannot be grouped on.
+ *
+ * Public and read-only. It exposes the catalogue a visitor is about to be shown
+ * anyway, and no client data of any kind.
+ */
+app.get('/api/public/catalogue', async (req, res) => {
+  try {
+    // Three filters, all of which decide whether a VISITOR should ever see this:
+    //
+    //  1. INNER JOIN + is_active — a service can be live while the therapist
+    //     behind it is deactivated, and create-booking refuses those with a 403.
+    //     Joining strictly means a therapy whose only therapist is inactive
+    //     disappears from the list entirely, rather than leading to a dead end.
+    //  2. No internal/test calendars. Matched on a WORD boundary so "Test
+    //     Update" goes and a real therapy like "Latest Approaches" stays.
+    //  3. Free Consultation is excluded further down by its own flag, not here,
+    //     because it is a real service the admin may still want listed.
+    const { rows } = await pool.query(`
+      SELECT s.id, s.title, s.therapy_type, s.duration, s.slug, s.type,
+             s.description, s.therapist_id, s.therapist_name, s.schedule_id,
+             s.is_payment_enabled,
+             t.profile_picture_url, t.specialization, t.specialization_details
+        FROM therapy_services s
+        JOIN therapists t ON t.therapist_id = s.therapist_id
+       WHERE s.is_active = true
+         AND COALESCE(t.is_active, true) = true
+         AND s.title !~* '\\mtest\\M'
+       ORDER BY s.title, s.therapist_name
+    `);
+
+    /** "Individual Therapy Session with Muskan Negi" -> "Individual Therapy Session" */
+    const therapyNameOf = (r: any) => {
+      if (r.therapy_type && String(r.therapy_type).trim()) return String(r.therapy_type).trim();
+      return String(r.title || '').split(/\s+with\s+/i)[0].replace(/\s*[-–]\s*safestories\s*$/i, '').trim();
+    };
+
+    /**
+     * Group key for a therapy name.
+     *
+     * therapy_type is set on some rows and NULL on others, so the same therapy
+     * arrives spelled two ways — "Adolescent Therapy" from the column and
+     * "Adolescent Therapy Session" from a title. Grouped verbatim those become
+     * two cards for one therapy, which is what the visitor would have to choose
+     * between. Dropping a trailing "session" collapses them.
+     */
+    const groupKeyOf = (name: string) =>
+      name.toLowerCase().replace(/\s+session\s*$/i, '').replace(/\s+/g, ' ').trim();
+
+    // The anonymous list price. A visitor who has not identified themselves can
+    // hold no grandfathered rate, and the booking page re-quotes through
+    // /api/public/resolve-price the moment a phone or email is entered.
+    const priced = await Promise.all(rows.map(async (r: any) => {
+      let amount: number | null = null;
+      try { amount = (await resolvePrice(pool, { serviceId: r.id })).amount; } catch { /* price is display-only here */ }
+      return { ...r, amount };
+    }));
+
+    const groups = new Map<string, any>();
+    for (const r of priced) {
+      const name = therapyNameOf(r);
+      if (!name) continue;
+      const key = groupKeyOf(name);
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          // Display the collapsed form ("Adolescent Therapy"), not whichever
+          // spelling happened to arrive first.
+          name: name.replace(/\s+session\s*$/i, '').trim() || name,
+          // Free Consultation is not a therapy the client chooses between; it
+          // has no therapist and no payment, and the caller renders it apart.
+          is_free_consultation: /free consultation/i.test(name),
+          therapists: [],
+        });
+      }
+      groups.get(key).therapists.push({
+        service_id: r.id,
+        slug: r.slug,
+        therapist_id: r.therapist_id,
+        therapist_name: r.therapist_name,
+        profile_picture_url: r.profile_picture_url || null,
+        specialization: r.specialization || null,
+        specialization_details: r.specialization_details || null,
+        duration: r.duration,
+        session_mode: r.type || null,
+        amount: r.amount,
+        is_payment_enabled: r.is_payment_enabled ?? true,
+      });
+    }
+
+    res.json({ success: true, therapies: Array.from(groups.values()) });
+  } catch (error: any) {
+    console.error('Error building public catalogue:', error);
+    res.status(500).json({ error: 'Failed to load the catalogue' });
   }
 });
 
@@ -9652,9 +9816,57 @@ app.get('/api/payment-settings/public', async (req, res) => {
   }
 });
 
+/**
+ * Lookup budget for the public client lookup.
+ *
+ * This endpoint answers "who holds this phone number" without authentication,
+ * which is what lets the public booking page prefill a returning client in one
+ * step. The cost is that it can also be walked: a caller with a list of numbers
+ * learns who is in therapy and with whom.
+ *
+ * A verification step was considered and deliberately not taken — it would add
+ * a screen to every returning booking. This budget is the mitigation instead:
+ * a real visitor looks up one number, so 12 an hour is invisible to them while
+ * bulk enumeration stops early. It raises the cost of walking the list; it does
+ * not make it impossible.
+ *
+ * In-memory on purpose: one process, and a restart clearing it is acceptable
+ * for a throttle. Anything durable belongs in Redis, which this stack has not
+ * got.
+ */
+const LOOKUP_WINDOW_MS = 60 * 60 * 1000;
+const LOOKUP_MAX_PER_WINDOW = 12;
+const lookupHits = new Map<string, number[]>();
+
+function lookupBudgetExceeded(ip: string): boolean {
+  const now = Date.now();
+  const recent = (lookupHits.get(ip) || []).filter(t => now - t < LOOKUP_WINDOW_MS);
+  recent.push(now);
+  lookupHits.set(ip, recent);
+  // Opportunistic sweep so the map cannot grow without bound.
+  if (lookupHits.size > 5000) {
+    for (const [k, v] of lookupHits) {
+      if (v.every(t => now - t >= LOOKUP_WINDOW_MS)) lookupHits.delete(k);
+    }
+  }
+  return recent.length > LOOKUP_MAX_PER_WINDOW;
+}
+
 app.post('/api/public/client-history', async (req, res) => {
   try {
     const { email, phone } = req.body;
+
+    // Authenticated staff are not walking a list of strangers' numbers — the
+    // dashboard legitimately looks up many clients in a sitting.
+    if (!optionalUser(req)) {
+      const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || 'unknown';
+      if (lookupBudgetExceeded(ip)) {
+        console.warn(`[client-history] Lookup budget exceeded for ${ip}`);
+        // Deliberately not "not found": a different answer for throttled vs
+        // absent would itself leak whether the number matched.
+        return res.status(429).json({ success: false, error: 'Too many lookups. Please try again later.' });
+      }
+    }
     const cleanEmail = email ? email.trim().toLowerCase() : '';
     const cleanPhone = phone ? phone.replace(/[^0-9]/g, '') : '';
 
@@ -9664,7 +9876,7 @@ app.post('/api/public/client-history', async (req, res) => {
 
     // 1. Query bookings for the client (excluding canceled and payment_failed)
     const bookingsQuery = `
-      SELECT invitee_name, invitee_email, invitee_phone, booking_resource_name, booking_host_name, therapist_id, booking_mode, emergency_contact_name, emergency_contact_relation, emergency_contact_number, invitee_created_at
+      SELECT invitee_name, invitee_email, invitee_phone, booking_resource_name, booking_host_name, therapist_id, booking_mode, emergency_contact_name, emergency_contact_relation, emergency_contact_number, invitee_created_at, service_id
       FROM bookings
       WHERE 
         (($1 <> '' AND LOWER(invitee_email) = LOWER($1))
@@ -9691,6 +9903,7 @@ app.post('/api/public/client-history', async (req, res) => {
     let assignedTherapy = null;
     let assignedTherapistName = null;
     let assignedTherapistId = null;
+    let assignedServiceId: number | null = null;
 
     if (bookings.length > 0) {
       exists = true;
@@ -9717,6 +9930,12 @@ app.post('/api/public/client-history', async (req, res) => {
         assignedTherapy = therapyBooking.booking_resource_name;
         assignedTherapistName = therapyBooking.booking_host_name;
         assignedTherapistId = therapyBooking.therapist_id;
+        // The exact service they booked last time, when it was recorded.
+        // Returning it lets the public page skip therapy/therapist selection
+        // outright instead of matching names back to a service row. Present on
+        // ~95% of bookings from the last six months; older ones fall back to
+        // the therapist + therapy pair, which the catalogue can still resolve.
+        assignedServiceId = therapyBooking.service_id ?? null;
       }
     } else {
       // Check all_clients_table if no booking found
@@ -9758,7 +9977,8 @@ app.post('/api/public/client-history', async (req, res) => {
       emergencyNumber,
       assignedTherapy,
       assignedTherapistName,
-      assignedTherapistId
+      assignedTherapistId,
+      assignedServiceId
     });
   } catch (error) {
     console.error('Error fetching client history:', error);

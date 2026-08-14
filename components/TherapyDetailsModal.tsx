@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
-  X, Edit, Copy, ExternalLink, Ban, Clock, Video, MapPin, IndianRupee,
-  CalendarCheck, FileText, Link as LinkIcon, User,
+  X, Edit, Ban, Clock, Video, MapPin, IndianRupee,
+  CalendarCheck, FileText, User,
 } from 'lucide-react';
 import { displayTherapistName, isPlatformTherapist } from '../lib/platformTherapist';
 
@@ -33,24 +33,12 @@ const modeLabel = (type?: string | null): string => {
 };
 
 export const TherapyDetailsModal: React.FC<TherapyDetailsModalProps> = ({ therapy, onClose, onEdit }) => {
-  const [copied, setCopied] = useState(false);
-
-  const cleanSlug = therapy.slug ? String(therapy.slug).replace(/^\/+/, '') : '';
-  const fullLink = cleanSlug ? `${window.location.origin}/book/${cleanSlug}` : '';
   const calendarInactive = therapy.is_active === false;
   const therapistInactive = therapy.therapist_is_active === false;
   const linksDisabled = calendarInactive || therapistInactive;
   const questionCount = Array.isArray(therapy.form_questions) ? therapy.form_questions.length : 0;
   const isInPerson = modeLabel(therapy.type) === 'In-Person';
   const therapistName = displayTherapistName(therapy.therapist_name, therapy.therapist_id);
-
-  const handleCopy = () => {
-    if (!fullLink) return;
-    navigator.clipboard.writeText(fullLink).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
 
   return (
     <div
@@ -133,45 +121,17 @@ export const TherapyDetailsModal: React.FC<TherapyDetailsModalProps> = ({ therap
             )}
           </div>
 
-          {/* Booking link */}
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Public Booking Link</p>
-            {linksDisabled ? (
-              <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
-                <Ban size={15} className="shrink-0" />
-                Links disabled ({calendarInactive ? 'therapy deactivated' : 'therapist inactive'})
-              </div>
-            ) : fullLink ? (
-              <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-lg px-4 py-3">
-                <LinkIcon size={15} className="text-gray-400 shrink-0" />
-                <a
-                  href={fullLink}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sm text-teal-700 hover:underline flex-1 truncate"
-                >
-                  {fullLink}
-                </a>
-                <button
-                  onClick={handleCopy}
-                  className="shrink-0 text-xs font-semibold px-2.5 py-1.5 rounded-md bg-white border border-gray-200 hover:bg-gray-50 transition-colors flex items-center gap-1.5"
-                >
-                  {copied ? <span className="text-teal-600">Copied!</span> : <><Copy size={12} /> Copy</>}
-                </button>
-                <a
-                  href={fullLink}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="shrink-0 p-1.5 rounded-md bg-white border border-gray-200 hover:bg-gray-50 transition-colors"
-                  title="Open link"
-                >
-                  <ExternalLink size={13} />
-                </a>
-              </div>
-            ) : (
-              <p className="text-sm text-gray-400 italic">No booking link generated.</p>
-            )}
-          </div>
+          {/* The public booking link was shown here. Clients are now sent a
+              single link (/book) that resolves the therapy and therapist
+              itself, so per-service URLs are no longer handed out. The
+              deactivated-therapy warning is kept — it explains why an old link
+              someone still holds will refuse to book. */}
+          {linksDisabled && (
+            <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+              <Ban size={15} className="shrink-0" />
+              Booking disabled ({calendarInactive ? 'therapy deactivated' : 'therapist inactive'})
+            </div>
+          )}
 
           {therapy.google_calendar_connected === false && (
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5">

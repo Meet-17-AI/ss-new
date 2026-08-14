@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Lottie from 'lottie-react';
 import sessionBookedAnimation from '../session-booked.json';
 import {
@@ -56,11 +56,31 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
   const [showFull, setShowFull] = useState(false);
 
   // Form states
+  /**
+   * Details the admin already collected, handed over in the link they sent.
+   *
+   * Read once, at first render, so a later edit by the client is never undone by
+   * a re-render. These are a convenience only — every field stays editable, and
+   * the server re-resolves identity and price at checkout regardless of what
+   * arrives here. Nothing from the URL is trusted for pricing or authorisation.
+   */
+  const prefill = useMemo(() => {
+    const q = new URLSearchParams(window.location.search);
+    const digits = (q.get('phone') || '').replace(/[^\d]/g, '');
+    return {
+      name: (q.get('name') || '').slice(0, 100),
+      email: (q.get('email') || '').slice(0, 120),
+      // Stored numbers carry a country code; the form holds it separately.
+      phone: digits.length > 10 ? digits.slice(-10) : digits,
+      code: digits.length > 10 ? `+${digits.slice(0, digits.length - 10)}` : '+91',
+    };
+  }, []);
+
   const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    whatsapp: '',
-    whatsappCountryCode: '+91',
+    name: prefill.name,
+    email: prefill.email,
+    whatsapp: prefill.phone,
+    whatsappCountryCode: prefill.code,
     name2: '',
     email2: '',
     whatsapp2: '',

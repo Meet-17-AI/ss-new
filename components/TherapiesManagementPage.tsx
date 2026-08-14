@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Edit2, Trash2, ExternalLink, ArrowLeft, Loader, Check, X, ShieldAlert } from 'lucide-react';
+import { Plus, Edit2, Trash2, ArrowLeft, Loader, Check, X, ShieldAlert } from 'lucide-react';
 
 interface TherapyService {
   id: number;
@@ -312,15 +312,6 @@ export const TherapiesManagementPage: React.FC = () => {
                       {/* Actions */}
                       <td className="px-6 py-5 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <a
-                            href={`/book/${service.slug.replace(/^\//, '')}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 hover:text-teal-700 transition-colors"
-                            title="Open Public Booking Page"
-                          >
-                            <ExternalLink size={16} />
-                          </a>
                           <button
                             onClick={() => handleEdit(service)}
                             className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 hover:text-blue-600 transition-colors"
@@ -430,17 +421,17 @@ export const TherapiesManagementPage: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1">
-                    Slug Link (public URL) <span className="text-red-500">*</span>
+                    Internal Slug (read-only)
                   </label>
                   <div className="relative">
                     <span className="absolute left-3 top-2.5 text-gray-400 text-sm font-mono">/book/</span>
                     <input
                       type="text"
-                      required
+                      readOnly
                       value={slug}
-                      onChange={(e) => setSlug(e.target.value)}
-                      placeholder="individual-therapy"
-                      className="w-full pl-16 pr-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-teal-500 transition-colors font-mono"
+                      placeholder="generated automatically"
+                      title="Generated automatically. Changing it would break booking links already sent to clients."
+                      className="w-full pl-16 pr-4 py-2 border border-gray-200 bg-gray-50 text-gray-500 rounded-lg cursor-not-allowed transition-colors font-mono"
                     />
                   </div>
                 </div>
