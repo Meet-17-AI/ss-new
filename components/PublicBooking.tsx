@@ -130,8 +130,11 @@ const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
       </div>
     </div>
 
-    <footer className={`relative z-10 pb-7 ${GUTTER}`}>
-      <p className="max-w-[900px] mx-auto text-xs text-slate-500">
+    {/* Sits at the page margin, not the card's. It belongs to the page rather
+        than to the wizard, so it deliberately ignores GUTTER — which exists only
+        to keep the card clear of the illustration. */}
+    <footer className="relative z-10 px-6 pb-7">
+      <p className="text-xs text-slate-500">
         © {new Date().getFullYear()} SafeStories, SAFETY AND YOU WELLBEING CENTRE LLP. All Rights Reserved!
       </p>
     </footer>
