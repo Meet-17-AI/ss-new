@@ -8206,10 +8206,17 @@ app.get('/api/public/catalogue', async (req, res) => {
   try {
     // Three filters, all of which decide whether a VISITOR should ever see this:
     //
-    //  1. INNER JOIN + is_active — a service can be live while the therapist
-    //     behind it is deactivated, and create-booking refuses those with a 403.
-    //     Joining strictly means a therapy whose only therapist is inactive
-    //     disappears from the list entirely, rather than leading to a dead end.
+    //  1. BOTH active flags, because they mean different things and either one
+    //     being off must hide the therapist:
+    //       therapists.is_active  gates the therapist RECORD
+    //       users.is_active       gates their LOGIN, and is what "deactivate
+    //                             therapist" in the panel actually sets
+    //     /api/services reports therapist_is_active from users, and
+    //     /api/therapist-availability blocks bookings on it — so checking only
+    //     therapists.is_active left a deactivated therapist bookable here while
+    //     every other screen showed them as disabled. Missing users row means an
+    //     external therapist, which stays allowed (COALESCE), matching
+    //     /api/therapist-availability.
     //  2. No internal/test calendars. Matched on a WORD boundary so "Test
     //     Update" goes and a real therapy like "Latest Approaches" stays.
     //  3. Free Consultation is excluded further down by its own flag, not here,
@@ -8221,8 +8228,10 @@ app.get('/api/public/catalogue', async (req, res) => {
              t.profile_picture_url, t.specialization, t.specialization_details
         FROM therapy_services s
         JOIN therapists t ON t.therapist_id = s.therapist_id
+        LEFT JOIN users u ON u.role = 'therapist' AND u.therapist_id = s.therapist_id
        WHERE s.is_active = true
          AND COALESCE(t.is_active, true) = true
+         AND COALESCE(u.is_active, true) = true
          AND s.title !~* '\\mtest\\M'
        ORDER BY s.title, s.therapist_name
     `);
