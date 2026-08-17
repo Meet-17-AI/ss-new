@@ -7061,30 +7061,73 @@ app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: a
     // WhatsApp is best-effort: AiSensy being slow or down must not turn
     // "link sent" into an error when the email has already gone.
     //
-    // The prefilled URL rides as a BODY variable, the way the payment link and
-    // the session meeting link already do (send_paymentlink_client_n8n passes
-    // paymentLink as {{4}}). That is what lets the whole query string travel —
-    // a link in a template's *button* is fixed and cannot carry it.
+    // Two paths:
+    // 1. Campaigns with button CTA that includes the dynamic link URL
+    // 2. Campaigns with body variable for the link
     //
-    // Needs a template with a slot for it, e.g. "Hi {{1}}, book your session
-    // here: {{2}}". Name that campaign in AISENSY_BOOKING_LINK_CAMPAIGN and the
-    // client gets the prefilled link. Without it we fall back to the existing
-    // no-variable template, which sends only a generic prompt — so the fallback
-    // is reported honestly rather than as a link delivered.
-    const linkCampaign = process.env.AISENSY_BOOKING_LINK_CAMPAIGN;
+    // The button CTA is preferred when the campaign supports it, because the
+    // client can click the button directly — no need to copy/paste or find the link.
+    // Set AISENSY_BOOKING_LINK_CLIENT_CHOOSE (basic details filled) or
+    // AISENSY_BOOKING_LINK_CLIENT_THERAPY (therapy filled, therapist open).
+    // Without them, falls back to the body-variable campaign (AISENSY_BOOKING_LINK_CAMPAIGN)
+    // or a generic template.
+    const campaignClientChoose = process.env.AISENSY_BOOKING_LINK_CLIENT_CHOOSE;
+    const campaignClientTherapy = process.env.AISENSY_BOOKING_LINK_CLIENT_THERAPY;
+    const campaignGeneric = process.env.AISENSY_BOOKING_LINK_CAMPAIGN;
+
     let whatsappSent = false;
     let whatsappCarriedLink = false;
     if (phone) {
       try {
+        // Determine which campaign to use based on what the admin filled in
+        let campaign = 'panel_free_consultation'; // fallback
+        let templateParams: string[] = [name || 'there'];
+        let buttonCta: any[] | undefined;
+
+        // If basic details are filled but therapist is to be chosen
+        if (sid && !tkey && campaignClientChoose) {
+          campaign = campaignClientChoose;
+          // Button CTA with the booking link embedded
+          buttonCta = [
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: 0,
+              parameters: [{ type: 'text', text: link }],
+            },
+          ];
+          whatsappCarriedLink = true;
+        }
+        // If therapy is filled but therapist is to be chosen
+        else if (tkey && !sid && campaignClientTherapy) {
+          campaign = campaignClientTherapy;
+          // Button CTA with the booking link embedded
+          buttonCta = [
+            {
+              type: 'button',
+              sub_type: 'url',
+              index: 0,
+              parameters: [{ type: 'text', text: link }],
+            },
+          ];
+          whatsappCarriedLink = true;
+        }
+        // Fallback to body-variable campaign
+        else if (campaignGeneric) {
+          campaign = campaignGeneric;
+          templateParams = [name || 'there', link];
+          whatsappCarriedLink = true;
+        }
+
         await sendAiSensyMessage(
           'manual_booking_link',
-          linkCampaign || 'panel_free_consultation',
+          campaign,
           phone,
           name || 'there',
-          linkCampaign ? [name || 'there', link] : []
+          templateParams,
+          buttonCta
         );
         whatsappSent = true;
-        whatsappCarriedLink = Boolean(linkCampaign);
       } catch (waErr: any) {
         console.warn(`[Booking Link] WhatsApp to ${phone} failed: ${waErr?.message || waErr}`);
       }
