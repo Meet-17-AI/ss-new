@@ -16,6 +16,7 @@ import { uploadFile } from './lib/minio';
 import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendTherapistBookingConfirmationEmail, sendClientBookingCancellationEmail, sendPaymentLinkEmail, sendIssueReportEmail, sendBookingLinkEmail } from './lib/email';
 import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage, sendSessionFeedbackRequest, sendPostSessionTherapistForm } from './automations/index';
 import { generateAdminOTP, verifyAdminOTP } from './otp';
+import { sendPublicOtp, verifyPublicOtp, otpKey } from './lib/publicOtp';
 import { logWebhookApi } from './lib/webhookApiLogger.js';
 import { createNotification, notifyAllAdmins } from './lib/notifications';
 import { logActivity, categoryForRole, extractSafeMetadata } from './lib/activityLog';
@@ -248,6 +249,10 @@ const PUBLIC_API_ROUTES: { methods: string[]; pattern: RegExp }[] = [
   { methods: ['POST'], pattern: /^\/api\/create-booking$/ },
   { methods: ['POST'], pattern: /^\/api\/create-pending-booking$/ },
   { methods: ['POST'], pattern: /^\/api\/public\/client-history$/ },
+  // WhatsApp verification for the booking page. Public by necessity — the whole
+  // point is to check a number belongs to the person holding the phone, before
+  // they have any identity with us at all.
+  { methods: ['POST'], pattern: /^\/api\/public\/(send|verify)-otp$/ },
   // Read-only price quote for the booking page. Returns a figure the visitor is
   // about to be shown anyway, and reports no membership signal an unauthenticated
   // caller could use to enumerate clients.
@@ -9988,6 +9993,65 @@ function lookupBudgetExceeded(ip: string): boolean {
   }
   return recent.length > LOOKUP_MAX_PER_WINDOW;
 }
+
+/**
+ * WhatsApp verification for the public booking page.
+ *
+ * The per-number limits live in the module; this adds a per-IP budget on top,
+ * because a caller rotating through numbers is not abusing any one of them — it
+ * is using SafeStories' WhatsApp account to message strangers. 20 an hour is far
+ * more than a real visitor needs and far less than that is worth.
+ */
+const OTP_SEND_MAX_PER_IP = 20;
+const otpSendHits = new Map<string, number[]>();
+
+function otpSendBudgetExceeded(ip: string): boolean {
+  const now = Date.now();
+  const recent = (otpSendHits.get(ip) || []).filter(t => now - t < LOOKUP_WINDOW_MS);
+  recent.push(now);
+  otpSendHits.set(ip, recent);
+  if (otpSendHits.size > 5000) {
+    for (const [k, v] of otpSendHits) {
+      if (v.every(t => now - t >= LOOKUP_WINDOW_MS)) otpSendHits.delete(k);
+    }
+  }
+  return recent.length > OTP_SEND_MAX_PER_IP;
+}
+
+app.post('/api/public/send-otp', async (req, res) => {
+  try {
+    const { phone, name } = req.body || {};
+    const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.ip || 'unknown';
+    if (otpSendBudgetExceeded(ip)) {
+      console.warn(`[Public OTP] Send budget exceeded for ${ip}`);
+      return res.status(429).json({ success: false, error: 'Too many requests. Please try again later.' });
+    }
+
+    const result = await sendPublicOtp(String(phone || ''), name);
+    if (!result.ok) {
+      // 429 for "wait a moment", 400 for a number we cannot send to at all.
+      return res.status(result.retryAfterSec ? 429 : 400)
+        .json({ success: false, error: result.error, retryAfterSec: result.retryAfterSec });
+    }
+    res.json({ success: true, expiresInSec: result.expiresInSec, resendInSec: result.resendInSec });
+  } catch (error: any) {
+    console.error('Error sending public OTP:', error?.message || error);
+    res.status(502).json({ success: false, error: 'Could not send the code on WhatsApp. Please try again.' });
+  }
+});
+
+app.post('/api/public/verify-otp', async (req, res) => {
+  try {
+    const { phone, otp } = req.body || {};
+    const result = verifyPublicOtp(String(phone || ''), String(otp || ''));
+    if (!result.ok) return res.status(401).json({ success: false, error: result.error });
+    console.log(`[Public OTP] Verified ...${otpKey(String(phone || '')).slice(-4)}`);
+    res.json({ success: true, verified: true });
+  } catch (error: any) {
+    console.error('Error verifying public OTP:', error?.message || error);
+    res.status(500).json({ success: false, error: 'Could not verify that code.' });
+  }
+});
 
 app.post('/api/public/client-history', async (req, res) => {
   try {

@@ -209,6 +209,15 @@ export const PublicBooking: React.FC = () => {
   const [identified, setIdentified] = useState(false);
   const lookedUp = useRef('');
 
+  // ── WhatsApp verification ──
+  // Proves the number belongs to whoever is filling the form, before anything is
+  // held or charged against it.
+  const [otp, setOtp] = useState('');
+  const [otpStage, setOtpStage] = useState<'idle' | 'sending' | 'sent' | 'verifying' | 'verified'>('idle');
+  const [otpError, setOtpError] = useState('');
+  /** Seconds until Resend is offered again, counted down by the effect below. */
+  const [resendIn, setResendIn] = useState(0);
+
   // ── what they are booking ──
   const [catalogue, setCatalogue] = useState<CatalogueTherapy[]>([]);
   const [chosenTherapy, setChosenTherapy] = useState<CatalogueTherapy | null>(null);
@@ -389,6 +398,10 @@ export const PublicBooking: React.FC = () => {
   useEffect(() => {
     const key = last10(phone);
     if (key.length < 10) { setIdentified(false); setLookup('idle'); lookedUp.current = ''; return; }
+    // Nothing is said about a number until whoever typed it has proved they hold
+    // it. "Welcome back, Meet" to an unverified caller answers the one question
+    // this page should never answer for free.
+    if (otpStage !== 'verified') { setIdentified(false); setLookup('idle'); return; }
     if (lookedUp.current === key) return;
 
     const t = setTimeout(async () => {
@@ -437,7 +450,7 @@ export const PublicBooking: React.FC = () => {
     }, 450);
 
     return () => clearTimeout(t);
-  }, [phone, countryCode, allServices, catalogue, fromLink]);
+  }, [phone, countryCode, allServices, catalogue, fromLink, otpStage]);
 
   // ── which days this therapist works, for the visible month ──
   useEffect(() => {
@@ -498,7 +511,74 @@ export const PublicBooking: React.FC = () => {
       .catch(() => { /* the catalogue's list price still shows */ });
   }, [service, email, phone, countryCode]);
 
-  const canContinue = Boolean(identified && name.trim() && email.trim() && last10(phone).length === 10);
+  const fullPhone = `${countryCode}${phone}`;
+
+  /** Countdown for the Resend link. */
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = setTimeout(() => setResendIn(s => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendIn]);
+
+  /**
+   * Editing the number undoes the verification.
+   *
+   * Otherwise a client could verify one number, change it, and book against a
+   * number nobody ever proved they hold - which is the entire thing this step
+   * exists to prevent.
+   */
+  useEffect(() => {
+    setOtpStage('idle'); setOtp(''); setOtpError(''); setResendIn(0);
+  }, [phone, countryCode]);
+
+  const requestOtp = async () => {
+    setOtpStage('sending'); setOtpError('');
+    try {
+      const r = await fetch('/api/public/send-otp', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: fullPhone, name }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) {
+        setOtpError(d.error || 'Could not send the code. Please try again.');
+        // A cooldown is not a failure to send - the earlier code still works, so
+        // the client stays on the code entry with the timer running.
+        setOtpStage(d.retryAfterSec ? 'sent' : 'idle');
+        if (d.retryAfterSec) setResendIn(d.retryAfterSec);
+        return;
+      }
+      setOtpStage('sent');
+      setResendIn(d.resendInSec || 45);
+    } catch {
+      setOtpError('Could not send the code. Please check your connection.');
+      setOtpStage('idle');
+    }
+  };
+
+  const submitOtp = async () => {
+    if (otp.length !== 6) return;
+    setOtpStage('verifying'); setOtpError('');
+    try {
+      const r = await fetch('/api/public/verify-otp', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: fullPhone, otp }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.success) {
+        setOtpError(d.error || 'That code is not correct.');
+        setOtpStage('sent');
+        return;
+      }
+      setOtpStage('verified');
+      setOtpError('');
+    } catch {
+      setOtpError('Could not verify that code. Please check your connection.');
+      setOtpStage('sent');
+    }
+  };
+
+  const canContinue = Boolean(
+    identified && name.trim() && email.trim() && last10(phone).length === 10 && otpStage === 'verified');
 
   /** Everything the server needs to create this booking. */
   const buildPayload = () => ({
@@ -698,6 +778,66 @@ export const PublicBooking: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              {/* -- prove the number -- */}
+              {last10(phone).length === 10 && otpStage !== 'verified' && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  {otpStage === 'idle' || otpStage === 'sending' ? (
+                    <>
+                      <p className="text-sm text-slate-600 mb-3">
+                        We will send a 6-digit code to this number on WhatsApp to confirm it is yours.
+                      </p>
+                      <button type="button" onClick={requestOtp} disabled={otpStage === 'sending'}
+                        className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-teal-700
+                                   hover:bg-teal-800 disabled:bg-slate-300 disabled:cursor-not-allowed
+                                   inline-flex items-center gap-2 transition-colors">
+                        {otpStage === 'sending'
+                          ? <><Loader2 size={15} className="animate-spin" /> Sending...</>
+                          : <>Get OTP on WhatsApp</>}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm text-slate-600 mb-3">
+                        Enter the 6-digit code sent to <strong>{countryCode} {phone}</strong> on WhatsApp.
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {/* inputMode numeric so a phone offers the number pad, and
+                            Enter submits - this is a field people expect to type
+                            and press go, not hunt for a button. */}
+                        <input value={otp} inputMode="numeric" autoComplete="one-time-code" maxLength={6}
+                          onChange={e => { setOtp(e.target.value.replace(/\D/g, '').slice(0, 6)); setOtpError(''); }}
+                          onKeyDown={e => { if (e.key === 'Enter') submitOtp(); }}
+                          placeholder="000000"
+                          className={`w-32 tracking-[0.3em] text-center ${inputCls}`} />
+                        <button type="button" onClick={submitOtp}
+                          disabled={otp.length !== 6 || otpStage === 'verifying'}
+                          className="px-4 py-2.5 rounded-lg text-sm font-semibold text-white bg-teal-700
+                                     hover:bg-teal-800 disabled:bg-slate-300 disabled:cursor-not-allowed
+                                     inline-flex items-center gap-2 transition-colors">
+                          {otpStage === 'verifying'
+                            ? <><Loader2 size={15} className="animate-spin" /> Verifying...</>
+                            : 'Verify'}
+                        </button>
+                        <button type="button" onClick={requestOtp} disabled={resendIn > 0}
+                          className="px-3 py-2.5 text-sm font-medium text-teal-700 hover:underline
+                                     disabled:text-slate-400 disabled:no-underline disabled:cursor-not-allowed">
+                          {resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend code'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  {otpError && <p className="text-sm text-rose-600 mt-3">{otpError}</p>}
+                </div>
+              )}
+
+              {otpStage === 'verified' && (
+                <div className="flex items-center gap-2 text-sm rounded-lg px-3 py-2 bg-teal-50 text-teal-800">
+                  <Check size={15} />
+                  <span>WhatsApp number verified.</span>
+                </div>
+              )}
 
               {lookup !== 'idle' && (
                 <div className={`flex items-start gap-2 text-sm rounded-lg px-3 py-2 ${
