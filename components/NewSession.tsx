@@ -430,11 +430,23 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.error || 'Could not send the booking link.');
-        toast.success(d.whatsappCarriedLink
-          ? `Booking link sent to ${clientEmail} and WhatsApp.`
-          : d.whatsappSent
-          ? `Link emailed to ${clientEmail}. WhatsApp sent a generic prompt.`
-          : `Booking link sent to ${clientEmail}.`);
+
+        // Each channel reports for itself. Saying "sent" when only one of them
+        // got through is how an admin ends up waiting on a client who was never
+        // reached — and the link is always real, so a total failure is still
+        // recoverable by hand rather than a dead end.
+        if (d.whatsappCarriedLink && d.emailSent) {
+          toast.success('Booking link sent on WhatsApp and email.');
+        } else if (d.whatsappCarriedLink) {
+          toast.success('Booking link sent on WhatsApp.');
+        } else if (d.emailSent) {
+          toast.success(`Booking link emailed to ${clientEmail}.`
+            + (d.whatsappSent ? ' WhatsApp sent a generic prompt without the link.' : ''));
+        } else {
+          toast.error('Could not deliver the link. Copy it and send it yourself: ' + d.link);
+          console.warn('[Booking link] undelivered', d.link, { whatsapp: d.whatsappError, email: d.emailError });
+          return; // Stay on the page so the link stays on screen.
+        }
         return onBack();
       }
 

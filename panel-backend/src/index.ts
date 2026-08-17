@@ -1008,27 +1008,42 @@ const EMAIL_DEADLINE_MS = 15_000;
 
 type InviteEmailResult = { ok: boolean; pending?: boolean; error?: string };
 
-const sendInviteEmailBounded = async (
-  email: string, name: string, otp: string, expiresAt: Date
+/**
+ * Runs a mail send against the deadline and REPORTS what happened rather than
+ * throwing, so a caller can decide what a failed notification means.
+ *
+ * It nearly always means "not much": the durable record is already in Postgres
+ * before this runs. Throwing instead makes the whole request look like it failed
+ * when the thing that mattered succeeded, and the caller loses whatever it was
+ * about to do next.
+ */
+const sendEmailBounded = async (
+  label: string, send: () => Promise<unknown>
 ): Promise<InviteEmailResult> => {
   let timer: NodeJS.Timeout | undefined;
   try {
     const result = await Promise.race([
-      sendOTPEmail(email, name, otp, expiresAt).then(() => ({ ok: true })),
+      send().then(() => ({ ok: true }) as InviteEmailResult),
       new Promise<InviteEmailResult>(resolve => {
         timer = setTimeout(() => resolve({ ok: false, pending: true }), EMAIL_DEADLINE_MS);
       }),
     ]);
-    if (result.pending) console.warn(`⏳ OTP email to ${email} exceeded ${EMAIL_DEADLINE_MS}ms; responding without it.`);
-    else console.log(`✅ Therapist onboarding OTP sent to: ${email}`);
+    if (result.pending) console.warn(`⏳ ${label} exceeded ${EMAIL_DEADLINE_MS}ms; responding without it.`);
+    else console.log(`✅ ${label} sent.`);
     return result;
   } catch (err: any) {
-    console.error('❌ Failed to send therapist onboarding email:', err);
+    console.error(`❌ ${label} failed:`, err?.message || err);
     return { ok: false, error: err?.message || String(err) };
   } finally {
     if (timer) clearTimeout(timer);
   }
 };
+
+const sendInviteEmailBounded = (
+  email: string, name: string, otp: string, expiresAt: Date
+): Promise<InviteEmailResult> =>
+  sendEmailBounded(`Therapist onboarding OTP to ${email}`,
+    () => sendOTPEmail(email, name, otp, expiresAt));
 
 // Only admins invite therapists. Previously any authenticated session could —
 // including a therapist's own — which let a therapist mint therapist records.
@@ -4930,14 +4945,26 @@ app.post('/api/webhook/feedback', async (req, res) => {
 // webhook (-> confirmed) or by the expiry cron (-> cancelled).
 const UNPAID_HOLD_STATUSES = new Set(['waiting_for_payment', 'payment_pending', 'pending']);
 
-// Always resolve the public site base URL to panel.safestories.in. FRONTEND_URL may be
-// unset, or (in stale deploy configs) still point at a dead vercel host — never emit those.
+/**
+ * Where the public site lives, for links we put in front of clients.
+ *
+ * This used to rewrite EVERY vercel.app host to panel.safestories.in. The intent
+ * was to stop one specific dead deployment leaking into client emails, but the
+ * rule caught the whole TLD — so a deliberately configured Vercel frontend was
+ * discarded too, and its booking links pointed at a different site that knows
+ * nothing about the token in them. The client lands on a page that ignores it.
+ *
+ * So only the hosts actually known to be dead are refused; anything else set on
+ * purpose is honoured, and an unset value falls back to production.
+ */
+const DEAD_FRONTEND_HOSTS = [/safestories-dashboard/i];
+
 function frontendBaseUrl(): string {
-  let base = process.env.FRONTEND_URL || 'https://panel.safestories.in';
-  if (base.includes('vercel.app') || base.includes('safestories-dashboard')) {
-    base = 'https://panel.safestories.in';
+  const configured = (process.env.FRONTEND_URL || '').trim().replace(/\/$/, '');
+  if (!configured || DEAD_FRONTEND_HOSTS.some(dead => dead.test(configured))) {
+    return 'https://panel.safestories.in';
   }
-  return base.replace(/\/$/, '');
+  return configured;
 }
 
 // Derive the true session START instant (ms since epoch) from booking_invitee_time.
@@ -6912,17 +6939,14 @@ const groupKeyOf = (name: string): string =>
 async function resolveBookingLinkTargets(input: {
   serviceId?: any; therapistId?: any; therapy?: any; therapist?: any;
 }): Promise<{ sid: number | null; tkey: string | null }> {
-  try {
-    console.log('[resolveBookingLinkTargets] Starting with input:', input);
-    const { rows } = await pool.query(`
-      SELECT s.id, s.title, s.therapy_type, s.therapist_id, s.therapist_name
-        FROM therapy_services s
-        JOIN therapists t ON t.therapist_id = s.therapist_id
-        LEFT JOIN users u ON u.role = 'therapist' AND u.therapist_id = s.therapist_id
-       WHERE ${BOOKABLE_SERVICE_WHERE}
-       ORDER BY s.title, s.therapist_name
-    `);
-    console.log('[resolveBookingLinkTargets] Found', rows.length, 'bookable services');
+  const { rows } = await pool.query(`
+    SELECT s.id, s.title, s.therapy_type, s.therapist_id, s.therapist_name
+      FROM therapy_services s
+      JOIN therapists t ON t.therapist_id = s.therapist_id
+      LEFT JOIN users u ON u.role = 'therapist' AND u.therapist_id = s.therapist_id
+     WHERE ${BOOKABLE_SERVICE_WHERE}
+     ORDER BY s.title, s.therapist_name
+  `);
 
   const wantedService = Number(input.serviceId);
   const wantedTherapist = String(input.therapistId ?? '').trim();
@@ -6942,24 +6966,14 @@ async function resolveBookingLinkTargets(input: {
     (firstName ? inTherapy.find((r: any) => String(r.therapist_name || '').toLowerCase().includes(firstName)) : null) ||
     null;
 
-    // A service id pins the therapist AND the therapy, so both travel: the public
-    // page can settle the group without a second lookup.
-    if (hit) {
-      const result = { sid: Number(hit.id), tkey: groupKeyOf(therapyNameOf(hit)) };
-      console.log('[resolveBookingLinkTargets] Hit:', { id: hit.id, therapyName: therapyNameOf(hit) }, '→', result);
-      return result;
-    }
+  // A service id pins the therapist AND the therapy, so both travel: the public
+  // page can settle the group without a second lookup.
+  if (hit) return { sid: Number(hit.id), tkey: groupKeyOf(therapyNameOf(hit)) };
 
-    // No therapist settled — the client picks. The therapy still travels, but only
-    // if it is genuinely on offer; a key nothing matches would land them on an
-    // empty therapist list with no way back.
-    const result = { sid: null, tkey: therapyKey && inTherapy.length > 0 ? therapyKey : null };
-    console.log('[resolveBookingLinkTargets] No exact hit, returning:', result);
-    return result;
-  } catch (err: any) {
-    console.error('[resolveBookingLinkTargets] Error:', err.message);
-    throw err;
-  }
+  // No therapist settled — the client picks. The therapy still travels, but only
+  // if it is genuinely on offer; a key nothing matches would land them on an
+  // empty therapist list with no way back.
+  return { sid: null, tkey: therapyKey && inTherapy.length > 0 ? therapyKey : null };
 }
 
 /**
@@ -7018,15 +7032,20 @@ app.get('/api/public/booking-link/:token', async (req, res) => {
  */
 app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: any, res) => {
   try {
-    console.log('[Booking Link] Request received:', { serviceId: req.body?.serviceId, therapistId: req.body?.therapistId, therapy: req.body?.therapy, therapist: req.body?.therapist });
     const { clientName, clientEmail, clientPhone, therapy, therapist,
             serviceId, therapistId, note } = req.body || {};
     const name = String(clientName || '').trim();
     const email = String(clientEmail || '').trim();
     const phone = String(clientPhone || '').trim();
 
-    if (!email) return res.status(400).json({ error: 'A client email is required to send the booking link.' });
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    // WhatsApp is the delivery path that has to work; email rides along when we
+    // have an address. So the requirement is "somewhere to send it", not an
+    // email specifically — demanding one to send a WhatsApp message would be
+    // arbitrary.
+    if (!email && !phone) {
+      return res.status(400).json({ error: 'A client WhatsApp number or email is required to send the booking link.' });
+    }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'Enter a valid client email address.' });
     }
 
@@ -7035,9 +7054,7 @@ app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: a
     // guesswork.
     //   sid  = therapy_services.id, which pins therapist, price and schedule
     //   tkey = the therapy group key, when only the therapy was settled
-    console.log('[Booking Link] Resolving targets...');
     const { sid, tkey } = await resolveBookingLinkTargets({ serviceId, therapistId, therapy, therapist });
-    console.log('[Booking Link] Resolved:', { sid, tkey });
 
     // The prefill is stored, not spelled out in the URL. A link that reads
     // ?name=…&phone=… hands the client's details to anyone they forward the
@@ -7056,88 +7073,102 @@ app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: a
     // thing that must never be sent to a client pointing nowhere.
     const link = `${frontendBaseUrl()}/book?t=${token}`;
 
-    await sendBookingLinkEmail(email, { clientName: name || 'there', link, note: note || undefined });
+    // ── delivery ──────────────────────────────────────────────────────────
+    // Both legs are best-effort and NEITHER may fail the request. The token is
+    // already committed; the link exists and works whether or not a message got
+    // out. Awaiting the email unguarded is what turned this endpoint into a 500:
+    // smtp.gmail.com is dual-stack and the host has no working IPv6 route, so
+    // the send died ~10s in, the throw skipped the WhatsApp block entirely, and
+    // the admin was told nothing had happened while a perfectly good token sat
+    // in the table. Three of those are in booking_link_tokens right now.
+    //
+    // WhatsApp is therefore attempted FIRST and independently: it is the leg
+    // that has to work.
 
-    // WhatsApp is best-effort: AiSensy being slow or down must not turn
-    // "link sent" into an error when the email has already gone.
-    //
-    // Two paths:
-    // 1. Campaigns with button CTA that includes the dynamic link URL
-    // 2. Campaigns with body variable for the link
-    //
-    // The button CTA is preferred when the campaign supports it, because the
-    // client can click the button directly — no need to copy/paste or find the link.
-    // Set AISENSY_BOOKING_LINK_CLIENT_CHOOSE (basic details filled) or
-    // AISENSY_BOOKING_LINK_CLIENT_THERAPY (therapy filled, therapist open).
-    // Without them, falls back to the body-variable campaign (AISENSY_BOOKING_LINK_CAMPAIGN)
-    // or a generic template.
-    const campaignClientChoose = process.env.AISENSY_BOOKING_LINK_CLIENT_CHOOSE;
-    const campaignClientTherapy = process.env.AISENSY_BOOKING_LINK_CLIENT_THERAPY;
+    // Which campaign depends on how much the admin already settled. Both
+    // client-choice templates take the client's name as {{1}} and carry the
+    // link on a URL button.
+    const campaignBasicDetails = process.env.AISENSY_BOOKING_LINK_CLIENT_CHOOSE;   // booking_link_client_basic_details
+    const campaignPrefilledTherapy = process.env.AISENSY_BOOKING_LINK_CLIENT_THERAPY; // booking_link_client_prefilled_therapy
     const campaignGeneric = process.env.AISENSY_BOOKING_LINK_CAMPAIGN;
+
+    /**
+     * WhatsApp will not accept a wholly dynamic button URL. A template defines
+     * it as a fixed prefix plus one placeholder — `…/book?t={{1}}` — and the
+     * parameter fills only the placeholder. Sending the whole link there yields
+     * `…/book?t=https://…`, which lands the client nowhere.
+     *
+     * So the token is what travels by default. Set the mode to `url` if a
+     * template is instead built to take the entire address.
+     */
+    const buttonText = process.env.AISENSY_BOOKING_LINK_BUTTON_MODE === 'url' ? link : token;
+    const linkButton = [{
+      type: 'button', sub_type: 'url', index: 0,
+      parameters: [{ type: 'text', text: buttonText }],
+    }];
 
     let whatsappSent = false;
     let whatsappCarriedLink = false;
+    let whatsappError: string | null = null;
+
     if (phone) {
+      // sid set   → therapy AND therapist are pinned; the link needs no choices.
+      // tkey only → the therapy is pinned, the client picks the therapist.
+      // neither   → the client picks both.
+      //
+      // resolveBookingLinkTargets always returns tkey alongside sid on a hit, so
+      // these are keyed on sid first; testing `sid && !tkey` never matched.
+      const plan =
+        !sid && !tkey && campaignBasicDetails
+          ? { campaign: campaignBasicDetails, params: [name || 'there'], buttons: linkButton, carries: true }
+        : !sid && tkey && campaignPrefilledTherapy
+          ? { campaign: campaignPrefilledTherapy, params: [name || 'there'], buttons: linkButton, carries: true }
+        : campaignGeneric
+          // The older template carries the link as a body variable instead.
+          ? { campaign: campaignGeneric, params: [name || 'there', link], buttons: undefined, carries: true }
+          // Nothing configured for this shape. The generic prompt still reaches
+          // the client, but without the link — reported honestly, not as sent.
+          : { campaign: 'panel_free_consultation', params: [name || 'there'], buttons: undefined, carries: false };
+
       try {
-        // Determine which campaign to use based on what the admin filled in
-        let campaign = 'panel_free_consultation'; // fallback
-        let templateParams: string[] = [name || 'there'];
-        let buttonCta: any[] | undefined;
-
-        // If basic details are filled but therapist is to be chosen
-        if (sid && !tkey && campaignClientChoose) {
-          campaign = campaignClientChoose;
-          // Button CTA with the booking link embedded
-          buttonCta = [
-            {
-              type: 'button',
-              sub_type: 'url',
-              index: 0,
-              parameters: [{ type: 'text', text: link }],
-            },
-          ];
-          whatsappCarriedLink = true;
-        }
-        // If therapy is filled but therapist is to be chosen
-        else if (tkey && !sid && campaignClientTherapy) {
-          campaign = campaignClientTherapy;
-          // Button CTA with the booking link embedded
-          buttonCta = [
-            {
-              type: 'button',
-              sub_type: 'url',
-              index: 0,
-              parameters: [{ type: 'text', text: link }],
-            },
-          ];
-          whatsappCarriedLink = true;
-        }
-        // Fallback to body-variable campaign
-        else if (campaignGeneric) {
-          campaign = campaignGeneric;
-          templateParams = [name || 'there', link];
-          whatsappCarriedLink = true;
-        }
-
         await sendAiSensyMessage(
-          'manual_booking_link',
-          campaign,
-          phone,
-          name || 'there',
-          templateParams,
-          buttonCta
+          'manual_booking_link', plan.campaign, phone, name || 'there', plan.params, plan.buttons
         );
         whatsappSent = true;
+        whatsappCarriedLink = plan.carries;
       } catch (waErr: any) {
-        console.warn(`[Booking Link] WhatsApp to ${phone} failed: ${waErr?.message || waErr}`);
+        whatsappError = waErr?.message || String(waErr);
+        console.warn(`[Booking Link] WhatsApp to ${phone} failed: ${whatsappError}`);
       }
     }
 
+    // Email rides along when we have an address, bounded and non-fatal. Gmail's
+    // IPv6 route is broken from this host often enough that it cannot be allowed
+    // to decide whether the request succeeded.
+    const emailResult = email
+      ? await sendEmailBounded(`Booking link email to ${email}`,
+          () => sendBookingLinkEmail(email, { clientName: name || 'there', link, note: note || undefined }))
+      : { ok: false, error: 'No email address on file' };
+
     console.log(
-      `[Booking Link] Sent to ${email}` +
-      `${whatsappSent ? ` and WhatsApp (${whatsappCarriedLink ? 'with link' : 'generic template'})` : ''}: ${link}`
+      `[Booking Link] ${link} — whatsapp=${whatsappSent ? (whatsappCarriedLink ? 'with link' : 'generic') : 'no'}` +
+      ` email=${emailResult.ok ? 'sent' : emailResult.pending ? 'pending' : 'failed'}`
     );
-    res.json({ success: true, link, emailSent: true, whatsappSent, whatsappCarriedLink });
+
+    // Always 200 with the link. The token is real and the admin can pass it on
+    // by hand if neither channel got through, which is strictly better than a
+    // 500 that hides a link which already exists.
+    res.json({
+      success: true,
+      link,
+      delivered: whatsappCarriedLink || emailResult.ok,
+      whatsappSent,
+      whatsappCarriedLink,
+      whatsappError,
+      emailSent: emailResult.ok,
+      emailPending: Boolean(emailResult.pending),
+      emailError: emailResult.error || null,
+    });
   } catch (error: any) {
     console.error('Error sending booking link:', error);
     res.status(500).json({ error: error?.message || 'Failed to send the booking link.' });

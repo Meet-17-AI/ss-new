@@ -18,11 +18,17 @@ if (useGmailSmtp) {
     port: 465,
     secure: true,
 
-    // Force IPv4. smtp.gmail.com is dual-stack, and on a host with an AAAA
-    // route advertised but no working IPv6 path the connection dies with
-    // `ENETUNREACH ...:465` — but only after the connect timeout expires, so
-    // the caller stalls for minutes. Observed in production: an admin's
-    // "add therapist" request hung ~2 min and the gateway returned 502.
+    // Intended to force IPv4, because smtp.gmail.com is dual-stack and this host
+    // has no working IPv6 path, so connections to its AAAA record die with
+    // `ENETUNREACH ...:465`.
+    //
+    // It does not work, and callers must not rely on it. nodemailer 8 contains
+    // no reference to `family` at all — it resolves the hostname ITSELF in
+    // lib/shared (resolve4 then resolve6), rewrites opts.host to a literal
+    // address and hands that to tls.connect, so nothing is left for a family
+    // hint to influence. Kept only because it is harmless and states the intent;
+    // the protection that actually holds is the deadline every caller puts
+    // around the send. Booking links still record ENETUNREACH to this day.
     family: 4,
 
     // Bound every phase. Nodemailer defaults connectionTimeout to 120s, which
