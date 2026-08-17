@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, ArrowRight, Phone, Search, Check, Wallet, Link2, CalendarDays, Clock,
-  Mail, Loader2, Globe,
+  Mail, Loader2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { InlineCalendar } from './InlineCalendar';
@@ -897,12 +897,10 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
                     therapist === CLIENT_CHOOSES ? <span className="text-amber-700">Client will choose</span>
                     : (therapist || dash)} />
 
-                  {clientWillChoose ? (
-                    <div className="col-span-2 flex items-start gap-2 text-sm text-amber-800">
-                      <Globe size={14} className="mt-0.5 shrink-0" />
-                      <span>A booking link will be sent on WhatsApp and email for them to choose and book.</span>
-                    </div>
-                  ) : (
+                  {/* Nothing more to show when the client is choosing: mode, payment,
+                      date and time are all theirs to pick, and the form beside this
+                      card already says a link is on its way. */}
+                  {clientWillChoose ? null : (
                     <>
                       <Detail label="Preferred mode" value={
                         mode === 'online' ? 'Google Meet' : mode === 'in-person' ? 'In-person' : dash} />
