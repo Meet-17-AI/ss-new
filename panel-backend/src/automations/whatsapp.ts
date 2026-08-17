@@ -5,14 +5,39 @@ import { logWebhookApi } from '../lib/webhookApiLogger.js';
 const AISENSY_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjY4ZGE1MjM4Njg5NTEwMGQ1MmYwMTBiNCIsIm5hbWUiOiJTYWZldHkgYW5kIFlvdSBXZWxsYmVpbmcgQ2VudHJlIExMUCIsImFwcE5hbWUiOiJBaVNlbnN5IiwiY2xpZW50SWQiOiI2OGRhNTIzODY4OTUxMDBkNTJmMDEwYWYiLCJhY3RpdmVQbGFuIjoiRlJFRV9GT1JFVkVSIiwiaWF0IjoxNzU5MTM4MzYwfQ.PvyEtnljNQ9nTOaxciZvsGSm7kXi6F0NpHtMk3DYaAU";
 const AISENSY_URL = "https://backend.aisensy.com/campaign/t1/api/v2";
 
-export async function sendAiSensyMessage(booking_id: string, campaignName: string, destination: string, userName: string, templateParams: string[]) {
+/**
+ * One button component of a template message.
+ *
+ * templateParams fills the BODY only. A template whose button also takes a value
+ * — an authentication template's "Copy code", a dynamic URL — needs that value
+ * sent separately, or WhatsApp reports a required parameter as missing even
+ * though the body rendered correctly.
+ */
+export type AiSensyButton = {
+    type: 'button';
+    sub_type: 'url' | 'quick_reply' | 'copy_code';
+    index: number;
+    parameters: { type: 'text'; text: string }[];
+};
+
+export async function sendAiSensyMessage(
+    booking_id: string,
+    campaignName: string,
+    destination: string,
+    userName: string,
+    templateParams: string[],
+    // Optional and last, so all existing callers are untouched. Omitted means
+    // the key is left out of the payload entirely rather than sent empty.
+    buttons?: AiSensyButton[]
+) {
     const payload = {
         apiKey: AISENSY_API_KEY,
         campaignName,
         destination: destination.replace(/[^0-9+]/g, ''),
         userName,
         source: "DaySchedule",
-        templateParams: templateParams.map(p => String(p || ''))
+        templateParams: templateParams.map(p => String(p || '')),
+        ...(buttons?.length ? { buttons } : {})
     };
 
     try {

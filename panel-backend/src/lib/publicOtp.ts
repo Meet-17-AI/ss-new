@@ -14,7 +14,12 @@
  */
 import { sendAiSensyMessage } from '../automations/whatsapp';
 
-/** AiSensy campaign. Body is a single variable: {{1}} = the code. */
+/**
+ * AiSensy campaign. An authentication template, so the code goes out TWICE:
+ * {{1}} fills the body, and the same value fills the "Copy code" button. Sending
+ * only the body renders the message correctly but leaves the button with nothing
+ * to copy, which is what AiSensy reports as a missing required parameter.
+ */
 const CAMPAIGN = process.env.AISENSY_OTP_CAMPAIGN || 'public_verification';
 
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -77,7 +82,11 @@ export async function sendPublicOtp(phone: string, name?: string): Promise<SendR
 
   // Sent BEFORE it is stored, so a WhatsApp failure cannot leave a code the
   // client was never told about sitting in the way of the next attempt.
-  await sendAiSensyMessage(`public_verification_${key}`, CAMPAIGN, phone, name?.trim() || 'there', [otp]);
+  await sendAiSensyMessage(
+    `public_verification_${key}`, CAMPAIGN, phone, name?.trim() || 'there',
+    [otp],
+    [{ type: 'button', sub_type: 'url', index: 0, parameters: [{ type: 'text', text: otp }] }]
+  );
 
   recent.push(now);
   sendHistory.set(key, recent);
