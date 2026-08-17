@@ -68,8 +68,16 @@ const rupees = (n?: number | null) => (n == null ? '' : `₹${Number(n).toLocale
 
 const COUNTRY_CODES = ['+91', '+1', '+44', '+61', '+971'];
 
+/**
+ * text-base below sm, not text-sm.
+ *
+ * Safari on iOS zooms the whole page in when a focused input's font is under
+ * 16px, and it does not zoom back out - the client is left scrolled sideways
+ * mid-form. 16px on phones is the only reliable way to stop it; the smaller size
+ * returns from sm up, where no browser does this.
+ */
 const inputCls =
-  'px-3.5 py-2.5 rounded-lg border border-slate-300 bg-white text-sm text-slate-900 ' +
+  'px-3.5 py-2.5 rounded-lg border border-slate-300 bg-white text-base sm:text-sm text-slate-900 ' +
   'placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent';
 
 /** ISO instant -> "10:00 AM" IST, for display. */
@@ -113,7 +121,7 @@ const dateLabel = (ymd: string) => {
  * would run it under the artwork. Below xl the door is hidden and the padding
  * goes with it, so the card centres normally on smaller screens.
  */
-const GUTTER = 'px-6 xl:pr-[300px]';
+const GUTTER = 'px-3 sm:px-6 xl:pr-[300px]';
 
 const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="min-h-screen bg-white relative overflow-hidden flex flex-col">
@@ -131,8 +139,12 @@ const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
       className="hidden xl:block pointer-events-none select-none absolute right-0 bottom-12 h-[72vh] max-h-[672px] w-auto"
     />
 
-    <div className={`flex-1 flex items-center justify-center py-12 relative z-10 ${GUTTER}`}>
-      <div className="w-full max-w-[900px] bg-slate-50/60 border border-slate-200 rounded-3xl px-8 py-9 sm:px-12">
+    {/* The outer card and the wizard card each carry their own padding, which on
+        a 360px phone spent nearly a third of the width on margins. Both shrink
+        together below sm and return to full size from there. */}
+    <div className={`flex-1 flex items-center justify-center py-6 sm:py-12 relative z-10 ${GUTTER}`}>
+      <div className="w-full max-w-[900px] bg-slate-50/60 border border-slate-200 rounded-2xl sm:rounded-3xl
+                      px-3 py-6 sm:px-8 sm:py-9 lg:px-12">
         {children}
       </div>
     </div>
@@ -140,7 +152,7 @@ const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     {/* Sits at the page margin, not the card's. It belongs to the page rather
         than to the wizard, so it deliberately ignores GUTTER — which exists only
         to keep the card clear of the illustration. */}
-    <footer className="relative z-10 px-6 pb-7">
+    <footer className="relative z-10 px-4 sm:px-6 pb-7">
       <p className="text-xs text-slate-500">
         © {new Date().getFullYear()} SafeStories, SAFETY AND YOU WELLBEING CENTRE LLP. All Rights Reserved!
       </p>
@@ -161,22 +173,22 @@ const Tabs: React.FC<{ step: Step }> = ({ step }) => {
   const activeIdx = TABS.findIndex(t => t.steps.includes(step));
   return (
     <div className="flex border-b border-slate-200 bg-slate-50/70">
-      {/* Five tabs share the card's width, so the label drops to text-xs and
-          hides on the narrowest screens — the numbered circle still shows how
-          far along the client is. */}
+      {/* Five labels never fit across a phone. Rather than hide all five and
+          leave the client reading bare numbers, only the CURRENT one keeps its
+          label — which is the one they need. It takes the room it needs and the
+          rest collapse to circles. Every label returns from sm up. */}
       {TABS.map((t, i) => (
         <div key={t.label}
-          className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 px-1.5 py-3.5 text-xs font-medium border-b-2 -mb-px ${
-            i === activeIdx ? 'border-teal-600 text-teal-800 bg-white'
-              : i < activeIdx ? 'border-transparent text-slate-500'
-              : 'border-transparent text-slate-300'}`}>
+          className={`min-w-0 flex items-center justify-center gap-1.5 px-1.5 py-3.5 text-xs font-medium border-b-2 -mb-px ${
+            i === activeIdx ? 'flex-1 border-teal-600 text-teal-800 bg-white' : 'sm:flex-1 border-transparent'} ${
+            i === activeIdx ? '' : i < activeIdx ? 'text-slate-500' : 'text-slate-300'}`}>
           <span className={`w-5 h-5 shrink-0 rounded-full text-[11px] flex items-center justify-center ${
             i === activeIdx ? 'bg-teal-600 text-white'
               : i < activeIdx ? 'bg-teal-100 text-teal-700'
               : 'bg-slate-200 text-slate-400'}`}>
             {i < activeIdx ? <Check size={11} /> : i + 1}
           </span>
-          <span className="hidden sm:inline truncate">{t.label}</span>
+          <span className={`truncate ${i === activeIdx ? '' : 'hidden sm:inline'}`}>{t.label}</span>
         </div>
       ))}
     </div>
@@ -752,7 +764,7 @@ export const PublicBooking: React.FC = () => {
       <div className={`${CARD} mx-auto bg-white border border-slate-200 rounded-xl overflow-hidden`}>
         <Tabs step={step} />
 
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           <div className="mb-5">
             <h2 className="text-base font-semibold text-slate-900">{heading.title}</h2>
             {heading.sub && <p className="text-sm text-slate-500 mt-0.5">{heading.sub}</p>}
@@ -891,7 +903,7 @@ export const PublicBooking: React.FC = () => {
                 return (
                   <button key={t.key} type="button"
                     onClick={() => { setChosenTherapy(t); setService(null); setPickedManually(true); setStep('therapist'); }}
-                    className="text-left bg-white border border-slate-200 rounded-xl p-5
+                    className="text-left bg-white border border-slate-200 rounded-xl p-4 sm:p-5
                                hover:border-teal-500 hover:shadow-sm transition-all">
                     <h3 className="text-base font-bold text-slate-900">
                       {t.name}{meta.age ? ` (${meta.age})` : ''}
@@ -911,7 +923,7 @@ export const PublicBooking: React.FC = () => {
               {(chosenTherapy?.therapists ?? []).map(p => (
                 <div key={p.service_id}
                   onClick={() => { setService(p); setDate(''); setSlot(''); setStep('schedule'); }}
-                  className="cursor-pointer text-left bg-white border border-slate-200 rounded-xl p-5
+                  className="cursor-pointer text-left bg-white border border-slate-200 rounded-xl p-4 sm:p-5
                              hover:border-teal-500 hover:shadow-sm transition-all flex flex-col">
                   <div className="flex items-start gap-3">
                     {p.profile_picture_url
@@ -926,9 +938,11 @@ export const PublicBooking: React.FC = () => {
                     <span className="text-sm text-teal-800">
                       {p.amount != null ? <>{rupees(p.amount)}</> : 'On request'}
                     </span>
+                    {/* Padded out and pulled back in with -my/-mr: the text is
+                        small, but the tap target must not be. */}
                     <button type="button"
                       onClick={e => { e.stopPropagation(); setProfileOf(p); }}
-                      className="text-xs font-semibold text-teal-700 hover:underline shrink-0">
+                      className="text-xs font-semibold text-teal-700 hover:underline shrink-0 px-2 py-1.5 -my-1.5 -mr-2">
                       View more
                     </button>
                   </div>
@@ -972,10 +986,13 @@ export const PublicBooking: React.FC = () => {
                   ) : slots.length === 0 ? (
                     <p className="text-sm text-amber-700 py-2">Nothing free on {dateLabel(date)}. Try another day.</p>
                   ) : (
-                    <div className="grid grid-cols-2 gap-2">
+                    // Three across on a phone, where this column has the whole
+                    // screen; two from sm up, where it shares the row with the
+                    // calendar.
+                    <div className="grid grid-cols-3 sm:grid-cols-2 gap-2">
                       {slots.map(s => (
                         <button key={s} type="button" onClick={() => setSlot(s)}
-                          className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
+                          className={`px-2 sm:px-3 py-2.5 rounded-lg border text-sm font-medium transition-colors ${
                             slot === s ? 'border-teal-600 bg-teal-50 text-teal-800'
                               : 'border-slate-300 bg-white text-slate-600 hover:border-teal-400'}`}>
                           {slotLabel(s)}
@@ -1105,11 +1122,15 @@ export const PublicBooking: React.FC = () => {
       {/* Therapist profile, over the wizard rather than as another step - it is
           a detour, and coming back must not lose the client's place. */}
       {profileOf && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center sm:p-4"
           onClick={() => setProfileOf(null)}>
-          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto"
+          {/* Rises from the bottom on a phone, where a centred dialog leaves dead
+              space above and below and puts the close button out of thumb reach.
+              overscroll-contain stops a flick inside it scrolling the page behind. */}
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl max-w-lg w-full max-h-[88vh] sm:max-h-[85vh]
+                          overflow-y-auto overscroll-contain"
             onClick={e => e.stopPropagation()}>
-            <div className="flex items-start gap-4 p-5 border-b border-slate-100">
+            <div className="flex items-start gap-4 p-4 sm:p-5 border-b border-slate-100">
               {profileOf.profile_picture_url
                 ? <img src={profileOf.profile_picture_url} alt="" className="w-16 h-16 rounded-full object-cover shrink-0 bg-slate-200" />
                 : <div className="w-16 h-16 rounded-full bg-slate-200 shrink-0" />}
@@ -1119,11 +1140,11 @@ export const PublicBooking: React.FC = () => {
                   {profileOf.amount != null ? `${rupees(profileOf.amount)} per session` : 'Session charges on request'}
                 </p>
               </div>
-              <button type="button" onClick={() => setProfileOf(null)}
-                className="text-slate-400 hover:text-slate-700 text-xl leading-none shrink-0">&times;</button>
+              <button type="button" onClick={() => setProfileOf(null)} aria-label="Close"
+                className="text-slate-400 hover:text-slate-700 text-xl leading-none shrink-0 px-2 py-1 -m-1">&times;</button>
             </div>
 
-            <div className="p-5 space-y-4">
+            <div className="p-4 sm:p-5 space-y-4">
               {profileOf.specialization && (
                 <div>
                   <div className="text-[11px] uppercase tracking-wide text-slate-400 mb-1.5">Specialises in</div>
@@ -1175,7 +1196,7 @@ export const PublicBooking: React.FC = () => {
               )}
             </div>
 
-            <div className="p-5 pt-0">
+            <div className="p-4 sm:p-5 pt-0">
               <button type="button"
                 onClick={() => { setService(profileOf); setDate(''); setSlot(''); setProfileOf(null); setStep('schedule'); }}
                 className="w-full py-2.5 rounded-lg text-sm font-semibold text-white bg-teal-700 hover:bg-teal-800 transition-colors">
