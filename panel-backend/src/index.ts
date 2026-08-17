@@ -6900,14 +6900,17 @@ const groupKeyOf = (name: string): string =>
 async function resolveBookingLinkTargets(input: {
   serviceId?: any; therapistId?: any; therapy?: any; therapist?: any;
 }): Promise<{ sid: number | null; tkey: string | null }> {
-  const { rows } = await pool.query(`
-    SELECT s.id, s.title, s.therapy_type, s.therapist_id, s.therapist_name
-      FROM therapy_services s
-      JOIN therapists t ON t.therapist_id = s.therapist_id
-      LEFT JOIN users u ON u.role = 'therapist' AND u.therapist_id = s.therapist_id
-     WHERE ${BOOKABLE_SERVICE_WHERE}
-     ORDER BY s.title, s.therapist_name
-  `);
+  try {
+    console.log('[resolveBookingLinkTargets] Starting with input:', input);
+    const { rows } = await pool.query(`
+      SELECT s.id, s.title, s.therapy_type, s.therapist_id, s.therapist_name
+        FROM therapy_services s
+        JOIN therapists t ON t.therapist_id = s.therapist_id
+        LEFT JOIN users u ON u.role = 'therapist' AND u.therapist_id = s.therapist_id
+       WHERE ${BOOKABLE_SERVICE_WHERE}
+       ORDER BY s.title, s.therapist_name
+    `);
+    console.log('[resolveBookingLinkTargets] Found', rows.length, 'bookable services');
 
   const wantedService = Number(input.serviceId);
   const wantedTherapist = String(input.therapistId ?? '').trim();
@@ -6927,14 +6930,24 @@ async function resolveBookingLinkTargets(input: {
     (firstName ? inTherapy.find((r: any) => String(r.therapist_name || '').toLowerCase().includes(firstName)) : null) ||
     null;
 
-  // A service id pins the therapist AND the therapy, so both travel: the public
-  // page can settle the group without a second lookup.
-  if (hit) return { sid: Number(hit.id), tkey: groupKeyOf(therapyNameOf(hit)) };
+    // A service id pins the therapist AND the therapy, so both travel: the public
+    // page can settle the group without a second lookup.
+    if (hit) {
+      const result = { sid: Number(hit.id), tkey: groupKeyOf(therapyNameOf(hit)) };
+      console.log('[resolveBookingLinkTargets] Hit:', { id: hit.id, therapyName: therapyNameOf(hit) }, '→', result);
+      return result;
+    }
 
-  // No therapist settled — the client picks. The therapy still travels, but only
-  // if it is genuinely on offer; a key nothing matches would land them on an
-  // empty therapist list with no way back.
-  return { sid: null, tkey: therapyKey && inTherapy.length > 0 ? therapyKey : null };
+    // No therapist settled — the client picks. The therapy still travels, but only
+    // if it is genuinely on offer; a key nothing matches would land them on an
+    // empty therapist list with no way back.
+    const result = { sid: null, tkey: therapyKey && inTherapy.length > 0 ? therapyKey : null };
+    console.log('[resolveBookingLinkTargets] No exact hit, returning:', result);
+    return result;
+  } catch (err: any) {
+    console.error('[resolveBookingLinkTargets] Error:', err.message);
+    throw err;
+  }
 }
 
 /**
@@ -6993,6 +7006,7 @@ app.get('/api/public/booking-link/:token', async (req, res) => {
  */
 app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: any, res) => {
   try {
+    console.log('[Booking Link] Request received:', { serviceId: req.body?.serviceId, therapistId: req.body?.therapistId, therapy: req.body?.therapy, therapist: req.body?.therapist });
     const { clientName, clientEmail, clientPhone, therapy, therapist,
             serviceId, therapistId, note } = req.body || {};
     const name = String(clientName || '').trim();
@@ -7009,7 +7023,9 @@ app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: a
     // guesswork.
     //   sid  = therapy_services.id, which pins therapist, price and schedule
     //   tkey = the therapy group key, when only the therapy was settled
+    console.log('[Booking Link] Resolving targets...');
     const { sid, tkey } = await resolveBookingLinkTargets({ serviceId, therapistId, therapy, therapist });
+    console.log('[Booking Link] Resolved:', { sid, tkey });
 
     // The prefill is stored, not spelled out in the URL. A link that reads
     // ?name=…&phone=… hands the client's details to anyone they forward the
@@ -7805,6 +7821,28 @@ app.post('/api/send-booking-link', async (req, res) => {
  * be booked. fetch-slots remains the authority on actual times; this only stops
  * the picker offering days the therapist never works.
  */
+/**
+ * The platform's own calendar, which the free consultation is booked against.
+ *
+ * Was written out as the literal 999999 in two places - one digit longer than
+ * the row that actually exists (99999) - and matched against the exact string
+ * "SafeStories" while therapy_services spells the same calendar "Safestories".
+ * Either mistake alone resolved the free consultation to no schedule, so every
+ * day came back with no slots and the consultation could not be booked at all.
+ * Looked up now rather than spelled out, and matched case-insensitively, so
+ * neither can happen again.
+ */
+const isPlatformCalendar = (name: string) => name.trim().toLowerCase() === 'safestories';
+
+async function platformScheduleId(): Promise<number | null> {
+  const { rows } = await pool.query(
+    `SELECT schedule_id FROM therapist_schedules
+      WHERE LOWER(therapist_id) = 'safestories'
+      ORDER BY schedule_id DESC LIMIT 1`
+  );
+  return rows[0]?.schedule_id ?? null;
+}
+
 app.get('/api/therapist-open-days', async (req, res) => {
   try {
     const therapistName = String(req.query.therapistName || '').trim();
@@ -7815,8 +7853,8 @@ app.get('/api/therapist-open-days', async (req, res) => {
     }
 
     let scheduleId: number | null = null;
-    if (therapistName === 'SafeStories') {
-      scheduleId = 999999;
+    if (isPlatformCalendar(therapistName)) {
+      scheduleId = await platformScheduleId();
     } else {
       const tRes = await pool.query(
         `SELECT tr.schedule_id FROM therapists t
@@ -7933,15 +7971,15 @@ app.post('/api/fetch-slots', async (req, res) => {
       // Still resolve therapistId for booking deconfliction (filter out existing bookings)
       if (payload.therapistId) {
         therapistId = payload.therapistId;
-      } else if (therapistName && therapistName !== 'SafeStories') {
+      } else if (therapistName && !isPlatformCalendar(therapistName)) {
         const tRes = await pool.query(
           'SELECT therapist_id FROM therapists WHERE TRIM(LOWER(name)) = $1 LIMIT 1',
           [therapistName.trim().toLowerCase()]
         );
         if (tRes.rows.length > 0) therapistId = tRes.rows[0].therapist_id;
       }
-    } else if (therapistName === 'SafeStories') {
-      scheduleId = 999999;
+    } else if (therapistName && isPlatformCalendar(therapistName)) {
+      scheduleId = await platformScheduleId();
       if (payload.therapistId) {
         therapistId = payload.therapistId;
       }

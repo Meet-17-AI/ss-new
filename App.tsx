@@ -14,6 +14,7 @@ import { BookingConfirmation } from './components/BookingConfirmation';
 import { SessionNotesPage } from './components/SessionNotesPage';
 import { PublicDirectory } from './components/PublicDirectory';
 import { PublicBooking } from './components/PublicBooking';
+import { FreeConsultation } from './components/FreeConsultation';
 import { FluidAdminLayout } from './components/FluidAdminLayout';
 import CRMApp from './src/crm/App';
 import { Monitor } from 'lucide-react';
@@ -85,7 +86,7 @@ const App: React.FC = () => {
 
   // Public, customer-facing routes must work on mobile. Only the authenticated internal
   // dashboards (admin/therapist/crm/automation-logs) require desktop.
-  const publicPrefixes = ['/book', '/booking-confirmation', '/pay', '/session-notes', '/sos-view'];
+  const publicPrefixes = ['/book', '/free-consultation', '/booking-confirmation', '/pay', '/session-notes', '/sos-view'];
   const isPublicRoute = publicPrefixes.some(p => location.pathname.startsWith(p));
 
   if (isMobile && !isPublicRoute) {
@@ -112,6 +113,9 @@ const App: React.FC = () => {
       {/* Dynamic Route wrappers for public pages since react-router passes params differently */}
       <Route path="/sos-view/*" element={<SOSRouterWrapper />} />
       <Route path="/book/*" element={<BookRouterWrapper />} />
+      {/* Its own link, not a step inside /book: a free introductory call is a
+          different decision from choosing and paying for therapy. */}
+      <Route path="/free-consultation" element={<FreeConsultation />} />
       <Route path="/pay/:bookingId" element={<PaymentCheckoutPage />} />
       <Route path="/booking-confirmation/*" element={<ConfirmationRouterWrapper />} />
       <Route path="/session-notes/*" element={<NotesRouterWrapper />} />

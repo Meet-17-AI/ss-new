@@ -63,7 +63,7 @@ const THERAPY_BLURB: Record<string, { age?: string; blurb?: string }> = {
   'free consultation': { blurb: 'A short introductory call to help you find the right fit.' },
 };
 
-const last10 = (v?: string) => (v || '').replace(/\D/g, '').slice(-10);
+export const last10 = (v?: string) => (v || '').replace(/\D/g, '').slice(-10);
 const rupees = (n?: number | null) => (n == null ? '' : `₹${Number(n).toLocaleString('en-IN')}`);
 
 const COUNTRY_CODES = ['+91', '+1', '+44', '+61', '+971'];
@@ -76,12 +76,12 @@ const COUNTRY_CODES = ['+91', '+1', '+44', '+61', '+971'];
  * mid-form. 16px on phones is the only reliable way to stop it; the smaller size
  * returns from sm up, where no browser does this.
  */
-const inputCls =
+export const inputCls =
   'px-3.5 py-2.5 rounded-lg border border-slate-300 bg-white text-base sm:text-sm text-slate-900 ' +
   'placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent';
 
 /** ISO instant -> "10:00 AM" IST, for display. */
-const slotLabel = (iso: string) => {
+export const slotLabel = (iso: string) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return new Intl.DateTimeFormat('en-US', {
@@ -96,7 +96,7 @@ const slotLabel = (iso: string) => {
  * U+202F (narrow no-break space), and `new Date("… 10:00 AM GMT+0530")` cannot
  * parse that. formatToParts guarantees a plain space.
  */
-const istClock = (iso: string) => {
+export const istClock = (iso: string) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   const parts = new Intl.DateTimeFormat('en-US', {
@@ -107,7 +107,7 @@ const istClock = (iso: string) => {
 };
 
 /** "2026-08-20" -> "Thu, 20 Aug 2026" */
-const dateLabel = (ymd: string) => {
+export const dateLabel = (ymd: string) => {
   const d = new Date(`${ymd}T00:00:00`);
   if (Number.isNaN(d.getTime())) return ymd;
   return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
@@ -123,7 +123,7 @@ const dateLabel = (ymd: string) => {
  */
 const GUTTER = 'px-3 sm:px-6 xl:pr-[300px]';
 
-const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="min-h-screen bg-white relative overflow-hidden flex flex-col">
     {/* Decorative: no pointer events, empty alt, hidden below xl where there is
         no room beside the card, and GUTTER reserves its width so the card can
@@ -169,16 +169,23 @@ const TABS: { label: string; steps: Step[] }[] = [
   { label: 'Payment', steps: ['review'] },
 ];
 
-const Tabs: React.FC<{ step: Step }> = ({ step }) => {
-  const activeIdx = TABS.findIndex(t => t.steps.includes(step));
+/**
+ * The numbered step strip.
+ *
+ * Takes its labels rather than reading a fixed list, because the
+ * free-consultation page walks three steps where this one walks five. Sharing
+ * the component keeps the two public pages looking like one product; a
+ * lookalike copied next door would not stay that way.
+ */
+export const WizardTabs: React.FC<{ labels: string[]; activeIdx: number }> = ({ labels, activeIdx }) => {
   return (
     <div className="flex border-b border-slate-200 bg-slate-50/70">
-      {/* Five labels never fit across a phone. Rather than hide all five and
+      {/* Five labels never fit across a phone. Rather than hide them all and
           leave the client reading bare numbers, only the CURRENT one keeps its
           label — which is the one they need. It takes the room it needs and the
           rest collapse to circles. Every label returns from sm up. */}
-      {TABS.map((t, i) => (
-        <div key={t.label}
+      {labels.map((label, i) => (
+        <div key={label}
           className={`min-w-0 flex items-center justify-center gap-1.5 px-1.5 py-3.5 text-xs font-medium border-b-2 -mb-px ${
             i === activeIdx ? 'flex-1 border-teal-600 text-teal-800 bg-white' : 'sm:flex-1 border-transparent'} ${
             i === activeIdx ? '' : i < activeIdx ? 'text-slate-500' : 'text-slate-300'}`}>
@@ -188,12 +195,16 @@ const Tabs: React.FC<{ step: Step }> = ({ step }) => {
               : 'bg-slate-200 text-slate-400'}`}>
             {i < activeIdx ? <Check size={11} /> : i + 1}
           </span>
-          <span className={`truncate ${i === activeIdx ? '' : 'hidden sm:inline'}`}>{t.label}</span>
+          <span className={`truncate ${i === activeIdx ? '' : 'hidden sm:inline'}`}>{label}</span>
         </div>
       ))}
     </div>
   );
 };
+
+const Tabs: React.FC<{ step: Step }> = ({ step }) => (
+  <WizardTabs labels={TABS.map(t => t.label)} activeIdx={TABS.findIndex(t => t.steps.includes(step))} />
+);
 
 /** One row on the review card. */
 const Row: React.FC<{ icon: React.ReactNode; label: string; value: React.ReactNode }> =
