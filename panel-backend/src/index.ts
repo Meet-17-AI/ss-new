@@ -241,6 +241,7 @@ const PUBLIC_API_ROUTES: { methods: string[]; pattern: RegExp }[] = [
   // and an unknown one is indistinguishable from an expired one.
   { methods: ['GET'],  pattern: /^\/api\/public\/booking-link\/[^/]+$/ },
   { methods: ['GET'],  pattern: /^\/api\/services$/ },
+  { methods: ['GET'],  pattern: /^\/api\/therapists-by-therapy$/ },
   { methods: ['GET'],  pattern: /^\/api\/therapist-availability$/ },
   // Which days a therapist works, so the public date picker can grey out the
   // rest. Read-only and no client data — it answers only from the schedule.
@@ -5141,6 +5142,17 @@ app.get('/api/therapists-by-therapy', async (req, res) => {
 
     if (!therapy_name) {
       return res.status(400).json({ error: 'Therapy name is required' });
+    }
+
+    // Free Consultation is a special case: it's not a specialization, but a separate
+    // service offered by the platform calendar (Safestories therapist).
+    if (String(therapy_name).toLowerCase() === 'free consultation') {
+      const result = await pool.query(`
+        SELECT DISTINCT therapist_id, therapist_name
+        FROM therapy_services
+        WHERE title ILIKE '%free consultation%' AND is_active = true
+      `);
+      return res.json(result.rows);
     }
 
     const result = await pool.query(`

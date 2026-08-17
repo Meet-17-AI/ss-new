@@ -657,6 +657,9 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
                             className={inputCls}>
                             <option value="">Select therapy</option>
                             <option value={CLIENT_CHOOSES}>— Let the client choose —</option>
+                            {lookup === 'notfound' && (
+                              <option value="Free Consultation">Free Consultation</option>
+                            )}
                             {therapies.map((t, i) => (
                               <option key={i} value={t.therapy_name}>{t.therapy_name}</option>
                             ))}
