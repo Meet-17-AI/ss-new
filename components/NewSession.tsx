@@ -416,6 +416,14 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
             clientName, clientEmail, clientPhone: `${countryCode}${phone}`,
             // Only a real selection travels. The sentinel means "the client
             // decides", so leaving it out is exactly what it should mean.
+            //
+            // The ids are what the server builds the link from; the names are
+            // sent alongside only so it can still resolve a therapy, which has
+            // no id of its own to send.
+            serviceId: serviceId ?? undefined,
+            therapistId: therapist === CLIENT_CHOOSES
+              ? undefined
+              : therapists.find((t: any) => t.therapist_name === therapist)?.therapist_id || undefined,
             therapy: therapy === CLIENT_CHOOSES ? undefined : therapy || undefined,
             therapist: therapist === CLIENT_CHOOSES ? undefined : therapist || undefined,
           }),
@@ -671,12 +679,8 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
                         <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-900 flex gap-2">
                           <Link2 size={16} className="mt-0.5 shrink-0" />
                           <span>
-                            No session will be booked now, so there is nothing to schedule or collect.
-                            {' '}{clientName || 'The client'} gets a link by email and WhatsApp with their
-                            name, number and email already filled in
-                            {therapy !== CLIENT_CHOOSES && therapy ? <> for <strong>{therapy}</strong></> : null}
-                            {therapist !== CLIENT_CHOOSES && therapist ? <> with <strong>{therapist}</strong></> : null}
-                            , and books and pays themselves.
+                            A booking link will be sent to the client on WhatsApp and email.
+                            They can choose and book their session themselves.
                           </span>
                         </div>
                       )}
@@ -896,7 +900,7 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
                   {clientWillChoose ? (
                     <div className="col-span-2 flex items-start gap-2 text-sm text-amber-800">
                       <Globe size={14} className="mt-0.5 shrink-0" />
-                      <span>A public booking link will be emailed for them to choose and pay.</span>
+                      <span>A booking link will be sent on WhatsApp and email for them to choose and book.</span>
                     </div>
                   ) : (
                     <>

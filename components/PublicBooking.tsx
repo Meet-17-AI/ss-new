@@ -33,6 +33,13 @@ interface CatalogueTherapist {
   duration: string | null;
   amount: number | null;
   is_payment_enabled?: boolean;
+  qualification_pdf_url?: string | null;
+  /**
+   * Not in the database yet. Rendered only when present, so filling these in
+   * later is a data change rather than a code change.
+   */
+  languages?: string | null;
+  education?: string | null;
 }
 interface CatalogueTherapy {
   key: string;
@@ -208,6 +215,8 @@ export const PublicBooking: React.FC = () => {
   const [service, setService] = useState<CatalogueTherapist | null>(null);
   /** True once the client picked a therapy themselves, so Back knows where to go. */
   const [pickedManually, setPickedManually] = useState(false);
+  /** Therapist whose full profile is open, if any. */
+  const [profileOf, setProfileOf] = useState<CatalogueTherapist | null>(null);
 
   // ── when ──
   const [date, setDate] = useState('');
@@ -265,27 +274,66 @@ export const PublicBooking: React.FC = () => {
   /**
    * What the admin already decided, carried in the link they sent.
    *
-   * The therapy/therapist names are held rather than applied immediately: the
-   * catalogue is still loading at this point, and they can only be resolved to a
-   * real service once it arrives.
+   * State rather than a ref, because a token link has to fetch this and the
+   * catalogue may well arrive first — the resolution below has to re-run once it
+   * lands. Null means "not known yet", which is not the same as "nothing was
+   * settled" and must not be resolved as though it were.
+   *
+   * sid/tkey are IDENTIFIERS the server resolved when it built the link, so they
+   * match exactly. therapy/therapist are display names, kept only for links sent
+   * before that changed — they still have to be matched by guesswork, which is
+   * why nothing new is built on them.
    */
-  const linkChoice = useRef<{ therapy?: string; therapist?: string }>({});
+  const [linkChoice, setLinkChoice] =
+    useState<{ sid?: string; tkey?: string; therapy?: string; therapist?: string } | null>(null);
+  const linkApplied = useRef(false);
   /** True when the link fixed a therapy or therapist, which then outranks history. */
   const [fromLink, setFromLink] = useState(false);
 
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    const p = (q.get('phone') || '').replace(/\D/g, '');
-    if (q.get('name')) setName(q.get('name') || '');
-    if (q.get('email')) setEmail(q.get('email') || '');
-    if (p) {
-      setPhone(p.length > 10 ? p.slice(-10) : p);
-      if (p.length > 10) setCountryCode(`+${p.slice(0, p.length - 10)}`);
+
+    const applyIdentity = (v: { name?: string; email?: string; phone?: string }) => {
+      if (v.name) setName(v.name);
+      if (v.email) setEmail(v.email);
+      const p = (v.phone || '').replace(/\D/g, '');
+      if (p) {
+        setPhone(p.length > 10 ? p.slice(-10) : p);
+        if (p.length > 10) setCountryCode(`+${p.slice(0, p.length - 10)}`);
+      }
+    };
+
+    // A token link carries nothing but the token. The client's name and number
+    // are fetched, so a forwarded message or a screenshot of the address bar
+    // shows a stranger nothing about them.
+    const token = q.get('t');
+    if (token) {
+      fetch(`/api/public/booking-link/${encodeURIComponent(token)}`)
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => {
+          if (d) applyIdentity(d);
+          // An expired or unknown token is not something the client can act on,
+          // and an error screen would only strand them. The wizard simply starts
+          // from the beginning, which still works.
+          setLinkChoice({
+            sid: d?.sid != null ? String(d.sid) : undefined,
+            tkey: d?.tkey || undefined,
+          });
+        })
+        .catch(() => setLinkChoice({}));
+      return;
     }
-    linkChoice.current = {
+
+    // Links sent before tokens existed, still sitting in inboxes.
+    applyIdentity({
+      name: q.get('name') || '', email: q.get('email') || '', phone: q.get('phone') || '',
+    });
+    setLinkChoice({
+      sid: q.get('sid') || undefined,
+      tkey: q.get('tkey') || undefined,
       therapy: q.get('therapy') || undefined,
       therapist: q.get('therapist') || undefined,
-    };
+    });
   }, []);
 
   /**
@@ -296,34 +344,42 @@ export const PublicBooking: React.FC = () => {
    * lands the client further along the wizard.
    */
   useEffect(() => {
-    if (!catalogue.length) return;
-    const { therapy, therapist } = linkChoice.current;
-    if (!therapy && !therapist) return;
-    linkChoice.current = {}; // apply once, so a later render cannot re-fix it
+    if (!catalogue.length || !linkChoice || linkApplied.current) return;
+    linkApplied.current = true; // apply once, so a later render cannot re-fix it
+    const { sid, tkey, therapy, therapist } = linkChoice;
+    if (!sid && !tkey && !therapy && !therapist) return;
 
-    // Same collapsing the catalogue uses, so "Individual Therapy Session"
-    // from a booking label still matches the "Individual Therapy" group.
-    const norm = (s: string) =>
-      s.toLowerCase().replace(/\s+session\s*$/i, '').replace(/\s+/g, ' ').trim();
+    const groupOf = (s: CatalogueTherapist) =>
+      catalogue.find(t => t.therapists.some(x => x.service_id === s.service_id)) || null;
 
-    const group = therapy
-      ? catalogue.find(t => norm(t.name) === norm(therapy))
-        ?? catalogue.find(t => norm(t.name).includes(norm(therapy)) || norm(therapy).includes(norm(t.name)))
-      : null;
+    // ── by id: an exact row, or nothing ──
+    const wanted = Number(sid);
+    let person = wanted > 0 ? allServices.find(s => s.service_id === wanted) || null : null;
+    // The key is built by the server with the same rule the catalogue groups by,
+    // so this is a straight equality test, not a search.
+    let group = person ? groupOf(person) : tkey ? catalogue.find(t => t.key === tkey) || null : null;
 
-    // Match the therapist on first name: the admin picks from a list of full
-    // names while service rows spell the same person inconsistently.
-    const first = therapist ? therapist.trim().toLowerCase().split(/\s+/)[0] : '';
-    const pool = group ? group.therapists : catalogue.flatMap(t => t.therapists);
-    const person = first ? pool.find(p => p.therapist_name.toLowerCase().includes(first)) : null;
+    // ── legacy links, still sitting in inboxes, that carry names ──
+    if (!person && !group && (therapy || therapist)) {
+      const norm = (s: string) =>
+        s.toLowerCase().replace(/\s+session\s*$/i, '').replace(/\s+/g, ' ').trim();
+      group = therapy
+        ? catalogue.find(t => norm(t.name) === norm(therapy))
+          ?? catalogue.find(t => norm(t.name).includes(norm(therapy)) || norm(therapy).includes(norm(t.name)))
+          ?? null
+        : null;
+      // Match the therapist on first name: the admin picks from a list of full
+      // names while service rows spell the same person inconsistently.
+      const first = therapist ? therapist.trim().toLowerCase().split(/\s+/)[0] : '';
+      const pool = group ? group.therapists : allServices;
+      person = first ? pool.find(p => p.therapist_name.toLowerCase().includes(first)) || null : null;
+      if (person && !group) group = groupOf(person);
+    }
 
     if (group) setChosenTherapy(group);
-    if (person) {
-      setService(person);
-      if (!group) setChosenTherapy(catalogue.find(t => t.therapists.some(x => x.service_id === person.service_id)) || null);
-    }
+    if (person) setService(person);
     if (group || person) { setFromLink(true); setPickedManually(true); }
-  }, [catalogue]);
+  }, [catalogue, allServices, linkChoice]);
 
   /**
    * The number is the way in. A match fills what we know and, where their last
@@ -710,10 +766,12 @@ export const PublicBooking: React.FC = () => {
           {/* -- which therapist -- */}
           {step === 'therapist' && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* A div, not a button: "View more" is itself a button, and a
+                  button inside a button is invalid and swallows the click. */}
               {(chosenTherapy?.therapists ?? []).map(p => (
-                <button key={p.service_id} type="button"
+                <div key={p.service_id}
                   onClick={() => { setService(p); setDate(''); setSlot(''); setStep('schedule'); }}
-                  className="text-left bg-white border border-slate-200 rounded-xl p-5
+                  className="cursor-pointer text-left bg-white border border-slate-200 rounded-xl p-5
                              hover:border-teal-500 hover:shadow-sm transition-all flex flex-col">
                   <div className="flex items-start gap-3">
                     {p.profile_picture_url
@@ -724,10 +782,17 @@ export const PublicBooking: React.FC = () => {
                       {p.specialization && <p className="text-xs text-slate-500 mt-0.5">{p.specialization}</p>}
                     </div>
                   </div>
-                  <div className="border-t border-slate-100 mt-4 pt-3 text-sm text-teal-800">
-                    {p.amount != null ? <>Session charges: {rupees(p.amount)}</> : 'Session charges on request'}
+                  <div className="border-t border-slate-100 mt-4 pt-3 flex items-center justify-between gap-3">
+                    <span className="text-sm text-teal-800">
+                      {p.amount != null ? <>{rupees(p.amount)}</> : 'On request'}
+                    </span>
+                    <button type="button"
+                      onClick={e => { e.stopPropagation(); setProfileOf(p); }}
+                      className="text-xs font-semibold text-teal-700 hover:underline shrink-0">
+                      View more
+                    </button>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           )}
@@ -837,9 +902,13 @@ export const PublicBooking: React.FC = () => {
 
               {/* Optional intake the older form collected. Kept optional so it
                   never stands between a client and a booking. */}
+              {/* Emergency contact stays tucked away - it is rarely changed.
+                  The note is not: it is the one thing a client actually wants to
+                  say before a first session, and behind a collapse it went
+                  unnoticed. */}
               <details className="mt-4">
                 <summary className="text-sm text-teal-700 cursor-pointer select-none">
-                  Add an emergency contact or a note (optional)
+                  Add an emergency contact (optional)
                 </summary>
                 <div className="mt-3 space-y-3">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -850,11 +919,17 @@ export const PublicBooking: React.FC = () => {
                   </div>
                   <input value={emergencyNumber} onChange={e => setEmergencyNumber(e.target.value.replace(/\D/g, ''))}
                     placeholder="Emergency contact number" className={`w-full ${inputCls}`} />
-                  <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
-                    placeholder="Anything that will help your therapist prepare"
-                    className={`w-full ${inputCls}`} />
                 </div>
               </details>
+
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Anything you would like your therapist to know? <span className="text-slate-400 font-normal">(optional)</span>
+                </label>
+                <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
+                  placeholder="Anything that will help them prepare for your session"
+                  className={`w-full ${inputCls}`} />
+              </div>
 
               {/* requires_tnc is true on the service, and consent is a record in
                   its own right - so it is asked for, never assumed. */}
@@ -886,6 +961,90 @@ export const PublicBooking: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Therapist profile, over the wizard rather than as another step - it is
+          a detour, and coming back must not lose the client's place. */}
+      {profileOf && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => setProfileOf(null)}>
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto"
+            onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-4 p-5 border-b border-slate-100">
+              {profileOf.profile_picture_url
+                ? <img src={profileOf.profile_picture_url} alt="" className="w-16 h-16 rounded-full object-cover shrink-0 bg-slate-200" />
+                : <div className="w-16 h-16 rounded-full bg-slate-200 shrink-0" />}
+              <div className="min-w-0 flex-1">
+                <h3 className="text-lg font-bold text-slate-900">{profileOf.therapist_name}</h3>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  {profileOf.amount != null ? `${rupees(profileOf.amount)} per session` : 'Session charges on request'}
+                </p>
+              </div>
+              <button type="button" onClick={() => setProfileOf(null)}
+                className="text-slate-400 hover:text-slate-700 text-xl leading-none shrink-0">&times;</button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {profileOf.specialization && (
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mb-1.5">Specialises in</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {profileOf.specialization.split(',').map(x => x.trim()).filter(Boolean).map(x => (
+                      <span key={x} className="text-xs px-2 py-1 rounded-full bg-teal-50 text-teal-800">{x}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {profileOf.education && (
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mb-1">Education</div>
+                  <p className="text-sm text-slate-800">{profileOf.education}</p>
+                </div>
+              )}
+
+              {profileOf.languages && (
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mb-1">Speaks</div>
+                  <p className="text-sm text-slate-800">{profileOf.languages}</p>
+                </div>
+              )}
+
+              {profileOf.specialization_details && (
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mb-1">About</div>
+                  <p className="text-sm text-slate-800 leading-relaxed">{profileOf.specialization_details}</p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-4 pt-1">
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mb-1">Session length</div>
+                  <p className="text-sm text-slate-800">{profileOf.duration || '50 m'}</p>
+                </div>
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-slate-400 mb-1">Therapy</div>
+                  <p className="text-sm text-slate-800">{chosenTherapy?.name || '-'}</p>
+                </div>
+              </div>
+
+              {profileOf.qualification_pdf_url && (
+                <a href={profileOf.qualification_pdf_url} target="_blank" rel="noreferrer"
+                  className="inline-block text-sm text-teal-700 hover:underline">
+                  View credentials
+                </a>
+              )}
+            </div>
+
+            <div className="p-5 pt-0">
+              <button type="button"
+                onClick={() => { setService(profileOf); setDate(''); setSlot(''); setProfileOf(null); setStep('schedule'); }}
+                className="w-full py-2.5 rounded-lg text-sm font-semibold text-white bg-teal-700 hover:bg-teal-800 transition-colors">
+                Book with {profileOf.therapist_name.split(' ')[0]}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* One navigation row for the whole wizard, so Back and Next never move. */}
       <div className={`${CARD} mx-auto flex items-center justify-between mt-5 min-h-[42px]`}>

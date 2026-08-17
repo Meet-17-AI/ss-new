@@ -235,6 +235,10 @@ const PUBLIC_API_ROUTES: { methods: string[]; pattern: RegExp }[] = [
   // The bookable catalogue for the single public booking page. Read-only, and
   // carries no client data — only what a visitor is about to be shown.
   { methods: ['GET'],  pattern: /^\/api\/public\/catalogue$/ },
+  // Redeems a booking-link token into its prefill. Public because the client
+  // following the link is not logged in — the 128-bit token is the credential,
+  // and an unknown one is indistinguishable from an expired one.
+  { methods: ['GET'],  pattern: /^\/api\/public\/booking-link\/[^/]+$/ },
   { methods: ['GET'],  pattern: /^\/api\/services$/ },
   { methods: ['GET'],  pattern: /^\/api\/therapist-availability$/ },
   // Which days a therapist works, so the public date picker can grey out the
@@ -6847,6 +6851,131 @@ app.post('/api/bookings/cancel', async (req, res) => {
   }
 });
 
+// ── What identifies a therapy ────────────────────────────────────────────────
+// There is no therapies table: a "therapy" is a GROUP of therapy_services rows
+// that happen to share a name. So the only identifier a therapy can have is a
+// key derived from that name — and the derivation has to be identical wherever
+// it is computed, or a link built on one side stops matching the other. These
+// three live here, at module scope, for exactly that reason: the catalogue and
+// the booking-link resolver share them rather than each keeping a copy.
+
+/** The rows a client may actually book. */
+const BOOKABLE_SERVICE_WHERE = `
+        s.is_active = true
+        AND COALESCE(t.is_active, true) = true
+        AND COALESCE(u.is_active, true) = true
+        AND s.title !~* '\\mtest\\M'`;
+
+/** "Individual Therapy Session with Muskan Negi" -> "Individual Therapy Session" */
+const therapyNameOf = (r: any): string => {
+  if (r.therapy_type && String(r.therapy_type).trim()) return String(r.therapy_type).trim();
+  return String(r.title || '').split(/\s+with\s+/i)[0].replace(/\s*[-–]\s*safestories\s*$/i, '').trim();
+};
+
+/**
+ * Group key for a therapy name.
+ *
+ * therapy_type is set on some rows and NULL on others, so the same therapy
+ * arrives spelled two ways — "Adolescent Therapy" from the column and
+ * "Adolescent Therapy Session" from a title. Grouped verbatim those become two
+ * cards for one therapy. Dropping a trailing "session" collapses them.
+ */
+const groupKeyOf = (name: string): string =>
+  name.toLowerCase().replace(/\s+session\s*$/i, '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Turn whatever the admin settled into identifiers the booking link can carry.
+ *
+ * A name in a URL is a guess the public page then has to match back fuzzily, and
+ * it breaks silently the moment a service or a therapist is renamed. An id is
+ * the row itself. Resolution happens once, HERE, against the same rows the
+ * catalogue is built from — so the link either carries something that exists or
+ * carries nothing at all, and the client is never sent to an empty list.
+ */
+async function resolveBookingLinkTargets(input: {
+  serviceId?: any; therapistId?: any; therapy?: any; therapist?: any;
+}): Promise<{ sid: number | null; tkey: string | null }> {
+  const { rows } = await pool.query(`
+    SELECT s.id, s.title, s.therapy_type, s.therapist_id, s.therapist_name
+      FROM therapy_services s
+      JOIN therapists t ON t.therapist_id = s.therapist_id
+      LEFT JOIN users u ON u.role = 'therapist' AND u.therapist_id = s.therapist_id
+     WHERE ${BOOKABLE_SERVICE_WHERE}
+     ORDER BY s.title, s.therapist_name
+  `);
+
+  const wantedService = Number(input.serviceId);
+  const wantedTherapist = String(input.therapistId ?? '').trim();
+  const therapyKey = input.therapy ? groupKeyOf(String(input.therapy)) : '';
+  const firstName = String(input.therapist ?? '').trim().toLowerCase().split(/\s+/)[0];
+
+  // A therapist is only ever meant within the therapy the admin picked.
+  const inTherapy = therapyKey
+    ? rows.filter((r: any) => groupKeyOf(therapyNameOf(r)) === therapyKey)
+    : rows;
+
+  // Strongest identifier first. The name is a last resort, kept only so an older
+  // caller that sends nothing else still resolves.
+  const hit =
+    (wantedService > 0 ? rows.find((r: any) => Number(r.id) === wantedService) : null) ||
+    (wantedTherapist ? inTherapy.find((r: any) => String(r.therapist_id) === wantedTherapist) : null) ||
+    (firstName ? inTherapy.find((r: any) => String(r.therapist_name || '').toLowerCase().includes(firstName)) : null) ||
+    null;
+
+  // A service id pins the therapist AND the therapy, so both travel: the public
+  // page can settle the group without a second lookup.
+  if (hit) return { sid: Number(hit.id), tkey: groupKeyOf(therapyNameOf(hit)) };
+
+  // No therapist settled — the client picks. The therapy still travels, but only
+  // if it is genuinely on offer; a key nothing matches would land them on an
+  // empty therapist list with no way back.
+  return { sid: null, tkey: therapyKey && inTherapy.length > 0 ? therapyKey : null };
+}
+
+/**
+ * Redeem a booking-link token into the prefill it stands for.
+ *
+ * Public, because the client following the link has not logged in and never
+ * will. The token IS the authorisation, which is why it is 128 random bits and
+ * why nothing here is enumerable: a wrong, expired or revoked token gets the
+ * same flat 404, so the endpoint cannot be used to learn which tokens exist.
+ *
+ * Not single-use. A client may open the link, close it, and come back — an
+ * expiry bounds it instead, and the redeem counters are for support to see
+ * whether the link was ever opened.
+ */
+app.get('/api/public/booking-link/:token', async (req, res) => {
+  try {
+    const token = String(req.params.token || '');
+    if (!token || token.length > 64) return res.status(404).json({ error: 'Link not found' });
+
+    const { rows } = await pool.query(
+      `UPDATE booking_link_tokens
+          SET redeem_count      = redeem_count + 1,
+              first_redeemed_at = COALESCE(first_redeemed_at, NOW()),
+              last_redeemed_at  = NOW()
+        WHERE token = $1
+          AND revoked_at IS NULL
+          AND expires_at > NOW()
+      RETURNING client_name, client_email, client_phone, service_id, therapy_key`,
+      [token]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'This booking link is no longer valid.' });
+
+    const r = rows[0];
+    res.json({
+      name: r.client_name || '',
+      email: r.client_email || '',
+      phone: r.client_phone || '',
+      sid: r.service_id ?? null,
+      tkey: r.therapy_key || null,
+    });
+  } catch (error: any) {
+    console.error('Error redeeming booking link:', error);
+    res.status(500).json({ error: 'Failed to open this booking link.' });
+  }
+});
+
 /**
  * Send the client the public booking directory so they can choose their own
  * therapy and therapist.
@@ -6859,7 +6988,8 @@ app.post('/api/bookings/cancel', async (req, res) => {
  */
 app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: any, res) => {
   try {
-    const { clientName, clientEmail, clientPhone, therapy, therapist, note } = req.body || {};
+    const { clientName, clientEmail, clientPhone, therapy, therapist,
+            serviceId, therapistId, note } = req.body || {};
     const name = String(clientName || '').trim();
     const email = String(clientEmail || '').trim();
     const phone = String(clientPhone || '').trim();
@@ -6869,18 +6999,29 @@ app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: a
       return res.status(400).json({ error: 'Enter a valid client email address.' });
     }
 
-    // /book with no slug renders the public directory of every active therapy.
-    // Whatever the admin already settled rides along as query parameters: the
-    // identity fields prefill the booking form, and therapy/therapist narrow the
-    // directory to what is still the client's to choose.
-    const base = `${(process.env.FRONTEND_URL || 'https://panel.safestories.in').replace(/\/$/, '')}/book`;
-    const q = new URLSearchParams();
-    if (name) q.set('name', name);
-    if (email) q.set('email', email);
-    if (phone) q.set('phone', phone);
-    if (therapy) q.set('therapy', String(therapy));
-    if (therapist) q.set('therapist', String(therapist));
-    const link = q.toString() ? `${base}?${q}` : base;
+    // Whatever the admin already settled is resolved to IDENTIFIERS here, against
+    // live rows — never display names for the public page to match back by
+    // guesswork.
+    //   sid  = therapy_services.id, which pins therapist, price and schedule
+    //   tkey = the therapy group key, when only the therapy was settled
+    const { sid, tkey } = await resolveBookingLinkTargets({ serviceId, therapistId, therapy, therapist });
+
+    // The prefill is stored, not spelled out in the URL. A link that reads
+    // ?name=…&phone=… hands the client's details to anyone they forward the
+    // message to; a token reveals nothing until it is redeemed, and can expire.
+    // 128 bits, so it cannot be guessed or enumerated.
+    const token = crypto.randomBytes(16).toString('base64url');
+    await pool.query(
+      `INSERT INTO booking_link_tokens
+         (token, client_name, client_email, client_phone, service_id, therapy_key, created_by, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '30 days')`,
+      [token, name || null, email, phone || null, sid, tkey, req.user?.email || req.user?.username || null]
+    );
+
+    // frontendBaseUrl() rather than the raw env var: FRONTEND_URL still points at
+    // a dead vercel host in some deploy configs, and a booking link is the one
+    // thing that must never be sent to a client pointing nowhere.
+    const link = `${frontendBaseUrl()}/book?t=${token}`;
 
     await sendBookingLinkEmail(email, { clientName: name || 'there', link, note: note || undefined });
 
@@ -8204,7 +8345,9 @@ app.get('/api/public/services/:slug', async (req, res) => {
  */
 app.get('/api/public/catalogue', async (req, res) => {
   try {
-    // Three filters, all of which decide whether a VISITOR should ever see this:
+    // BOOKABLE_SERVICE_WHERE, which decides whether a VISITOR should ever see a
+    // row, and is shared with the booking-link resolver so a link can never
+    // point at something this list would hide:
     //
     //  1. BOTH active flags, because they mean different things and either one
     //     being off must hide the therapist:
@@ -8225,34 +8368,18 @@ app.get('/api/public/catalogue', async (req, res) => {
       SELECT s.id, s.title, s.therapy_type, s.duration, s.slug, s.type,
              s.description, s.therapist_id, s.therapist_name, s.schedule_id,
              s.is_payment_enabled,
-             t.profile_picture_url, t.specialization, t.specialization_details
+             t.profile_picture_url, t.specialization, t.specialization_details,
+             t.qualification_pdf_url
         FROM therapy_services s
         JOIN therapists t ON t.therapist_id = s.therapist_id
         LEFT JOIN users u ON u.role = 'therapist' AND u.therapist_id = s.therapist_id
-       WHERE s.is_active = true
-         AND COALESCE(t.is_active, true) = true
-         AND COALESCE(u.is_active, true) = true
-         AND s.title !~* '\\mtest\\M'
+       WHERE ${BOOKABLE_SERVICE_WHERE}
        ORDER BY s.title, s.therapist_name
     `);
 
-    /** "Individual Therapy Session with Muskan Negi" -> "Individual Therapy Session" */
-    const therapyNameOf = (r: any) => {
-      if (r.therapy_type && String(r.therapy_type).trim()) return String(r.therapy_type).trim();
-      return String(r.title || '').split(/\s+with\s+/i)[0].replace(/\s*[-–]\s*safestories\s*$/i, '').trim();
-    };
-
-    /**
-     * Group key for a therapy name.
-     *
-     * therapy_type is set on some rows and NULL on others, so the same therapy
-     * arrives spelled two ways — "Adolescent Therapy" from the column and
-     * "Adolescent Therapy Session" from a title. Grouped verbatim those become
-     * two cards for one therapy, which is what the visitor would have to choose
-     * between. Dropping a trailing "session" collapses them.
-     */
-    const groupKeyOf = (name: string) =>
-      name.toLowerCase().replace(/\s+session\s*$/i, '').replace(/\s+/g, ' ').trim();
+    // therapyNameOf and groupKeyOf are module-level on purpose - the booking-link
+    // resolver builds tkey with the very same functions, so a key that leaves in
+    // a link is a key this catalogue will recognise.
 
     // The anonymous list price. A visitor who has not identified themselves can
     // hold no grandfathered rate, and the booking page re-quotes through
@@ -8288,6 +8415,7 @@ app.get('/api/public/catalogue', async (req, res) => {
         profile_picture_url: r.profile_picture_url || null,
         specialization: r.specialization || null,
         specialization_details: r.specialization_details || null,
+        qualification_pdf_url: r.qualification_pdf_url || null,
         duration: r.duration,
         session_mode: r.type || null,
         amount: r.amount,
@@ -13244,6 +13372,35 @@ async function runStartupMigrations() {
         form_data  JSONB NOT NULL,
         updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
       )
+    `);
+
+    // Prefill behind a booking link.
+    //
+    // The client's name, number and email used to travel in the link's query
+    // string, where a forwarded message or a screenshot handed them to whoever
+    // saw it. They live here instead, and the link carries only an unguessable
+    // token. That also buys an expiry, revocation, and a record of which admin
+    // sent which link — none of which a URL parameter can offer.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS booking_link_tokens (
+        token             TEXT PRIMARY KEY,
+        client_name       TEXT,
+        client_email      TEXT,
+        client_phone      TEXT,
+        service_id        INTEGER,
+        therapy_key       TEXT,
+        created_by        TEXT,
+        created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        expires_at        TIMESTAMP WITH TIME ZONE NOT NULL,
+        revoked_at        TIMESTAMP WITH TIME ZONE,
+        redeem_count      INTEGER NOT NULL DEFAULT 0,
+        first_redeemed_at TIMESTAMP WITH TIME ZONE,
+        last_redeemed_at  TIMESTAMP WITH TIME ZONE
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_booking_link_tokens_created
+      ON booking_link_tokens(created_at DESC)
     `);
 
     // Heal existing bookings where invitee_created_at is null so they can be processed by expiry cron
