@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LayoutDashboard, Users, Calendar, CalendarDays, LogOut, PieChart, ChevronUp, ChevronDown, ChevronRight, Copy, Send, Search, FileText, X, User, ArrowLeft, Mail, Eye, EyeOff, Edit, Download, MessageCircle, Headset } from 'lucide-react';
 import { Logo } from './Logo';
+import { startGoogleCalendarConnect } from '../lib/googleCalendar';
 import { Notifications } from './Notifications';
 import { Toast } from './Toast';
 import { Loader } from './Loader';
@@ -4066,12 +4067,19 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
               Please connect your Google Calendar to sync your availability and manage sessions seamlessly.
             </p>
             <div className="flex flex-col gap-3">
-              <a
-                href={`/api/auth/google?therapistId=${user.therapist_id}`}
+              <button
+                onClick={async () => {
+                  try {
+                    await startGoogleCalendarConnect(user.therapist_id);
+                  } catch (err) {
+                    console.error(err);
+                    alert('Could not open Google sign-in. Please try again.');
+                  }
+                }}
                 className="w-full py-3 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors"
               >
                 Connect Calendar Now
-              </a>
+              </button>
               <button
                 onClick={() => setShowCalendarPopup(false)}
                 className="w-full py-3 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"

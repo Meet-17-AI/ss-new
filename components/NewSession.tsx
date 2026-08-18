@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, ArrowRight, Phone, Search, Check, Wallet, Link2, CalendarDays, Clock,
-  Mail, Loader2,
+  Mail, Loader2, CheckCircle2, AlertTriangle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { InlineCalendar } from './InlineCalendar';
@@ -125,6 +125,20 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
   const [walletChoice, setWalletChoice] = useState<'' | 'use' | 'skip'>('');
   const useWallet = walletChoice === 'use';
   const [submitting, setSubmitting] = useState(false);
+
+  /**
+   * Outcome of a "Send Booking Link", held until the admin dismisses it.
+   *
+   * A modal rather than a toast, and it does NOT navigate away on dismiss. A
+   * toast fired while the page was already unmounting to the dashboard, so the
+   * admin arrived somewhere else with no idea whether the client had been
+   * reached — and on failure the recovery link vanished with it. Dismissing
+   * leaves the wizard exactly as it was, so the send can be retried or the link
+   * copied out.
+   */
+  const [linkResult, setLinkResult] = useState<
+    { ok: boolean; title: string; detail: string; link?: string } | null
+  >(null);
 
   // Days the therapist actually works, for the month on screen. `null` means
   // "no schedule on file", which leaves every day open rather than none.
@@ -410,6 +424,10 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
       // No therapy or therapist means no slot and no price — send the client the
       // public directory instead of creating anything.
       if (clientWillChoose) {
+       // Caught here rather than by the outer handler so every outcome — sent,
+       // partly sent, refused, network dead — arrives as the same confirmation
+       // modal, and none of them navigate away.
+       try {
         const r = await fetch('/api/admin/send-booking-link', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -435,19 +453,39 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
         // got through is how an admin ends up waiting on a client who was never
         // reached — and the link is always real, so a total failure is still
         // recoverable by hand rather than a dead end.
-        if (d.whatsappCarriedLink && d.emailSent) {
-          toast.success('Booking link sent on WhatsApp and email.');
-        } else if (d.whatsappCarriedLink) {
-          toast.success('Booking link sent on WhatsApp.');
-        } else if (d.emailSent) {
-          toast.success(`Booking link emailed to ${clientEmail}.`
-            + (d.whatsappSent ? ' WhatsApp sent a generic prompt without the link.' : ''));
+        const reached = [
+          d.whatsappCarriedLink && 'WhatsApp',
+          d.emailSent && `email (${clientEmail})`,
+        ].filter(Boolean) as string[];
+
+        if (reached.length) {
+          setLinkResult({
+            ok: true,
+            title: 'Booking link sent',
+            detail: `${clientName} has been sent the booking link on ${reached.join(' and ')}.`
+              // Worth saying out loud: the client got a message, so the admin
+              // would otherwise assume the link went with it.
+              + (!d.whatsappCarriedLink && d.whatsappSent
+                  ? ' WhatsApp sent a generic prompt without the link in it.' : ''),
+          });
         } else {
-          toast.error('Could not deliver the link. Copy it and send it yourself: ' + d.link);
           console.warn('[Booking link] undelivered', d.link, { whatsapp: d.whatsappError, email: d.emailError });
-          return; // Stay on the page so the link stays on screen.
+          setLinkResult({
+            ok: false,
+            title: 'Booking link not sent',
+            detail: `Neither WhatsApp nor email reached ${clientName}. `
+              + 'The link below is live — send it across by hand.',
+            link: d.link,
+          });
         }
-        return onBack();
+       } catch (e: any) {
+        setLinkResult({
+          ok: false,
+          title: 'Booking link not sent',
+          detail: e?.message || 'Something went wrong while sending the link.',
+        });
+       }
+        return; // The modal is the confirmation; the wizard stays put.
       }
 
       if (paymentMode === 'link') {
@@ -980,6 +1018,48 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
           </aside>
         </div>
       </div>
+
+      {/* Dismissing only clears this state — no onBack(), no navigation. That is
+          the whole point: the admin stays on the wizard they were using. */}
+      {linkResult && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="link-result-title"
+        >
+          <div className="w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
+            <div className="flex items-start gap-3">
+              {linkResult.ok
+                ? <CheckCircle2 size={22} className="mt-0.5 shrink-0 text-teal-600" />
+                : <AlertTriangle size={22} className="mt-0.5 shrink-0 text-rose-500" />}
+              <div className="min-w-0">
+                <h3 id="link-result-title" className="text-base font-semibold text-slate-900">
+                  {linkResult.title}
+                </h3>
+                <p className="mt-1 text-sm text-slate-600">{linkResult.detail}</p>
+              </div>
+            </div>
+
+            {/* Selectable and wrapped, because on this branch copying it out by
+                hand is the only way the client gets the link at all. */}
+            {linkResult.link && (
+              <p className="mt-3 select-all break-all rounded-lg bg-slate-50 p-2.5 text-xs text-slate-700">
+                {linkResult.link}
+              </p>
+            )}
+
+            <button
+              onClick={() => setLinkResult(null)}
+              autoFocus
+              className="mt-5 w-full rounded-lg bg-teal-700 py-2.5 text-sm font-semibold text-white
+                         transition-colors hover:bg-teal-800"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

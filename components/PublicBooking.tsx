@@ -1044,10 +1044,11 @@ export const PublicBooking: React.FC = () => {
                   <div className="w-10 h-10 rounded-full bg-teal-100 text-teal-800 flex items-center justify-center text-sm font-semibold shrink-0">
                     {name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?'}
                   </div>
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-900 truncate">{name}</div>
-                    <div className="text-xs text-slate-500 truncate">{email}</div>
-                  </div>
+                  {/* Name only. The email is listed once, in the detail grid
+                      beside the WhatsApp number; repeating it here read as two
+                      different fields. min-w-0 stays on the flex child or
+                      `truncate` has nothing to shrink against. */}
+                  <div className="min-w-0 text-sm font-semibold text-slate-900 truncate">{name}</div>
                 </div>
 
                 <div className="px-4 py-1 grid grid-cols-1 sm:grid-cols-2 gap-x-6">

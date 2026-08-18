@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Search, RefreshCw } from 'lucide-react';
 import { resolveMediaUrl, initialsFor } from '../lib/mediaUrl';
+import { canDisconnectCalendar } from '../lib/permissions';
+import { startGoogleCalendarConnect } from '../lib/googleCalendar';
+import { useAuth } from '../context/AuthContext';
 
 interface TherapistCalendarInfo {
   therapist_id: string;
@@ -12,10 +15,16 @@ interface TherapistCalendarInfo {
 }
 
 export const CalendarConnectionsAdmin: React.FC = () => {
+  const { user } = useAuth();
   const [therapists, setTherapists] = useState<TherapistCalendarInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  // Admins keep the Connect button — it only ever adds a token. Breaking a live
+  // link is the AI team's alone, so for everyone else there is no button to
+  // press; the server refuses the call regardless.
+  const mayDisconnect = canDisconnectCalendar(user);
 
   const fetchCalendars = async () => {
     try {
@@ -36,8 +45,15 @@ export const CalendarConnectionsAdmin: React.FC = () => {
     fetchCalendars();
   }, []);
 
-  const handleConnect = (therapistId: string) => {
-    window.location.href = `/api/auth/google?therapistId=${therapistId}&adminRedirect=true`;
+  const handleConnect = async (therapistId: string) => {
+    try {
+      setActionLoading(therapistId);
+      await startGoogleCalendarConnect(therapistId, { adminRedirect: true });
+    } catch (err) {
+      console.error(err);
+      alert('Could not open Google sign-in. Please try again.');
+      setActionLoading(null);
+    }
   };
 
   const handleDisconnect = async (therapistId: string) => {
@@ -184,7 +200,15 @@ export const CalendarConnectionsAdmin: React.FC = () => {
 
                   {/* Actions */}
                   <div className="mt-4 sm:mt-0 flex items-center gap-3">
-                    {therapist.connected ? (
+                    {!therapist.connected ? (
+                      <button
+                        onClick={() => handleConnect(therapist.therapist_id)}
+                        disabled={actionLoading !== null}
+                        className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50 font-medium text-sm rounded-lg transition-all flex items-center gap-2 hover:shadow-sm"
+                      >
+                        Connect Google Calendar
+                      </button>
+                    ) : mayDisconnect ? (
                       <button
                         onClick={() => handleDisconnect(therapist.therapist_id)}
                         disabled={actionLoading !== null}
@@ -196,13 +220,11 @@ export const CalendarConnectionsAdmin: React.FC = () => {
                         Disconnect
                       </button>
                     ) : (
-                      <button
-                        onClick={() => handleConnect(therapist.therapist_id)}
-                        disabled={actionLoading !== null}
-                        className="px-4 py-2 bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50 font-medium text-sm rounded-lg transition-all flex items-center gap-2 hover:shadow-sm"
-                      >
-                        Connect Google Calendar
-                      </button>
+                      // Said plainly, so an admin who came here to disconnect
+                      // knows who to ask instead of hunting for a missing button.
+                      <span className="text-xs text-gray-400">
+                        Contact the AI team to disconnect
+                      </span>
                     )}
                   </div>
                 </div>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Upload, X, Calendar } from 'lucide-react';
 import { Toast } from './Toast';
+import { startGoogleCalendarConnect } from '../lib/googleCalendar';
 
 interface EditProfileProps {
   user: any;
@@ -35,27 +36,20 @@ export const EditProfile: React.FC<EditProfileProps> = ({ user, onBack }) => {
     }
   }, [user.therapist_id]);
 
-  const handleConnectCalendar = () => {
-    window.location.href = `/api/auth/google?therapistId=${user.therapist_id}`;
-  };
-
-  const handleDisconnectCalendar = async () => {
-    if (confirm('Are you sure you want to disconnect Google Calendar?')) {
-      try {
-        const res = await fetch('/api/auth/google/disconnect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ therapistId: user.therapist_id })
-        });
-        if (res.ok) {
-          setCalendarStatus({ connected: false, email: null });
-          setToast({ message: 'Google Calendar disconnected successfully!', type: 'success' });
-        }
-      } catch (err) {
-        console.error(err);
-      }
+  const handleConnectCalendar = async () => {
+    try {
+      await startGoogleCalendarConnect(user.therapist_id);
+    } catch (err) {
+      console.error(err);
+      setToast({ message: 'Could not open Google sign-in. Please try again.', type: 'error' });
     }
   };
+
+  // No disconnect counterpart here by design. A therapist connecting their own
+  // calendar only adds a token, but disconnecting stops every one of their
+  // bookings syncing with nothing on screen to explain it — so only the AI team
+  // may do it, from Organization Settings → Integrations. The server enforces
+  // that; this screen simply offers no way to ask.
 
   const countryCodes = [
     { code: '+91', country: 'India' },
@@ -642,13 +636,9 @@ export const EditProfile: React.FC<EditProfileProps> = ({ user, onBack }) => {
             </div>
             <div>
               {calendarStatus?.connected ? (
-                <button
-                  type="button"
-                  onClick={handleDisconnectCalendar}
-                  className="px-6 py-2 bg-red-50 text-red-600 font-semibold rounded-lg hover:bg-red-100 transition-colors border border-red-200"
-                >
-                  Disconnect Account
-                </button>
+                <span className="text-xs text-gray-400">
+                  Contact the AI team to disconnect
+                </span>
               ) : (
                 <button
                   type="button"

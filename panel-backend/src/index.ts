@@ -207,6 +207,31 @@ const ADMIN_ROLES = ['admin', 'superadmin', 'fluidadmin'];
 const isAdminUser = (user: any): boolean => Boolean(user && ADMIN_ROLES.includes(user.role));
 
 /**
+ * Who may DISCONNECT a Google Calendar.
+ *
+ * Deliberately an identity check, not a role: the AI team signs in with the
+ * `admin` role — the very role this has to be distinguished from — so no role
+ * test can express it.
+ *
+ * Connecting stays open to admins and therapists because it only ever ADDS a
+ * token. Disconnecting drops the refresh token, and every booking on that
+ * calendar silently stops syncing afterwards with nothing in the UI to say why,
+ * so it is held to the one account that can put it back.
+ *
+ * Matched against both email and username, since therapist logins have no email.
+ */
+const CALENDAR_DISCONNECT_USERS = (process.env.CALENDAR_DISCONNECT_USERS || 'aiteam@fluid.live,aiteam')
+  .split(',')
+  .map(s => s.trim().toLowerCase())
+  .filter(Boolean);
+
+const canDisconnectCalendar = (user: any): boolean =>
+  Boolean(user) &&
+  [user.email, user.username].some(
+    (id: any) => id && CALENDAR_DISCONNECT_USERS.includes(String(id).toLowerCase())
+  );
+
+/**
  * Display text for each cancellation action, defined once so the Payments page,
  * the audit trail and the API all name the same thing identically. These strings
  * are written into refund_cancellation_table.refund_status, so changing one
@@ -443,25 +468,51 @@ const getOAuth2Client = () => {
   );
 };
 
-app.get('/api/auth/google', (req, res) => {
+/**
+ * Hand the caller the Google consent URL to send the browser to.
+ *
+ * Returns JSON rather than a 302, because the 302 version could not be reached
+ * at all. The Connect buttons navigate the whole page (`window.location.href`),
+ * and a navigation carries no Authorization header — lib/authFetch.ts only
+ * patches window.fetch — so every attempt died on the global gate with
+ * "Missing authentication token" before Google was ever contacted.
+ *
+ * Fetching the URL keeps the token attached and the route authenticated; only
+ * the final hop to accounts.google.com is a navigation, and that needs no token.
+ */
+app.get('/api/auth/google/url', (req, res) => {
   const therapistId = (req.query.therapistId as string) || 'SafeStories';
   const adminRedirect = req.query.adminRedirect === 'true';
   const oauth2Client = getOAuth2Client();
-  
+
   const scopes = [
     'https://www.googleapis.com/auth/calendar',
     'https://www.googleapis.com/auth/calendar.events',
     'https://www.googleapis.com/auth/userinfo.email'
   ];
-  
+
+  // Where to send the browser back to once Google is done. Carried through the
+  // consent round trip so a connection started on localhost finishes on
+  // localhost, instead of on whatever FRONTEND_URL names — that variable also
+  // builds client booking links, so it cannot be repointed just to test OAuth.
+  //
+  // The caller states it, because the Origin header is NOT available here: this
+  // request is same-origin (the page and /api share a host in dev via the Vite
+  // proxy and in production), and browsers omit Origin on same-origin GETs.
+  // Trusting it would be an open redirect, so it is only honoured when already
+  // trusted for CORS; anything else is dropped and the callback falls back to
+  // FRONTEND_URL. The header is still accepted for a cross-origin caller.
+  const claimedOrigin = String(req.query.returnTo || req.headers.origin || '');
+  const returnTo = getAllowedOrigins().includes(claimedOrigin) ? claimedOrigin : null;
+
   const authUrl = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
     scope: scopes,
-    state: JSON.stringify({ therapistId, adminRedirect })
+    state: JSON.stringify({ therapistId, adminRedirect, returnTo })
   });
-  
-  res.redirect(authUrl);
+
+  res.json({ authUrl });
 });
 
 app.get('/api/auth/google/callback', async (req, res) => {
@@ -473,15 +524,24 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
   let therapistId = 'SafeStories';
   let adminRedirect = false;
+  let returnTo: string | null = null;
   try {
     if (state) {
       const parsedState = JSON.parse(state as string);
       therapistId = parsedState.therapistId || 'SafeStories';
       adminRedirect = !!parsedState.adminRedirect;
+      // Re-checked against the allowlist rather than trusted: state makes a round
+      // trip through the browser, so an attacker can put any host in it. An
+      // unrecognised one is dropped, never redirected to.
+      returnTo = getAllowedOrigins().includes(parsedState.returnTo) ? parsedState.returnTo : null;
     }
   } catch (e) {
     console.error('Error parsing OAuth state:', e);
   }
+
+  // Where the browser goes once this is finished — the origin that started the
+  // flow when it is a known one, the configured frontend otherwise.
+  const landingBaseUrl = () => returnTo || frontendBaseUrl();
 
   try {
     const oauth2Client = getOAuth2Client();
@@ -505,7 +565,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
       if (existingCheck.rows.length > 0) {
         console.error(`❌ Google Calendar ${userEmail} is already linked to therapist ${existingCheck.rows[0].name}`);
-        const baseUrl = frontendBaseUrl();
+        const baseUrl = landingBaseUrl();
 
         if (adminRedirect) {
           return res.redirect(`${baseUrl}/admin?googleAuth=error&reason=already_linked`);
@@ -540,7 +600,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
     console.log(`✓ Connected Google Calendar successfully for therapist: ${therapistId} (${userEmail})`);
 
-    const baseUrl = frontendBaseUrl();
+    const baseUrl = landingBaseUrl();
 
     // Route back to whoever initiated: admin flows send adminRedirect=true
     // explicitly. Therapists (adminRedirect=false) must always return to the
@@ -618,8 +678,16 @@ async function getCalendarClientForBooking(bookingDetails: any): Promise<{ calen
   return { calendar, therapist };
 }
 
-app.post('/api/auth/google/disconnect', async (req, res) => {
+app.post('/api/auth/google/disconnect', async (req: any, res) => {
   try {
+    // The token is already required by the global gate; this narrows it further
+    // to the one account allowed to break a calendar link. Checked here rather
+    // than as middleware because the rule is an identity, not a role — see
+    // CALENDAR_DISCONNECT_USERS. Hiding the button is not the control; this is.
+    if (!canDisconnectCalendar(req.user)) {
+      return res.status(403).json({ error: 'Only the AI team can disconnect a Google Calendar.' });
+    }
+
     const { therapistId } = req.body;
     if (!therapistId) {
       return res.status(400).json({ error: 'Therapist ID is required' });
@@ -7085,27 +7153,28 @@ app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: a
     // WhatsApp is therefore attempted FIRST and independently: it is the leg
     // that has to work.
 
-    // Which campaign depends on how much the admin already settled. Both
-    // client-choice templates take the client's name as {{1}} and carry the
-    // link on a URL button.
-    const campaignBasicDetails = process.env.AISENSY_BOOKING_LINK_CLIENT_CHOOSE;   // booking_link_client_basic_details
-    const campaignPrefilledTherapy = process.env.AISENSY_BOOKING_LINK_CLIENT_THERAPY; // booking_link_client_prefilled_therapy
-    const campaignGeneric = process.env.AISENSY_BOOKING_LINK_CAMPAIGN;
-
     /**
-     * WhatsApp will not accept a wholly dynamic button URL. A template defines
-     * it as a fixed prefix plus one placeholder — `…/book?t={{1}}` — and the
-     * parameter fills only the placeholder. Sending the whole link there yields
-     * `…/book?t=https://…`, which lands the client nowhere.
+     * Which campaign depends on how much the admin already settled.
      *
-     * So the token is what travels by default. Set the mode to `url` if a
-     * template is instead built to take the entire address.
+     * All three carry the link the same way: as a BODY variable, {{1}} being the
+     * client's name and {{2}} the link. No button component is sent.
+     *
+     * That is deliberate, not a simplification. A template's URL button is fixed
+     * at approval time — a static one rejects any parameter outright ("Button at
+     * index 0 of type Url does not require parameters"), and a dynamic one only
+     * ever appends to its approved prefix, so it cannot carry a whole address
+     * either. A body variable has neither limit, and WhatsApp still renders the
+     * URL as a tappable link.
+     *
+     * Named here rather than left to env alone so a deploy that forgets the vars
+     * still reaches the right template instead of silently degrading to the
+     * no-link fallback.
      */
-    const buttonText = process.env.AISENSY_BOOKING_LINK_BUTTON_MODE === 'url' ? link : token;
-    const linkButton = [{
-      type: 'button', sub_type: 'url', index: 0,
-      parameters: [{ type: 'text', text: buttonText }],
-    }];
+    const campaignBasicDetails = process.env.AISENSY_BOOKING_LINK_CLIENT_CHOOSE
+      || 'basic_details_prefilled_booking_link';
+    const campaignPrefilledTherapy = process.env.AISENSY_BOOKING_LINK_CLIENT_THERAPY
+      || 'prefilled_therapist_booking_link';
+    const campaignGeneric = process.env.AISENSY_BOOKING_LINK_CAMPAIGN;
 
     let whatsappSent = false;
     let whatsappCarriedLink = false;
@@ -7119,20 +7188,27 @@ app.post('/api/admin/send-booking-link', requireRole(ADMIN_ROLES), async (req: a
       // resolveBookingLinkTargets always returns tkey alongside sid on a hit, so
       // these are keyed on sid first; testing `sid && !tkey` never matched.
       const plan =
-        !sid && !tkey && campaignBasicDetails
-          ? { campaign: campaignBasicDetails, params: [name || 'there'], buttons: linkButton, carries: true }
-        : !sid && tkey && campaignPrefilledTherapy
-          ? { campaign: campaignPrefilledTherapy, params: [name || 'there'], buttons: linkButton, carries: true }
+        !sid && !tkey
+          // Basic details prefilled; the client still picks therapy and therapist.
+          ? { campaign: campaignBasicDetails, params: [name || 'there', link], carries: true }
+        : !sid && tkey
+          // Basic details AND therapy prefilled; the client picks the therapist.
+          ? { campaign: campaignPrefilledTherapy, params: [name || 'there', link], carries: true }
         : campaignGeneric
-          // The older template carries the link as a body variable instead.
-          ? { campaign: campaignGeneric, params: [name || 'there', link], buttons: undefined, carries: true }
+          // Everything pinned. No dedicated template for this shape yet, so the
+          // older generic one carries it — same two body variables.
+          ? { campaign: campaignGeneric, params: [name || 'there', link], carries: true }
           // Nothing configured for this shape. The generic prompt still reaches
           // the client, but without the link — reported honestly, not as sent.
-          : { campaign: 'panel_free_consultation', params: [name || 'there'], buttons: undefined, carries: false };
+          //
+          // Sent with NO params: panel_free_consultation declares no body
+          // variables, and passing one was rejected outright with "Template
+          // params does not match the campaign", so the client heard nothing.
+          : { campaign: 'panel_free_consultation', params: [], carries: false };
 
       try {
         await sendAiSensyMessage(
-          'manual_booking_link', plan.campaign, phone, name || 'there', plan.params, plan.buttons
+          'manual_booking_link', plan.campaign, phone, name || 'there', plan.params
         );
         whatsappSent = true;
         whatsappCarriedLink = plan.carries;
