@@ -25,18 +25,22 @@ if (window.location.hostname.includes('safestories-dashboard.vercel.app')) {
 
 import { useAuth } from './context/AuthContext';
 import { ProtectedRoute } from './context/ProtectedRoute';
+import { defaultPathForScopes } from './lib/permissions';
 
 const LoginPage = () => {
-  const { login, isLoggedIn, user } = useAuth();
+  const { login, isLoggedIn, user, scopes, scopesLoading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
   useEffect(() => {
-    if (isLoggedIn && user) {
-      const dest = (location.state as any)?.from?.pathname || getPathForRole(user);
+    // Wait for the access answer before choosing a destination. Redirecting on
+    // the role alone would send a therapist with admin access to /therapist,
+    // which is the one place the grant was meant to stop being the default.
+    if (isLoggedIn && user && !scopesLoading) {
+      const dest = (location.state as any)?.from?.pathname || defaultPathForScopes(scopes, user.role);
       navigate(dest, { replace: true });
     }
-  }, [isLoggedIn, user, navigate, location]);
+  }, [isLoggedIn, user, scopes, scopesLoading, navigate, location]);
 
   const handleLogin = (userData: any, token?: string) => {
     login(userData, token);
@@ -62,13 +66,6 @@ const LoginPage = () => {
       </div>
     </div>
   );
-};
-
-const getPathForRole = (user: any): string => {
-  if (user?.role === 'fluidadmin') return '/automation-logs';
-  if (user?.role === 'sales') return '/crm';
-  if (user?.role === 'therapist') return '/therapist';
-  return '/admin';
 };
 
 const App: React.FC = () => {
@@ -121,29 +118,32 @@ const App: React.FC = () => {
       <Route path="/session-notes/*" element={<NotesRouterWrapper />} />
 
       {/* Protected Routes */}
-      <Route 
-        path="/admin/*" 
+      {/* Gated on the dashboard held, not the role. A therapist granted admin
+          access reaches /admin while still being a therapist everywhere else —
+          which is the point, and why no token is ever re-issued to switch. */}
+      <Route
+        path="/admin/*"
         element={
-          <ProtectedRoute allowedRoles={['admin', 'superadmin']}>
+          <ProtectedRoute requiredScope="admin_dashboard">
             <Dashboard onLogout={logout} user={user} />
           </ProtectedRoute>
-        } 
+        }
       />
-      <Route 
-        path="/therapist/*" 
+      <Route
+        path="/therapist/*"
         element={
-          <ProtectedRoute allowedRoles={['therapist']}>
+          <ProtectedRoute requiredScope="therapist_dashboard">
             <TherapistDashboard onLogout={logout} user={user} />
           </ProtectedRoute>
-        } 
+        }
       />
-      <Route 
-        path="/crm/*" 
+      <Route
+        path="/crm/*"
         element={
-          <ProtectedRoute allowedRoles={['sales']}>
+          <ProtectedRoute requiredScope="crm">
             <CRMApp user={user} onLogout={logout} />
           </ProtectedRoute>
-        } 
+        }
       />
       <Route 
         path="/automation-logs/*" 
@@ -170,8 +170,8 @@ const App: React.FC = () => {
 };
 
 const RootRedirect = () => {
-  const { user } = useAuth();
-  return <Navigate to={getPathForRole(user)} replace />;
+  const { user, scopes } = useAuth();
+  return <Navigate to={defaultPathForScopes(scopes, user?.role)} replace />;
 };
 
 // Wrappers to extract wildcards and pass them as props for backward compatibility

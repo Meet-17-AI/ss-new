@@ -23,6 +23,7 @@ import { UserSettingsPage } from './UserSettingsPage';
 import { OrgSettingsPage } from './OrgSettingsPage';
 import { Routes, Route, useNavigate, useLocation, Navigate, useParams } from 'react-router-dom';
 import { NotificationBell } from './NotificationBell';
+import { DashboardSwitcher } from './DashboardSwitcher';
 
 interface DashboardProps {
   onLogout: () => void;
@@ -514,6 +515,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
         <header className="bg-white border-b px-8 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm">
           <div className="flex-1"></div>
           <div className="flex items-center gap-4">
+            {/* Renders nothing unless this user holds more than one dashboard. */}
+            <DashboardSwitcher />
+
             {user?.username !== 'Test' && (
               <button
                 className="flex items-center gap-2 rounded-lg px-4 py-2 hover:opacity-90 transition-colors shadow-sm"

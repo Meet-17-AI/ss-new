@@ -21,6 +21,12 @@ import { logWebhookApi } from './lib/webhookApiLogger.js';
 import { createNotification, notifyAllAdmins } from './lib/notifications';
 import { logActivity, categoryForRole, extractSafeMetadata } from './lib/activityLog';
 import {
+  Scope, ALL_SCOPES, isScope, baseScopeForRole, grantableScopes, loadScopes,
+  invalidateAccess, canManageAccess, requireScope, requireAccessAdmin, scopeGate,
+  requireTherapistScope, mayAccessClientRecords, requireClientRecordAccess,
+  getShadowDenials, isBaseAdminRole,
+} from './lib/access';
+import {
   resolvePrice, recordPriceLock, logPriceResolution, resolveServiceIdFromLabel,
   normalizeEmail, normalizePhoneDigits, parseCharges, istDateToTimestamp, syncLegacyCharges,
 } from './lib/pricing';
@@ -135,6 +141,54 @@ const app = express();
   try {
     await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_initiated_at TIMESTAMP WITH TIME ZONE`);
     console.log('[DB] refund_initiated_at column ensured.');
+  } catch (err: any) {
+    console.log('[DB Migration Error]', err.message);
+  }
+
+  // Extra dashboards granted on top of the one a role implies. Safe to create on
+  // a live system: with no rows, everyone keeps exactly the access they have now.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_access_grants (
+        user_id     INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        scope       TEXT        NOT NULL CHECK (scope IN ('admin_dashboard', 'therapist_dashboard', 'crm')),
+        granted_by  INTEGER,
+        granted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (user_id, scope)
+      )
+    `);
+    console.log('[DB] user_access_grants table ensured.');
+  } catch (err: any) {
+    console.log('[DB Migration Error]', err.message);
+  }
+
+  // Give the Fluid admin a real users row.
+  //
+  // It used to be a hardcoded username/password pair compared in the login
+  // handler, with a dummy id that matched no row — so it could not be disabled,
+  // could not appear in the Roles tab, could not have its password changed, and
+  // its credentials sat in the source. Everything that governs a user has to be
+  // able to reach it, which means it has to be a row like any other.
+  try {
+    const existing = await pool.query("SELECT id FROM users WHERE LOWER(username) = 'fluidadmin'");
+    if (existing.rows.length === 0) {
+      // Falls back to the previous password so an existing deployment keeps
+      // working. That password is in git history, so it MUST be rotated — hence
+      // the warning rather than a silent success.
+      const initial = process.env.FLUIDADMIN_PASSWORD || 'Fluid@2026';
+      await pool.query(
+        `INSERT INTO users (username, password, name, full_name, email, role, is_active)
+         VALUES ($1, $2, $3, $3, $4, 'fluidadmin', true)`,
+        ['Fluidadmin', await hashPassword(initial), 'Fluid Admin', 'fluidadmin@safestories.in']
+      );
+      console.log('[DB] Fluidadmin user row created.');
+      if (!process.env.FLUIDADMIN_PASSWORD) {
+        console.warn(
+          '[SECURITY] Fluidadmin was seeded with the old hardcoded password, which is in git history. ' +
+          'Change it now from the panel, or set FLUIDADMIN_PASSWORD and delete the row to re-seed.'
+        );
+      }
+    }
   } catch (err: any) {
     console.log('[DB Migration Error]', err.message);
   }
@@ -326,6 +380,14 @@ app.use((req: any, res: any, next: any) => {
   return authMiddleware(req, res, next);
 });
 
+// Dashboard-scope gate. Registered directly after the auth gate, so req.user is
+// populated, and before any route so it cannot be bypassed by declaration order.
+//
+// Starts in SHADOW mode — it logs what it would have blocked and lets it through.
+// Set ACCESS_ENFORCE=true once the log is quiet. See lib/access.ts for why it is
+// not default-deny on day one.
+app.use(scopeGate);
+
 // ==================== ACTIVITY LOGGING ====================
 // Registered AFTER the auth gate so req.user is populated — that identity is the
 // whole point, and it is why this could not have been built before auth existed.
@@ -394,16 +456,37 @@ const getOptionalUser = (req: any): any | null => {
 
 const WALLET_REDEEM_ROLES = ['admin', 'superadmin', 'fluidadmin'];
 
-// Authorization middleware - check user role
+/**
+ * Authorization middleware — may this caller reach this route?
+ *
+ * Passes on EITHER the role or an equivalent granted scope. The second half is
+ * what makes dashboard switching work: a therapist given admin access still has
+ * `role: 'therapist'` — deliberately, since re-minting a token with a different
+ * role would be privilege escalation dressed as a feature — so a plain role test
+ * would 403 them out of every admin route they were just granted.
+ *
+ * The scope is derived from the allowed roles rather than passed in, so all ~31
+ * existing call sites keep working unchanged and cannot drift apart from it.
+ */
 const requireRole = (allowedRoles: string[]) => {
-  return (req: any, res: any, next: any) => {
+  const equivalentScopes = new Set(
+    allowedRoles.map(baseScopeForRole).filter(Boolean) as Scope[]
+  );
+
+  return async (req: any, res: any, next: any) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
-    if (!allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({ error: 'Insufficient permissions' });
+    if (allowedRoles.includes(req.user.role)) return next();
+
+    try {
+      const held = await loadScopes(req.user);
+      if ([...equivalentScopes].some((s) => held.has(s))) return next();
+    } catch (err: any) {
+      console.error('[access] requireRole scope check failed:', err?.message || err);
+      // Fall through to the denial. A lookup failure must not be a way in.
     }
-    next();
+    return res.status(403).json({ error: 'Insufficient permissions' });
   };
 };
 
@@ -480,7 +563,9 @@ const getOAuth2Client = () => {
  * Fetching the URL keeps the token attached and the route authenticated; only
  * the final hop to accounts.google.com is a navigation, and that needs no token.
  */
-app.get('/api/auth/google/url', (req, res) => {
+// Guarded so a therapist cannot start a consent flow that would attach THEIR
+// Google account to someone else's therapist record.
+app.get('/api/auth/google/url', requireTherapistScope(r => r.query.therapistId || 'SafeStories'), (req, res) => {
   const therapistId = (req.query.therapistId as string) || 'SafeStories';
   const adminRedirect = req.query.adminRedirect === 'true';
   const oauth2Client = getOAuth2Client();
@@ -707,7 +792,7 @@ app.post('/api/auth/google/disconnect', async (req: any, res) => {
   }
 });
 
-app.get('/api/auth/google/status', async (req, res) => {
+app.get('/api/auth/google/status', requireTherapistScope(r => r.query.therapistId || 'SafeStories'), async (req, res) => {
   try {
     const therapistId = (req.query.therapistId as string) || 'SafeStories';
     const result = await pool.query(
@@ -793,7 +878,9 @@ app.post('/api/native/fetch-slots', async (req, res) => {
   }
 });
 
-app.get('/api/admin/therapists-calendars', async (req, res) => {
+// Guarded explicitly rather than left to the blanket gate, which starts in
+// shadow mode: this lists every therapist's calendar connection state.
+app.get('/api/admin/therapists-calendars', requireScope('admin_dashboard'), async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT therapist_id, name, contact_info, profile_picture_url, 
@@ -853,24 +940,10 @@ app.post('/api/login', async (req, res) => {
       });
     }
 
-    // Hardcode override for Fluidadmin
-    if (username === 'Fluidadmin' && password === 'Fluid@2026') {
-      console.log(`✅ Login successful for Fluidadmin (fluidadmin)`);
-      const fluidAdminUser = {
-        id: 999999, // dummy ID
-        username: 'Fluidadmin',
-        name: 'Fluid Admin',
-        full_name: 'Fluid Admin',
-        email: 'fluidadmin@safestories.in',
-        role: 'fluidadmin',
-        is_active: true
-      };
-      return res.json({
-        success: true,
-        user: fluidAdminUser,
-        token: issueToken(fluidAdminUser)
-      });
-    }
+    // Fluidadmin used to be special-cased here with its password written into the
+    // source. It is a normal users row now, seeded at startup, so it falls through
+    // to the same lookup as everyone else — and can be disabled, rotated and
+    // audited like everyone else.
 
     // Fetch user WITHOUT comparing password in database
     const result = await pool.query(
@@ -979,6 +1052,190 @@ app.post('/api/login', async (req, res) => {
     console.error('Login error:', error);
     res.status(500).json({ success: false, message: 'Login failed' });
   }
+});
+
+// ==================== DASHBOARD ACCESS ====================
+// See lib/access.ts for the model. In short: a role says who you are, a scope
+// says which dashboards you may open, and switching between them changes neither.
+
+/**
+ * What the CALLER may open. Drives the route guards and the dashboard switcher.
+ *
+ * Read from the database on every call rather than from the token, so a grant or
+ * a revoke takes effect on the next page load instead of whenever the 24h token
+ * happens to expire.
+ */
+app.get('/api/me/access', async (req: any, res) => {
+  try {
+    const scopes = Array.from(await loadScopes(req.user));
+    res.json({
+      role: req.user?.role ?? null,
+      baseScope: baseScopeForRole(req.user?.role),
+      scopes,
+      canManageAccess: canManageAccess(req.user),
+    });
+  } catch (error: any) {
+    console.error('[access] /api/me/access failed:', error?.message || error);
+    res.status(500).json({ error: 'Could not load access' });
+  }
+});
+
+/**
+ * Everyone whose access can be managed, with what they currently hold.
+ *
+ * Restricted to the AI team by identity — see canManageAccess. The Roles tab
+ * hiding itself for everyone else is presentation; this check is the control.
+ */
+app.get('/api/admin/access-grants', requireAccessAdmin, async (req: any, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT u.id, u.username, u.email, u.role, u.therapist_id, u.is_active,
+             COALESCE(u.full_name, u.name) AS name,
+             COALESCE(
+               ARRAY_AGG(g.scope) FILTER (WHERE g.scope IS NOT NULL),
+               '{}'
+             ) AS granted
+        FROM users u
+        LEFT JOIN user_access_grants g ON g.user_id = u.id
+       WHERE LOWER(u.role) IN ('admin', 'superadmin', 'therapist', 'sales')
+       GROUP BY u.id
+       ORDER BY LOWER(u.role), LOWER(COALESCE(u.full_name, u.name, u.username))
+    `);
+
+    res.json({
+      users: rows.map((u: any) => {
+        const base = baseScopeForRole(u.role);
+        const granted: Scope[] = (u.granted || []).filter(isScope);
+        return {
+          id: u.id,
+          name: u.name || u.username,
+          username: u.username,
+          email: u.email,
+          role: u.role,
+          isActive: u.is_active !== false,
+          // The base scope is reported as held so the checkbox renders ticked,
+          // and separately as non-grantable so it renders disabled. It is never
+          // stored, so it can never be saved away.
+          baseScope: base,
+          scopes: Array.from(new Set<Scope>([...(base ? [base] : []), ...granted])),
+          grantable: grantableScopes(u),
+        };
+      }),
+    });
+  } catch (error: any) {
+    console.error('[access] listing grants failed:', error?.message || error);
+    res.status(500).json({ error: 'Could not load users' });
+  }
+});
+
+/**
+ * Replace one user's grants with the set given.
+ *
+ * Takes the COMPLETE intended set, not a delta, so a checkbox the admin unticked
+ * is unambiguous — a delta API cannot distinguish "leave it alone" from "remove
+ * it" when the request is retried.
+ */
+app.put('/api/admin/access-grants/:userId', requireAccessAdmin, async (req: any, res) => {
+  const client = await pool.connect();
+  try {
+    const userId = Number(req.params.userId);
+    if (!Number.isInteger(userId)) return res.status(400).json({ error: 'Invalid user id' });
+
+    const requested: string[] = Array.isArray(req.body?.scopes) ? req.body.scopes : [];
+    if (requested.some((s) => !isScope(s))) {
+      return res.status(400).json({ error: 'Unknown scope requested' });
+    }
+
+    const { rows } = await client.query(
+      'SELECT id, username, email, role, therapist_id FROM users WHERE id = $1',
+      [userId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const target = rows[0];
+
+    const base = baseScopeForRole(target.role);
+    const allowed = grantableScopes(target);
+
+    // Validate against what this user could ever hold, not against what the form
+    // happened to render. The form is a convenience; a crafted request is not.
+    const rejected = requested.filter((s) => !allowed.includes(s as Scope));
+    if (rejected.length) {
+      return res.status(400).json({
+        error: rejected.includes('therapist_dashboard')
+          // Say why, because "not allowed" reads as a bug when the real reason is
+          // that there is no therapist record to point the dashboard at.
+          ? 'A therapist dashboard needs a therapist profile; this account has none.'
+          : `Not available for a ${target.role}: ${rejected.join(', ')}`,
+      });
+    }
+
+    // The base scope is implicit. Storing it would let a later write delete it and
+    // lock the user out of the only dashboard they are guaranteed.
+    const toStore = Array.from(new Set(requested.filter((s) => s !== base))) as Scope[];
+
+    // An account that hands out access must not be able to take its own away —
+    // with the AI team as the only editor, that mistake has no path back except a
+    // database console.
+    if (canManageAccess(target) && !requested.includes('admin_dashboard')) {
+      return res.status(400).json({ error: 'This account cannot remove its own admin access.' });
+    }
+
+    await client.query('BEGIN');
+    await client.query('DELETE FROM user_access_grants WHERE user_id = $1', [userId]);
+    for (const scope of toStore) {
+      await client.query(
+        `INSERT INTO user_access_grants (user_id, scope, granted_by)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, scope) DO NOTHING`,
+        [userId, scope, Number.isInteger(Number(req.user?.id)) ? Number(req.user.id) : null]
+      );
+    }
+    await client.query('COMMIT');
+
+    // Drop the cache before responding, so the next request from that user reads
+    // the new set rather than up to 30s of the old one.
+    invalidateAccess(userId);
+
+    logActivity({
+      category: 'admin',
+      actorId: req.user?.id != null ? String(req.user.id) : null,
+      actorName: req.user?.username ?? null,
+      actorRole: req.user?.role ?? null,
+      action: 'access.grants.update',
+      method: 'PUT',
+      route: '/api/admin/access-grants/:userId',
+      path: req.path,
+      entityType: 'user',
+      entityId: String(userId),
+      metadata: { user_id: userId, role: target.role, granted: toStore.join(',') || 'none' },
+    });
+
+    res.json({
+      success: true,
+      scopes: Array.from(new Set<Scope>([...(base ? [base] : []), ...toStore])),
+    });
+  } catch (error: any) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[access] updating grants failed:', error?.message || error);
+    res.status(500).json({ error: 'Could not update access' });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * What the scope gate WOULD have blocked, while it runs in shadow mode.
+ *
+ * The list to read before setting ACCESS_ENFORCE=true. Collapsed to one entry per
+ * route and role, so a week of traffic is a short table rather than thousands of
+ * identical lines. An empty list means nothing legitimate is being caught and the
+ * gate is safe to enforce.
+ */
+app.get('/api/admin/access-shadow-denials', requireAccessAdmin, (req: any, res) => {
+  res.json({
+    enforcing: String(process.env.ACCESS_ENFORCE || '').toLowerCase() === 'true',
+    denials: getShadowDenials(),
+  });
 });
 
 // Verify password endpoint (for case history access)
@@ -1694,6 +1951,16 @@ app.get('/api/therapist-profile', async (req, res) => {
 
     if (!therapist_id && !email) {
       return res.status(400).json({ error: 'Therapist ID or email is required' });
+    }
+
+    // Checked inline rather than with requireTherapistScope, because this route
+    // accepts an email as well — a therapist awaiting approval has no
+    // therapist_id yet, and looking themselves up by email is the only way in.
+    const ownProfile =
+      (therapist_id && String((req as any).user?.therapist_id) === String(therapist_id)) ||
+      (email && String((req as any).user?.email || '').toLowerCase() === String(email).toLowerCase());
+    if (!ownProfile && !(await loadScopes((req as any).user)).has('admin_dashboard')) {
+      return res.status(403).json({ error: 'Not your therapist record' });
     }
 
     // First try to get from therapists table (approved therapists)
@@ -2835,9 +3102,16 @@ app.patch('/api/pretherapy-form/:leadId', async (req, res) => {
 
 app.get('/api/lead-managers', async (req, res) => {
   try {
-    const result = await pool.query(
-      "SELECT id, COALESCE(full_name, name) as name FROM users WHERE role = 'sales' ORDER BY name ASC"
-    );
+    // Anyone who can open the CRM can own a lead, not only the sales role —
+    // otherwise a therapist granted CRM access could work leads but never be
+    // assigned one, which makes the grant half a permission.
+    const result = await pool.query(`
+      SELECT u.id, COALESCE(u.full_name, u.name) AS name
+        FROM users u
+        LEFT JOIN user_access_grants g ON g.user_id = u.id AND g.scope = 'crm'
+       WHERE u.role = 'sales' OR g.user_id IS NOT NULL
+       ORDER BY name ASC
+    `);
     res.json(result.rows);
   } catch (err) {
     console.error('Error fetching lead managers:', err);
@@ -4160,7 +4434,7 @@ app.get('/api/dayschedule/schedules/:id', async (req, res) => {
   }
 });
 
-app.put('/api/dayschedule/schedules/:id', async (req, res) => {
+app.put('/api/dayschedule/schedules/:id', requireTherapistScope(r => r.body?.therapist_id), async (req, res) => {
   try {
     const scheduleId = parseInt(req.params.id);
     if (isNaN(scheduleId)) return res.status(400).json({ error: 'Invalid schedule ID' });
@@ -5347,7 +5621,7 @@ app.get('/api/therapists-live-status', async (req, res) => {
 });
 
 // Get scheduleId for a specific therapist from therapist_resources
-app.get('/api/therapist-schedule', async (req, res) => {
+app.get('/api/therapist-schedule', requireTherapistScope(r => r.query.therapist_id), async (req, res) => {
   try {
     const { therapist_id } = req.query;
     if (!therapist_id) {
@@ -5367,7 +5641,7 @@ app.get('/api/therapist-schedule', async (req, res) => {
 });
 
 // Get Google Calendar blocks for a therapist
-app.get('/api/therapist/calendar-blocks', async (req, res) => {
+app.get('/api/therapist/calendar-blocks', requireTherapistScope(r => r.query.therapist_id), async (req, res) => {
   try {
     const { therapist_id, timeMin, timeMax } = req.query;
     if (!therapist_id || !timeMin || !timeMax) {
@@ -5833,7 +6107,7 @@ app.get('/api/client-details', async (req, res) => {
 });
 
 // Get therapist stats
-app.get('/api/therapist-stats', async (req, res) => {
+app.get('/api/therapist-stats', requireTherapistScope(r => r.query.therapist_id), async (req, res) => {
   try {
     // Prevent caching of stats data
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
@@ -6042,7 +6316,7 @@ app.get('/api/therapist-stats', async (req, res) => {
 });
 
 // Get therapist appointments
-app.get('/api/therapist-appointments', async (req, res) => {
+app.get('/api/therapist-appointments', requireTherapistScope(r => r.query.therapist_id), async (req, res) => {
   try {
     const { therapist_id } = req.query;
 
@@ -6108,7 +6382,7 @@ app.get('/api/therapist-appointments', async (req, res) => {
 });
 
 // Get therapist clients
-app.get('/api/therapist-clients', async (req, res) => {
+app.get('/api/therapist-clients', requireTherapistScope(r => r.query.therapist_id), async (req, res) => {
   try {
     const { therapist_id } = req.query;
 
@@ -6688,7 +6962,7 @@ app.post('/api/additional-notes', async (req, res) => {
 });
 
 // Get session notes
-app.get('/api/session-notes', async (req, res) => {
+app.get('/api/session-notes', requireClientRecordAccess(r => ({ bookingId: r.query.booking_id })), async (req, res) => {
   try {
     const { booking_id } = req.query;
 
@@ -11949,7 +12223,7 @@ app.get('/api/session-notes-draft', async (req, res) => {
 // them alongside submitted notes. Resolves client → bookings with the SAME normalized
 // phone/email logic as /api/progress-notes so the two lists always agree on identity.
 // Read-only: this never affects note/KPI/status derivation anywhere.
-app.get('/api/progress-note-drafts', async (req, res) => {
+app.get('/api/progress-note-drafts', requireClientRecordAccess(r => ({ clientId: r.query.client_id })), async (req, res) => {
   try {
     const { client_id } = req.query;
     if (!client_id) return res.status(400).json({ error: 'client_id is required' });
@@ -12030,7 +12304,7 @@ app.delete('/api/session-notes-draft', async (req, res) => {
 });
 
 // 2. Get case history
-app.get('/api/case-history', async (req, res) => {
+app.get('/api/case-history', requireClientRecordAccess(r => ({ clientId: r.query.client_id, bookingId: r.query.booking_id })), async (req, res) => {
   try {
     const { client_id, booking_id } = req.query;
 
@@ -12075,8 +12349,23 @@ app.put('/api/case-history/:id', async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
 
+    // Read the row first so the write can be refused on ownership. Checking after
+    // the UPDATE would be too late — the record would already have changed.
+    const existing = await pool.query(
+      'SELECT client_id, booking_id FROM client_case_history WHERE id = $1',
+      [id]
+    );
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Case history not found' });
+    }
+    if (!(await mayAccessClientRecords(req, {
+      clientId: existing.rows[0].client_id, bookingId: existing.rows[0].booking_id,
+    }))) {
+      return res.status(403).json({ error: 'These records belong to another therapist\'s client.' });
+    }
+
     const result = await pool.query(`
-      UPDATE client_case_history 
+      UPDATE client_case_history
       SET ${Object.keys(updates).map((key, i) => `${key} = $${i + 2}`).join(', ')},
           updated_at = NOW()
       WHERE id = $1
@@ -12095,7 +12384,7 @@ app.put('/api/case-history/:id', async (req, res) => {
 });
 
 // 4. Get progress notes list
-app.get('/api/progress-notes', async (req, res) => {
+app.get('/api/progress-notes', requireClientRecordAccess(r => ({ clientId: r.query.client_id })), async (req, res) => {
   try {
     const { client_id } = req.query;
 
@@ -12183,6 +12472,14 @@ app.get('/api/progress-notes/:id', async (req, res) => {
       [id]
     );
 
+    // Checked after the fetch because the row is what says whose client this is;
+    // the id in the URL carries no ownership of its own.
+    if (result.rows.length > 0 && !(await mayAccessClientRecords(req, {
+      clientId: result.rows[0].client_id, bookingId: result.rows[0].booking_id,
+    }))) {
+      return res.status(403).json({ error: 'These records belong to another therapist\'s client.' });
+    }
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Progress note not found' });
     }
@@ -12252,7 +12549,7 @@ app.get('/api/therapy-goals', async (req, res) => {
 });
 
 // 6a. Get free consultation notes list
-app.get('/api/free-consultation-notes', async (req, res) => {
+app.get('/api/free-consultation-notes', requireClientRecordAccess(r => ({ clientId: r.query.client_id })), async (req, res) => {
   try {
     const { client_id } = req.query;
 
@@ -12285,6 +12582,13 @@ app.get('/api/free-consultation-notes/:id', async (req, res) => {
       'SELECT * FROM free_consultation_pretherapy_notes WHERE id = $1',
       [id]
     );
+
+    // See the note on /api/progress-notes/:id — ownership lives on the row.
+    if (result.rows.length > 0 && !(await mayAccessClientRecords(req, {
+      clientId: result.rows[0].client_id, bookingId: result.rows[0].booking_id,
+    }))) {
+      return res.status(403).json({ error: 'These records belong to another therapist\'s client.' });
+    }
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Free consultation note not found' });
@@ -12790,7 +13094,7 @@ app.get('/api/client-session-type', async (req, res) => {
 });
 
 // 10. Get free consultation notes
-app.get('/api/free-consultation-notes', async (req, res) => {
+app.get('/api/free-consultation-notes', requireClientRecordAccess(r => ({ clientId: r.query.client_id })), async (req, res) => {
   try {
     const { client_id } = req.query;
 
@@ -12819,6 +13123,13 @@ app.get('/api/free-consultation-notes/:id', async (req, res) => {
       'SELECT * FROM free_consultation_pretherapy_notes WHERE id = $1',
       [id]
     );
+
+    // See the note on /api/progress-notes/:id — ownership lives on the row.
+    if (result.rows.length > 0 && !(await mayAccessClientRecords(req, {
+      clientId: result.rows[0].client_id, bookingId: result.rows[0].booking_id,
+    }))) {
+      return res.status(403).json({ error: 'These records belong to another therapist\'s client.' });
+    }
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Free consultation note not found' });

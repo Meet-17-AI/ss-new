@@ -22,3 +22,48 @@ export const canDisconnectCalendar = (user: any): boolean =>
   [user?.email, user?.username].some(
     (id: any) => id && CALENDAR_DISCONNECT_USERS.includes(String(id).toLowerCase())
   );
+
+/* -------------------------------------------------------------------------- */
+/* Dashboard access                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A scope is a dashboard someone may open. It is NOT a role: a therapist granted
+ * admin access keeps `role: 'therapist'` and gains `admin_dashboard`, because
+ * swapping the role would mean issuing a token that lies about who is holding it.
+ *
+ * Mirrors panel-backend/src/lib/access.ts. That file is the control.
+ */
+export type Scope = 'admin_dashboard' | 'therapist_dashboard' | 'crm';
+
+export const SCOPE_LABEL: Record<Scope, string> = {
+  admin_dashboard: 'Admin dashboard',
+  therapist_dashboard: 'Therapist dashboard',
+  crm: 'CRM',
+};
+
+/** Where each dashboard lives, so the switcher and the redirects agree. */
+export const SCOPE_PATH: Record<Scope, string> = {
+  admin_dashboard: '/admin',
+  therapist_dashboard: '/therapist',
+  crm: '/crm',
+};
+
+/** Order used everywhere a set of scopes is shown, so lists never reshuffle. */
+export const SCOPE_ORDER: Scope[] = ['admin_dashboard', 'therapist_dashboard', 'crm'];
+
+export const sortScopes = (scopes: Scope[]): Scope[] =>
+  SCOPE_ORDER.filter((s) => scopes.includes(s));
+
+/**
+ * Where to land someone who has not asked for a particular page.
+ *
+ * Driven by what they hold rather than by their role — a therapist granted admin
+ * access would otherwise be bounced back to /therapist by every redirect in the
+ * app, fighting the switcher they just used.
+ */
+export const defaultPathForScopes = (scopes: Scope[], role?: string): string => {
+  if (String(role || '').toLowerCase() === 'fluidadmin') return '/automation-logs';
+  const first = sortScopes(scopes)[0];
+  return first ? SCOPE_PATH[first] : '/login';
+};

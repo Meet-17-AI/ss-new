@@ -5,6 +5,8 @@ import { TherapyCalendars } from './TherapyCalendars';
 import { TherapyCalendarDetails } from './TherapyCalendarDetails';
 import { PricingSettings } from './PricingSettings';
 import { NewTherapist } from './NewTherapist';
+import { RolesAccessTab } from './RolesAccessTab';
+import { useAuth } from '../context/AuthContext';
 
 const BASE = '/admin/userSettings';
 
@@ -12,11 +14,16 @@ const tabs = [
   { id: 'therapists', label: 'Therapists' },
   { id: 'therapies', label: 'Therapies' },
   { id: 'pricing', label: 'Pricing' },
+  // Only the AI team sees this. Hiding it is presentation — both the list and the
+  // save are refused server-side for everyone else.
+  { id: 'roles', label: 'Roles', accessAdminOnly: true },
 ];
 
 export const UserSettingsPage: React.FC<{ user?: any }> = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { canManageAccess } = useAuth();
+  const visibleTabs = tabs.filter((t) => !t.accessAdminOnly || canManageAccess);
 
   // Match the tab by the first path segment after the base, so nested routes
   // (therapists/new, therapies/:id) keep their parent tab highlighted instead of
@@ -29,7 +36,7 @@ export const UserSettingsPage: React.FC<{ user?: any }> = () => {
       <h1 className="text-3xl font-bold mb-8">User Settings</h1>
 
       <div className="flex gap-4 mb-6 border-b">
-        {tabs.map((tab) => (
+        {visibleTabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => navigate(`${BASE}/${tab.id}`)}
@@ -56,6 +63,9 @@ export const UserSettingsPage: React.FC<{ user?: any }> = () => {
             <Route path="therapies/new" element={<TherapyCalendarDetails />} />
             <Route path="therapies/:id" element={<TherapyCalendarDetails />} />
             <Route path="pricing" element={<PricingSettings />} />
+            {/* Routed unconditionally: the component itself explains the refusal,
+                which beats a bare redirect if someone follows a shared link. */}
+            <Route path="roles" element={<RolesAccessTab />} />
             {/* Unknown sub-path (including the bare base): land on the first tab
                 instead of a blank panel. */}
             <Route path="*" element={<Navigate to={`${BASE}/therapists`} replace />} />
