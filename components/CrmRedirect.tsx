@@ -35,14 +35,17 @@ export const CrmRedirect: React.FC = () => {
           <h1 className="text-lg font-semibold text-gray-900">Could not open the CRM</h1>
           <p className="mt-2 text-sm text-gray-600">{error}</p>
           {/* A way through even when the handoff itself failed — they can sign in
-              on the CRM directly rather than being stuck here. */}
-          <a
-            href={CRM_APP_URL}
-            className="mt-5 inline-flex items-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5
-                       text-sm font-semibold text-white transition-colors hover:bg-teal-800"
-          >
-            Open the CRM <ExternalLink size={15} />
-          </a>
+              on the CRM directly rather than being stuck here. Omitted when the
+              address is unset, since an empty href just reloads this page. */}
+          {CRM_APP_URL && (
+            <a
+              href={CRM_APP_URL}
+              className="mt-5 inline-flex items-center gap-2 rounded-lg bg-teal-700 px-4 py-2.5
+                         text-sm font-semibold text-white transition-colors hover:bg-teal-800"
+            >
+              Open the CRM <ExternalLink size={15} />
+            </a>
+          )}
         </div>
       </div>
     );

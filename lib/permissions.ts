@@ -54,14 +54,28 @@ export const SCOPE_PATH: Record<Scope, string> = {
  * page load rather than a route change — and its origin cannot read this one's
  * stored token. See handoffToCrm below for how the session travels.
  *
- * Empty means "not configured": the switcher then falls back to the panel's own
- * embedded /crm, which is what existed before the split.
+ * The localhost fallback applies in DEVELOPMENT ONLY. A deployed build that
+ * quietly defaults to localhost:3000 sends every user to a port on their own
+ * machine — which either fails to connect or, worse, opens whatever they happen
+ * to be running there. It reads as "the CRM is broken" rather than "nobody set
+ * VITE_CRM_URL", so the misconfiguration is invisible exactly where it matters.
+ *
+ * Empty in a production build is therefore deliberate: handoffToCrm refuses and
+ * says what is missing.
  */
 export const CRM_APP_URL: string =
-  (import.meta as any).env?.VITE_CRM_URL || 'http://localhost:3000';
+  (import.meta as any).env?.VITE_CRM_URL ||
+  ((import.meta as any).env?.DEV ? 'http://localhost:3000' : '');
 
-/** Scopes served by a different origin, so callers know a link will not do. */
-export const isExternalScope = (scope: Scope): boolean => scope === 'crm' && Boolean(CRM_APP_URL);
+/**
+ * Scopes served by a different origin, so callers know a link will not do.
+ *
+ * Not conditional on CRM_APP_URL being set. Treating "unconfigured" as
+ * "internal" would route the click to the panel's own /crm, where the same
+ * failure surfaces one navigation later and looks like a broken page instead of
+ * a missing setting.
+ */
+export const isExternalScope = (scope: Scope): boolean => scope === 'crm';
 
 /**
  * Move the signed-in session to the CRM.
@@ -74,6 +88,15 @@ export const isExternalScope = (scope: Scope): boolean => scope === 'crm' && Boo
  * and is useless once redeemed, so a copy left in browser history grants nothing.
  */
 export async function handoffToCrm(): Promise<void> {
+  // Named plainly rather than redirecting somewhere useless. This is a deploy
+  // configuration problem, and the message has to say so or it gets debugged as
+  // an application bug.
+  if (!CRM_APP_URL) {
+    throw new Error(
+      'The CRM address is not configured. Set VITE_CRM_URL on this deployment and redeploy.'
+    );
+  }
+
   const res = await fetch('/api/handoff', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
