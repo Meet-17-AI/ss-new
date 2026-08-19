@@ -194,6 +194,27 @@ export const isBaseAdminRole = (user: any): boolean =>
   BASE_ADMIN_ROLES.includes(String(user?.role || '').toLowerCase());
 
 /**
+ * Reserved to accounts that ARE administrators — not to anyone holding a granted
+ * admin dashboard.
+ *
+ * requireRole deliberately passes on the equivalent scope, which is what lets a
+ * granted therapist use the admin panel at all. These routes are the exception:
+ * organisation settings, pricing, the service catalogue and the therapist roster
+ * shape how the whole clinic operates, and lending someone the day-to-day
+ * dashboard is not the same as handing them the configuration behind it.
+ *
+ * The check is on ROLE, so no grant can confer it — the same reasoning that
+ * keeps clinical records out of a granted therapist's reach.
+ */
+export const requireBaseAdmin = (req: any, res: any, next: any) => {
+  if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+  if (!isBaseAdminRole(req.user)) {
+    return res.status(403).json({ error: 'This area is restricted to administrators.' });
+  }
+  next();
+};
+
+/**
  * May this caller act on this therapist's data?
  *
  * Yes when it is their own, or when they hold the admin dashboard. Anything else

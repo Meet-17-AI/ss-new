@@ -24,7 +24,7 @@ import {
   Scope, ALL_SCOPES, isScope, baseScopeForRole, grantableScopes, loadScopes,
   invalidateAccess, canManageAccess, requireScope, requireAccessAdmin, scopeGate,
   requireTherapistScope, mayAccessClientRecords, requireClientRecordAccess,
-  getShadowDenials, isBaseAdminRole,
+  getShadowDenials, isBaseAdminRole, requireBaseAdmin,
 } from './lib/access';
 import {
   resolvePrice, recordPriceLock, logPriceResolution, resolveServiceIdFromLabel,
@@ -5804,7 +5804,8 @@ app.get('/api/therapist/calendar-blocks', requireTherapistScope(r => r.query.the
 });
 
 // Get all therapists
-app.get('/api/therapists-admin', async (req, res) => {
+// The full therapist roster with contact details — a User Settings screen.
+app.get('/api/therapists-admin', requireBaseAdmin, async (req, res) => {
   try {
     // The "SafeStories" row is the platform's own free-consultation calendar
     // host, not a person, so it is excluded here — both consumers of this
@@ -8871,7 +8872,7 @@ app.post('/api/fetch-slots', async (req, res) => {
 });
 
 // GET public service details by slug
-app.delete('/api/services/:id', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.delete('/api/services/:id', requireBaseAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query('DELETE FROM therapy_services WHERE id = $1 RETURNING *', [id]);
@@ -9110,7 +9111,7 @@ app.post('/api/public/resolve-price', async (req, res) => {
  * COALESCE defaults both to true so a therapy whose therapist has no matching
  * row (the SafeStories platform calendar) is not silently dropped.
  */
-app.get('/api/admin/pricing/therapies', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.get('/api/admin/pricing/therapies', requireBaseAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT
@@ -9163,7 +9164,7 @@ app.get('/api/admin/pricing/therapies', requireRole(['admin','superadmin','fluid
 });
 
 /** GET /api/admin/pricing/schedule/:serviceId — full price history for one therapy. */
-app.get('/api/admin/pricing/schedule/:serviceId', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.get('/api/admin/pricing/schedule/:serviceId', requireBaseAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT id, amount, effective_from, grandfather_existing, note, created_by, created_at, revoked_at
@@ -9183,7 +9184,7 @@ app.get('/api/admin/pricing/schedule/:serviceId', requireRole(['admin','superadm
  * POST /api/admin/pricing/schedule — set a new price from a given date.
  * Body: { service_id, amount, effective_from: 'YYYY-MM-DD', grandfather_existing, note }
  */
-app.post('/api/admin/pricing/schedule', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.post('/api/admin/pricing/schedule', requireBaseAdmin, async (req, res) => {
   try {
     const { service_id, amount, effective_from, grandfather_existing = true, note } = req.body || {};
 
@@ -9230,7 +9231,7 @@ app.post('/api/admin/pricing/schedule', requireRole(['admin','superadmin','fluid
 });
 
 /** POST /api/admin/pricing/schedule/:id/revoke — cancel a price change. */
-app.post('/api/admin/pricing/schedule/:id/revoke', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.post('/api/admin/pricing/schedule/:id/revoke', requireBaseAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE therapy_price_schedule
@@ -9256,7 +9257,7 @@ app.post('/api/admin/pricing/schedule/:id/revoke', requireRole(['admin','superad
  * GET /api/admin/pricing/impact?service_id=&amount=
  * What a proposed change would actually do, before it is saved.
  */
-app.get('/api/admin/pricing/impact', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.get('/api/admin/pricing/impact', requireBaseAdmin, async (req, res) => {
   try {
     const serviceId = Number(req.query.service_id);
     const amount = Number(req.query.amount);
@@ -9292,7 +9293,7 @@ app.get('/api/admin/pricing/impact', requireRole(['admin','superadmin','fluidadm
  * real client record here — all_clients_table is not written by the booking
  * flow and would miss most people.
  */
-app.get('/api/admin/pricing/clients', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.get('/api/admin/pricing/clients', requireBaseAdmin, async (req, res) => {
   try {
     const search = String(req.query.search || '').trim().toLowerCase();
     const { rows } = await pool.query(
@@ -9332,7 +9333,7 @@ app.get('/api/admin/pricing/clients', requireRole(['admin','superadmin','fluidad
  * full catalogue — a per-client price is only meaningful for a therapy they
  * use. Deactivated therapies and therapists are excluded, matching the tab.
  */
-app.get('/api/admin/pricing/client-context', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.get('/api/admin/pricing/client-context', requireBaseAdmin, async (req, res) => {
   try {
     const email = normalizeEmail(String(req.query.email || ''));
     const phone = normalizePhoneDigits(String(req.query.phone || ''));
@@ -9415,7 +9416,7 @@ app.get('/api/admin/pricing/client-context', requireRole(['admin','superadmin','
 });
 
 /** GET /api/admin/pricing/overrides — all active per-client prices. */
-app.get('/api/admin/pricing/overrides', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.get('/api/admin/pricing/overrides', requireBaseAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT o.*, s.title AS service_title, s.therapist_name
@@ -9438,7 +9439,7 @@ app.get('/api/admin/pricing/overrides', requireRole(['admin','superadmin','fluid
  * All-or-nothing: a partial apply across a batch of clients would leave the
  * admin with no way to tell who got the new price.
  */
-app.post('/api/admin/pricing/overrides', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.post('/api/admin/pricing/overrides', requireBaseAdmin, async (req, res) => {
   const client = await pool.connect();
   try {
     const { clients, service_id, amount, reason, effective_until } = req.body || {};
@@ -9495,7 +9496,7 @@ app.post('/api/admin/pricing/overrides', requireRole(['admin','superadmin','flui
 });
 
 /** POST /api/admin/pricing/overrides/:id/revoke */
-app.post('/api/admin/pricing/overrides/:id/revoke', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.post('/api/admin/pricing/overrides/:id/revoke', requireBaseAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE client_price_override
@@ -9516,7 +9517,7 @@ app.post('/api/admin/pricing/overrides/:id/revoke', requireRole(['admin','supera
  * GET /api/admin/pricing/locks?service_id=
  * Who is grandfathered on this therapy, and at what rate.
  */
-app.get('/api/admin/pricing/locks', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.get('/api/admin/pricing/locks', requireBaseAdmin, async (req, res) => {
   try {
     const serviceId = req.query.service_id ? Number(req.query.service_id) : null;
     const { rows } = await pool.query(
@@ -9538,7 +9539,7 @@ app.get('/api/admin/pricing/locks', requireRole(['admin','superadmin','fluidadmi
 });
 
 /** POST /api/admin/pricing/locks/:id/release — move one client onto list price. */
-app.post('/api/admin/pricing/locks/:id/release', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.post('/api/admin/pricing/locks/:id/release', requireBaseAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE client_price_lock
@@ -9611,7 +9612,8 @@ const ORG_SETTING_KEYS = [
 ] as const;
 
 // GET /api/org-settings
-app.get('/api/org-settings', async (req, res) => {
+// Organisation configuration. The matching POST was already restricted.
+app.get('/api/org-settings', requireBaseAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT setting_key, setting_value FROM admin_settings WHERE setting_key = ANY($1)`,
@@ -9628,7 +9630,7 @@ app.get('/api/org-settings', async (req, res) => {
 });
 
 // POST /api/org-settings (Admin)
-app.post('/api/org-settings', requireRole(['admin', 'superadmin', 'fluidadmin']), async (req, res) => {
+app.post('/api/org-settings', requireBaseAdmin, async (req, res) => {
   try {
     const { settings } = req.body;
     if (!settings || typeof settings !== 'object') {
@@ -13713,7 +13715,7 @@ app.get('/api/therapist-schedules/:therapist_id', async (req, res) => {
   }
 });
 
-app.post('/api/services', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.post('/api/services', requireBaseAdmin, async (req, res) => {
   try {
     const {
       title, duration, type, therapy_type, description, charges, therapist_id, therapist_name,
@@ -13789,7 +13791,7 @@ app.post('/api/services', requireRole(['admin','superadmin','fluidadmin']), asyn
   }
 });
 
-app.put('/api/services/:id', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.put('/api/services/:id', requireBaseAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -13842,7 +13844,7 @@ app.put('/api/services/:id', requireRole(['admin','superadmin','fluidadmin']), a
 });
 
 // DELETE therapy calendar
-app.delete('/api/therapy-calendars/:id', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.delete('/api/therapy-calendars/:id', requireBaseAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query('DELETE FROM therapy_services WHERE id = $1 RETURNING id', [id]);
@@ -13857,7 +13859,7 @@ app.delete('/api/therapy-calendars/:id', requireRole(['admin','superadmin','flui
 });
 
 // PATCH deactivate therapy calendar
-app.patch('/api/therapy-calendars/:id/deactivate', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.patch('/api/therapy-calendars/:id/deactivate', requireBaseAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
@@ -13875,7 +13877,7 @@ app.patch('/api/therapy-calendars/:id/deactivate', requireRole(['admin','superad
 });
 
 // PATCH activate therapy calendar
-app.patch('/api/therapy-calendars/:id/activate', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+app.patch('/api/therapy-calendars/:id/activate', requireBaseAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(

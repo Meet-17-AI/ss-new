@@ -24,6 +24,8 @@ import { OrgSettingsPage } from './OrgSettingsPage';
 import { Routes, Route, useNavigate, useLocation, Navigate, useParams } from 'react-router-dom';
 import { NotificationBell } from './NotificationBell';
 import { DashboardSwitcher } from './DashboardSwitcher';
+import { isBaseAdmin } from '../lib/permissions';
+import { AdminOnly } from './AdminOnly';
 
 interface DashboardProps {
   onLogout: () => void;
@@ -479,7 +481,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             <span className={activeView === 'refunds' ? 'text-black' : 'text-gray-700'}>Payments</span>
           </div>
           
-          {user?.username !== 'Test' && (
+          {/* Settings that configure the whole clinic stay with real administrators.
+              A therapist granted the admin dashboard gets the day-to-day panel, not
+              the roster, therapies, pricing or organisation setup behind it — the
+              check is on role, so no grant can open it. Hiding these is only
+              tidiness; requireBaseAdmin on the backend is the actual control. */}
+          {user?.username !== 'Test' && isBaseAdmin(user) && (
             <>
               <div
                 className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
@@ -596,8 +603,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
 
         <div className="flex-1 overflow-auto relative p-0 m-0">
         <Routes>
-          <Route path="userSettings/*" element={<UserSettingsPage user={user} />} />
-          <Route path="orgSettings/*" element={<OrgSettingsPage user={user} />} />
+          {/* Guarded as well as hidden: the URLs still resolve for anyone who
+              follows a bookmark, and an unexplained wall of 403s is a worse
+              answer than saying why. */}
+          <Route path="userSettings/*" element={<AdminOnly user={user}><UserSettingsPage user={user} /></AdminOnly>} />
+          <Route path="orgSettings/*" element={<AdminOnly user={user}><OrgSettingsPage user={user} /></AdminOnly>} />
           {/* Retired combined Settings shell — kept as redirects so old bookmarks
               and the Google OAuth return URL still resolve. */}
           <Route path="appSettings/*" element={<SettingsPage />} />

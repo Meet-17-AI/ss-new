@@ -23,6 +23,22 @@ export const canDisconnectCalendar = (user: any): boolean =>
     (id: any) => id && CALENDAR_DISCONNECT_USERS.includes(String(id).toLowerCase())
   );
 
+/**
+ * Whether this account IS an administrator, as opposed to holding a granted
+ * admin dashboard.
+ *
+ * Settings that shape the whole clinic — the therapist roster, therapies,
+ * pricing, organisation configuration — stay with real admins. Lending someone
+ * the day-to-day dashboard is not the same as handing them the configuration
+ * behind it, so this reads the role, which no grant can change.
+ *
+ * Mirrors requireBaseAdmin on the backend. That one is the control.
+ */
+const BASE_ADMIN_ROLES = ['admin', 'superadmin', 'fluidadmin'];
+
+export const isBaseAdmin = (user: any): boolean =>
+  BASE_ADMIN_ROLES.includes(String(user?.role || '').toLowerCase());
+
 /* -------------------------------------------------------------------------- */
 /* Dashboard access                                                            */
 /* -------------------------------------------------------------------------- */
