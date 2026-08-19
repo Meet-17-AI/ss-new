@@ -13,10 +13,13 @@ export default defineConfig(({ mode }) => {
         port: 5173,
         host: '0.0.0.0',
         proxy: {
-          // Note: this prefix also covers /api/crm/todo and /api/crm-audit-logs,
-          // which used to be routed to a separate backend on :3003. That backend
-          // was a stale fork and is gone; panel-backend serves both, as it already
-          // does in production.
+          // The panel's own API only. The CRM is a SEPARATE application with its
+          // own backend (crm-backend, :3003 locally) and its own frontend on
+          // :3000 — the switcher leaves this origin to reach it.
+          //
+          // A previous version of this comment claimed the :3003 backend "was a
+          // stale fork and is gone". It is not gone; it is the live production
+          // CRM at crm.backend.srv1169280.hstgr.cloud.
           '/api': {
             target: apiTarget,
             changeOrigin: true,

@@ -16,7 +16,7 @@ import { PublicDirectory } from './components/PublicDirectory';
 import { PublicBooking } from './components/PublicBooking';
 import { FreeConsultation } from './components/FreeConsultation';
 import { FluidAdminLayout } from './components/FluidAdminLayout';
-import CRMApp from './src/crm/App';
+import { CrmRedirect } from './components/CrmRedirect';
 import { Monitor } from 'lucide-react';
 
 if (window.location.hostname.includes('safestories-dashboard.vercel.app')) {
@@ -25,7 +25,7 @@ if (window.location.hostname.includes('safestories-dashboard.vercel.app')) {
 
 import { useAuth } from './context/AuthContext';
 import { ProtectedRoute } from './context/ProtectedRoute';
-import { defaultPathForScopes } from './lib/permissions';
+import { defaultPathForScopes, SCOPE_PATH } from './lib/permissions';
 
 const LoginPage = () => {
   const { login, isLoggedIn, user, scopes, scopesLoading } = useAuth();
@@ -137,11 +137,15 @@ const App: React.FC = () => {
           </ProtectedRoute>
         }
       />
+      {/* The CRM is a separate application now. This route no longer renders one
+          — it hands the session over to the real CRM and leaves. Kept rather than
+          deleted because /crm is a sales account's default destination, and
+          without it they would bounce between here and "/" forever. */}
       <Route
         path="/crm/*"
         element={
           <ProtectedRoute requiredScope="crm">
-            <CRMApp user={user} onLogout={logout} />
+            <CrmRedirect />
           </ProtectedRoute>
         }
       />
@@ -170,8 +174,12 @@ const App: React.FC = () => {
 };
 
 const RootRedirect = () => {
-  const { user, scopes } = useAuth();
-  return <Navigate to={defaultPathForScopes(scopes, user?.role)} replace />;
+  const { user, scopes, handoffScope } = useAuth();
+  // A handoff names the dashboard that was actually asked for. The default is
+  // "first scope you hold", which sends anyone with admin access to /admin — so
+  // choosing "Therapist dashboard" in the CRM used to land on the wrong one.
+  const dest = handoffScope ? SCOPE_PATH[handoffScope] : defaultPathForScopes(scopes, user?.role);
+  return <Navigate to={dest} replace />;
 };
 
 // Wrappers to extract wildcards and pass them as props for backward compatibility

@@ -162,6 +162,27 @@ const app = express();
     console.log('[DB Migration Error]', err.message);
   }
 
+  // One-time tickets for moving a signed-in session to the CRM, which runs on a
+  // different origin and therefore cannot see this one's localStorage.
+  //
+  // The row IS the single-use guarantee: redeeming deletes it atomically, so a
+  // ticket that leaks from browser history or a referrer header is already spent.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS auth_handoff_tokens (
+        jti        TEXT PRIMARY KEY,
+        user_id    INTEGER NOT NULL,
+        scope      TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS auth_handoff_expires_idx ON auth_handoff_tokens (expires_at)`);
+    console.log('[DB] auth_handoff_tokens table ensured.');
+  } catch (err: any) {
+    console.log('[DB Migration Error]', err.message);
+  }
+
   // Give the Fluid admin a real users row.
   //
   // It used to be a hardcoded username/password pair compared in the login
@@ -307,6 +328,9 @@ const CANCELLATION_STATUS_LABEL: Record<string, string> = {
 const PUBLIC_API_ROUTES: { methods: string[]; pattern: RegExp }[] = [
   // --- authentication entry points (these mint tokens) ---
   { methods: ['POST'], pattern: /^\/api\/login$/ },
+  // Exchanges a one-time ticket from the CRM for a session here. Necessarily
+  // public: the caller has no session on this origin yet — that is the point.
+  { methods: ['POST'], pattern: /^\/api\/handoff\/redeem$/ },
   { methods: ['POST'], pattern: /^\/api\/verify-therapist-otp$/ },
   { methods: ['POST'], pattern: /^\/api\/forgot-password\/(send-otp|verify-otp|reset)$/ },
 
@@ -1220,6 +1244,111 @@ app.put('/api/admin/access-grants/:userId', requireAccessAdmin, async (req: any,
     res.status(500).json({ error: 'Could not update access' });
   } finally {
     client.release();
+  }
+});
+
+/**
+ * Hand this session to the CRM, which lives on another origin.
+ *
+ * Returns a ticket, not a session. The CRM exchanges it for its own token at
+ * /api/handoff/redeem; this one is single-use, expires in 60 seconds, and says
+ * nothing except "the panel vouched for user N a moment ago".
+ *
+ * Why a ticket rather than forwarding the session token itself: the value ends up
+ * in a URL, and URLs land in browser history, referrer headers and server logs. A
+ * 24h session token there would be a lasting credential; this is spent the moment
+ * it is used and dead a minute later regardless.
+ *
+ * The scope is checked HERE as well as by the CRM. Issuing a ticket to someone
+ * without CRM access would be handing out something the other service then has to
+ * be trusted to refuse.
+ */
+app.post('/api/handoff', async (req: any, res) => {
+  try {
+    const target = String(req.body?.target || '');
+    if (!isScope(target)) return res.status(400).json({ error: 'Unknown target' });
+
+    if (!(await loadScopes(req.user)).has(target as Scope)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
+    const jti = crypto.randomBytes(24).toString('base64url');
+    const ttlSeconds = 60;
+    await pool.query(
+      `INSERT INTO auth_handoff_tokens (jti, user_id, scope, expires_at)
+       VALUES ($1, $2, $3, now() + ($4 || ' seconds')::interval)`,
+      [jti, req.user.id, target, String(ttlSeconds)]
+    );
+
+    // Signed as well as stored: the signature proves it came from here, the row
+    // proves it has not been used. Both are required.
+    const ticket = jwt.sign(
+      { purpose: 'handoff', jti, id: req.user.id, scope: target },
+      JWT_SECRET,
+      { expiresIn: ttlSeconds } as jwt.SignOptions
+    );
+
+    res.json({ ticket, expiresIn: ttlSeconds });
+  } catch (error: any) {
+    console.error('[handoff] issue failed:', error?.message || error);
+    res.status(500).json({ error: 'Could not start the handoff' });
+  }
+});
+
+/**
+ * Redeem a one-time ticket issued by the CRM and start a session here.
+ *
+ * The mirror of /api/handoff above. Switching has to work in both directions or
+ * it is a trapdoor — someone who moved to the CRM would have to sign in again to
+ * get back to the dashboard they came from.
+ *
+ * Three checks, all required: the signature (proves the CRM issued it, shared
+ * secret), the row (proves it has not been spent — the DELETE is atomic), and the
+ * scope re-read live, because access can be revoked between issue and redemption.
+ */
+app.post('/api/handoff/redeem', async (req: any, res) => {
+  try {
+    const ticket = String(req.body?.ticket || '');
+    if (!ticket) return res.status(400).json({ error: 'Missing ticket' });
+
+    let claims: any;
+    try {
+      claims = jwt.verify(ticket, JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: 'Invalid or expired handoff' });
+    }
+    // A normal session token must not work here, or this public route becomes a
+    // way to mint fresh sessions from a stolen one indefinitely.
+    if (claims?.purpose !== 'handoff' || !claims?.jti) {
+      return res.status(401).json({ error: 'Invalid or expired handoff' });
+    }
+
+    const spent = await pool.query(
+      `DELETE FROM auth_handoff_tokens
+        WHERE jti = $1 AND expires_at > now()
+        RETURNING user_id, scope`,
+      [claims.jti]
+    );
+    if (spent.rows.length === 0) {
+      return res.status(401).json({ error: 'This handoff link has already been used or has expired.' });
+    }
+
+    const wanted = spent.rows[0].scope;
+    const { rows } = await pool.query(
+      'SELECT * FROM users WHERE id = $1 AND (is_active IS DISTINCT FROM false)',
+      [spent.rows[0].user_id]
+    );
+    if (rows.length === 0) return res.status(401).json({ error: 'Account is unavailable' });
+
+    const user = rows[0];
+    if (!(await loadScopes(user)).has(wanted)) {
+      return res.status(403).json({ error: 'This account no longer has that access.' });
+    }
+
+    res.json({ success: true, user: toSafeUser(user), token: issueToken(user), scope: wanted });
+  } catch (error: any) {
+    console.error('[handoff] redeem failed:', error?.message || error);
+    res.status(500).json({ error: 'Could not complete the handoff' });
   }
 });
 

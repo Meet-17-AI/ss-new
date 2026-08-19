@@ -20,6 +20,8 @@ interface AuthContextType {
   scopesLoading: boolean;
   /** Whether the Roles tab is worth showing. The server decides the real thing. */
   canManageAccess: boolean;
+  /** Dashboard a CRM handoff asked for, so redirects honour it over the default. */
+  handoffScope: Scope | null;
   refreshAccess: () => Promise<void>;
 }
 
@@ -45,6 +47,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [scopesLoading, setScopesLoading] = useState(true);
   const [canManageAccess, setCanManageAccess] = useState(false);
 
+  /**
+   * The dashboard a CRM handoff asked for, if we arrived by one.
+   *
+   * Needed because the default destination is "the first scope you hold", which
+   * is the admin dashboard for anyone who has it — so without this, a user who
+   * chose "Therapist dashboard" in the CRM landed on /admin instead. The CRM now
+   * also redirects straight to the right path; this is the backstop for a ticket
+   * that arrives at the root for any other reason.
+   */
+  const [handoffScope, setHandoffScope] = useState<Scope | null>(null);
+
   const refreshAccess = useCallback(async () => {
     if (!getToken()) {
       setScopes([]);
@@ -69,33 +82,80 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  useEffect(() => {
-    // Load session on initial mount
+  /**
+   * A one-time ticket in the URL fragment means we arrived from the CRM's
+   * switcher. Exchange it for a session before deciding anything else, so the
+   * login page is never shown to someone who is already signed in.
+   *
+   * Runs BEFORE the stored-session check below and short-circuits it: a ticket is
+   * a deliberate, fresher instruction than whatever happens to be in storage.
+   */
+  const redeemHandoff = async (): Promise<boolean> => {
+    const m = window.location.hash.match(/(?:^|[#&])t=([^&]+)/);
+    if (!m) return false;
+    const ticket = decodeURIComponent(m[1]);
+    // Out of the address bar before the request, so a reload cannot replay it —
+    // though the server would refuse anyway.
+    window.history.replaceState({}, '', window.location.pathname + window.location.search);
+
     try {
-      const raw = localStorage.getItem('user');
-      const loggedInStr = localStorage.getItem('isLoggedIn');
-      if (raw && loggedInStr === 'true') {
-        const parsed = JSON.parse(raw);
-        // Clear stale sessions with old sales_role field just in case
-        if ('sales_role' in parsed) {
-          localStorage.clear();
-        } else if (!getToken()) {
-          // Session predates token auth (or the token was cleared after a 401).
-          // Without one every API call 401s, so force a fresh login instead of
-          // rendering a shell that cannot load any data.
-          localStorage.removeItem('user');
-          localStorage.removeItem('isLoggedIn');
-        } else {
-          setUser(parsed);
-          setIsLoggedIn(true);
-        }
-      }
-    } catch {
-      localStorage.removeItem('user');
-      localStorage.removeItem('isLoggedIn');
-    } finally {
-      setLoading(false);
+      const res = await fetch('/api/handoff/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.token) throw new Error(data?.error || `HTTP ${res.status}`);
+
+      setToken(data.token);
+      setUser(data.user);
+      setIsLoggedIn(true);
+      if (data.scope) setHandoffScope(data.scope as Scope);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      localStorage.setItem('isLoggedIn', 'true');
+      return true;
+    } catch (err) {
+      console.error('[handoff] could not sign in from the CRM', err);
+      return false;
     }
+  };
+
+  useEffect(() => {
+    (async () => {
+      // A ticket from the CRM wins over stored state — it is a deliberate,
+      // fresher instruction than whatever is on disk.
+      if (await redeemHandoff()) {
+        setLoading(false);
+        return;
+      }
+
+      // Load session on initial mount
+      try {
+        const raw = localStorage.getItem('user');
+        const loggedInStr = localStorage.getItem('isLoggedIn');
+        if (raw && loggedInStr === 'true') {
+          const parsed = JSON.parse(raw);
+          // Clear stale sessions with old sales_role field just in case
+          if ('sales_role' in parsed) {
+            localStorage.clear();
+          } else if (!getToken()) {
+            // Session predates token auth (or the token was cleared after a 401).
+            // Without one every API call 401s, so force a fresh login instead of
+            // rendering a shell that cannot load any data.
+            localStorage.removeItem('user');
+            localStorage.removeItem('isLoggedIn');
+          } else {
+            setUser(parsed);
+            setIsLoggedIn(true);
+          }
+        }
+      } catch {
+        localStorage.removeItem('user');
+        localStorage.removeItem('isLoggedIn');
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
   // Runs on mount and on every sign-in/sign-out, so a session restored from
@@ -126,6 +186,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoggedIn(false);
     setScopes([]);
     setCanManageAccess(false);
+    setHandoffScope(null);
     localStorage.removeItem('user');
     localStorage.removeItem('isLoggedIn');
   };
@@ -134,7 +195,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider
       value={{
         user, isLoggedIn, login, logout, loading,
-        scopes, scopesLoading, canManageAccess, refreshAccess,
+        scopes, scopesLoading, canManageAccess, handoffScope, refreshAccess,
       }}
     >
       {children}

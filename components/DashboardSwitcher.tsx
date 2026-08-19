@@ -2,7 +2,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { LayoutGrid, Check, ChevronDown } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { SCOPE_LABEL, SCOPE_PATH, sortScopes, type Scope } from '../lib/permissions';
+import toast from 'react-hot-toast';
+import {
+  SCOPE_LABEL, SCOPE_PATH, sortScopes, isExternalScope, handoffToCrm, type Scope,
+} from '../lib/permissions';
 
 /**
  * Moves between the dashboards a user holds.
@@ -43,9 +46,29 @@ export const DashboardSwitcher: React.FC<{ className?: string }> = ({ className 
 
   const current = held.find((s) => location.pathname.startsWith(SCOPE_PATH[s]));
 
-  const go = (scope: Scope) => {
+  const [leaving, setLeaving] = useState(false);
+
+  const go = async (scope: Scope) => {
     setOpen(false);
-    if (scope !== current) navigate(SCOPE_PATH[scope]);
+    if (scope === current) return;
+
+    // The CRM is a different application on a different origin. It cannot read
+    // this one's token, so the session is carried across by a one-time ticket
+    // rather than by navigating and hoping.
+    if (isExternalScope(scope)) {
+      setLeaving(true);
+      try {
+        await handoffToCrm();
+        // Deliberately no setLeaving(false): the page is navigating away, and
+        // clearing it would flash the button back for a moment first.
+      } catch (e: any) {
+        setLeaving(false);
+        toast.error(e?.message || 'Could not open the CRM.');
+      }
+      return;
+    }
+
+    navigate(SCOPE_PATH[scope]);
   };
 
   return (
@@ -54,11 +77,15 @@ export const DashboardSwitcher: React.FC<{ className?: string }> = ({ className 
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
+        disabled={leaving}
         className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2
-                   text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                   text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50
+                   disabled:cursor-wait disabled:opacity-60"
       >
         <LayoutGrid size={16} className="text-teal-700" />
-        <span className="hidden sm:inline">{current ? SCOPE_LABEL[current] : 'Switch dashboard'}</span>
+        <span className="hidden sm:inline">
+          {leaving ? 'Opening CRM…' : current ? SCOPE_LABEL[current] : 'Switch dashboard'}
+        </span>
         <ChevronDown size={14} className="text-gray-400" />
       </button>
 

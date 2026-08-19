@@ -49,6 +49,43 @@ export const SCOPE_PATH: Record<Scope, string> = {
   crm: '/crm',
 };
 
+/**
+ * The CRM runs as a SEPARATE application on its own origin, so reaching it is a
+ * page load rather than a route change — and its origin cannot read this one's
+ * stored token. See handoffToCrm below for how the session travels.
+ *
+ * Empty means "not configured": the switcher then falls back to the panel's own
+ * embedded /crm, which is what existed before the split.
+ */
+export const CRM_APP_URL: string =
+  (import.meta as any).env?.VITE_CRM_URL || 'http://localhost:3000';
+
+/** Scopes served by a different origin, so callers know a link will not do. */
+export const isExternalScope = (scope: Scope): boolean => scope === 'crm' && Boolean(CRM_APP_URL);
+
+/**
+ * Move the signed-in session to the CRM.
+ *
+ * Asks this backend for a one-time ticket, then navigates with it in the URL
+ * FRAGMENT — fragments are never sent to a server, so it stays out of access logs
+ * and Referer headers. The CRM exchanges it for its own session.
+ *
+ * The ticket is not the session token. It is single-use, expires in 60 seconds,
+ * and is useless once redeemed, so a copy left in browser history grants nothing.
+ */
+export async function handoffToCrm(): Promise<void> {
+  const res = await fetch('/api/handoff', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target: 'crm' }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.ticket) {
+    throw new Error(data?.error || `Could not open the CRM (HTTP ${res.status})`);
+  }
+  window.location.href = `${CRM_APP_URL.replace(/\/$/, '')}/#t=${encodeURIComponent(data.ticket)}`;
+}
+
 /** Order used everywhere a set of scopes is shown, so lists never reshuffle. */
 export const SCOPE_ORDER: Scope[] = ['admin_dashboard', 'therapist_dashboard', 'crm'];
 
