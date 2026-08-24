@@ -23,47 +23,56 @@ export const canDisconnectCalendar = (user: any): boolean =>
     (id: any) => id && CALENDAR_DISCONNECT_USERS.includes(String(id).toLowerCase())
   );
 
-/**
- * Whether this account IS an administrator, as opposed to holding a granted
- * admin dashboard.
- *
- * Settings that shape the whole clinic — the therapist roster, therapies,
- * pricing, organisation configuration — stay with real admins. Lending someone
- * the day-to-day dashboard is not the same as handing them the configuration
- * behind it, so this reads the role, which no grant can change.
- *
- * Mirrors requireBaseAdmin on the backend. That one is the control.
- */
-const BASE_ADMIN_ROLES = ['admin', 'superadmin', 'fluidadmin'];
-
-export const isBaseAdmin = (user: any): boolean =>
-  BASE_ADMIN_ROLES.includes(String(user?.role || '').toLowerCase());
-
 /* -------------------------------------------------------------------------- */
 /* Dashboard access                                                            */
 /* -------------------------------------------------------------------------- */
 
 /**
- * A scope is a dashboard someone may open. It is NOT a role: a therapist granted
+ * A scope is something someone may open. It is NOT a role: a therapist granted
  * admin access keeps `role: 'therapist'` and gains `admin_dashboard`, because
  * swapping the role would mean issuing a token that lies about who is holding it.
  *
  * Mirrors panel-backend/src/lib/access.ts. That file is the control.
  */
-export type Scope = 'admin_dashboard' | 'therapist_dashboard' | 'crm';
+export type Scope = 'admin_dashboard' | 'therapist_dashboard' | 'crm' | 'superadmin';
+
+/**
+ * The scopes that name a place to stand. `superadmin` is not one of them — it
+ * elevates the admin dashboard rather than being a dashboard, so it has no route,
+ * never shows up in the switcher, and can never be the target of a redirect.
+ */
+export type DashboardScope = Exclude<Scope, 'superadmin'>;
 
 export const SCOPE_LABEL: Record<Scope, string> = {
   admin_dashboard: 'Admin dashboard',
   therapist_dashboard: 'Therapist dashboard',
   crm: 'CRM',
+  superadmin: 'Superadmin',
 };
 
 /** Where each dashboard lives, so the switcher and the redirects agree. */
-export const SCOPE_PATH: Record<Scope, string> = {
+export const SCOPE_PATH: Record<DashboardScope, string> = {
   admin_dashboard: '/admin',
   therapist_dashboard: '/therapist',
   crm: '/crm',
 };
+
+export const isDashboardScope = (scope: Scope): scope is DashboardScope =>
+  scope !== 'superadmin';
+
+/**
+ * Whether this account may reach the clinic configuration — the therapist roster,
+ * therapies, pricing, organisation setup. The admin dashboard itself runs as far
+ * as the payments page; everything past it asks for this.
+ *
+ * Reads the SCOPE rather than the role, so the Roles tab can hand it to an
+ * administrator without a database edit, and take it back the same way.
+ *
+ * Mirrors requireSuperAdmin on the backend. That one is the control — this only
+ * decides whether a control is worth showing.
+ */
+export const isSuperAdmin = (scopes: Scope[] | undefined | null): boolean =>
+  Array.isArray(scopes) && scopes.includes('superadmin');
 
 /**
  * The CRM runs as a SEPARATE application on its own origin, so reaching it is a
@@ -125,11 +134,30 @@ export async function handoffToCrm(): Promise<void> {
   window.location.href = `${CRM_APP_URL.replace(/\/$/, '')}/#t=${encodeURIComponent(data.ticket)}`;
 }
 
-/** Order used everywhere a set of scopes is shown, so lists never reshuffle. */
-export const SCOPE_ORDER: Scope[] = ['admin_dashboard', 'therapist_dashboard', 'crm'];
+/**
+ * Order the switcher lists dashboards in, and the order redirects prefer them.
+ * Dashboards only — see DashboardScope.
+ */
+export const SCOPE_ORDER: DashboardScope[] = ['admin_dashboard', 'therapist_dashboard', 'crm'];
 
-export const sortScopes = (scopes: Scope[]): Scope[] =>
+export const sortScopes = (scopes: Scope[]): DashboardScope[] =>
   SCOPE_ORDER.filter((s) => scopes.includes(s));
+
+/**
+ * Column order for the Roles tab, which reads as a ladder rather than as a set of
+ * places to go: the dashboard a clinician lives in, then the tools, then the two
+ * levels of administration.
+ *
+ * Deliberately not SCOPE_ORDER. That one decides where a redirect sends someone,
+ * and reordering it to suit a table would quietly change which dashboard a user
+ * holding several lands on.
+ */
+export const SCOPE_COLUMN_ORDER: Scope[] = [
+  'therapist_dashboard',
+  'crm',
+  'admin_dashboard',
+  'superadmin',
+];
 
 /**
  * Where to land someone who has not asked for a particular page.

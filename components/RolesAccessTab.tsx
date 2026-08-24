@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, ShieldCheck, Search, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { SCOPE_LABEL, SCOPE_ORDER, type Scope } from '../lib/permissions';
+import { SCOPE_LABEL, SCOPE_COLUMN_ORDER, type Scope } from '../lib/permissions';
 
 interface AccessUser {
   id: number;
@@ -11,8 +11,8 @@ interface AccessUser {
   email: string | null;
   role: string;
   isActive: boolean;
-  /** The dashboard the role comes with. Always held, never removable. */
-  baseScope: Scope | null;
+  /** What the role comes with. Always held, never removable. */
+  baseScopes: Scope[];
   scopes: Scope[];
   /** What this account is eligible to hold at all — see the note on the checkbox. */
   grantable: Scope[];
@@ -23,6 +23,14 @@ const ROLE_LABEL: Record<string, string> = {
   superadmin: 'Super admin',
   therapist: 'Therapist',
   sales: 'Sales',
+};
+
+/** Colour the tier so the ladder is readable at a glance, not just sorted. */
+const ROLE_STYLE: Record<string, string> = {
+  therapist: 'bg-sky-50 text-sky-700 ring-sky-200',
+  sales: 'bg-violet-50 text-violet-700 ring-violet-200',
+  admin: 'bg-amber-50 text-amber-700 ring-amber-200',
+  superadmin: 'bg-teal-50 text-teal-800 ring-teal-300',
 };
 
 /**
@@ -151,9 +159,11 @@ export const RolesAccessTab: React.FC = () => {
         <div>
           <h2 className="text-lg font-semibold text-gray-900">Dashboard access</h2>
           <p className="mt-1 max-w-2xl text-sm text-gray-500">
-            Tick a dashboard to let someone open it. The one that comes with their role is
-            always on and cannot be removed. Changes apply the next time they load a page —
-            no re-login needed.
+            Tick a dashboard to let someone open it. Whatever comes with their role is always
+            on and cannot be removed. <span className="font-medium text-gray-600">Superadmin</span> opens
+            the clinic configuration past the payments page — user settings, organisation
+            settings, pricing and the therapist roster. Changes apply the next time they load
+            a page — no re-login needed.
           </p>
         </div>
         <div className="relative">
@@ -174,7 +184,7 @@ export const RolesAccessTab: React.FC = () => {
             <tr>
               <th className="px-4 py-3 font-semibold">User</th>
               <th className="px-4 py-3 font-semibold">Role</th>
-              {SCOPE_ORDER.map((scope) => (
+              {SCOPE_COLUMN_ORDER.map((scope) => (
                 <th key={scope} className="px-4 py-3 text-center font-semibold">
                   {SCOPE_LABEL[scope]}
                 </th>
@@ -194,13 +204,17 @@ export const RolesAccessTab: React.FC = () => {
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-gray-600">
-                  {ROLE_LABEL[String(u.role).toLowerCase()] || u.role}
+                <td className="px-4 py-3">
+                  <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold
+                                    ring-1 ring-inset ${ROLE_STYLE[String(u.role).toLowerCase()]
+                                      || 'bg-gray-50 text-gray-600 ring-gray-200'}`}>
+                    {ROLE_LABEL[String(u.role).toLowerCase()] || u.role}
+                  </span>
                 </td>
 
-                {SCOPE_ORDER.map((scope) => {
+                {SCOPE_COLUMN_ORDER.map((scope) => {
                   const held = u.scopes.includes(scope);
-                  const isBase = u.baseScope === scope;
+                  const isBase = u.baseScopes.includes(scope);
                   // Not eligible at all — an admin has no therapist profile, so a
                   // therapist dashboard would have nothing to scope to. Shown as a
                   // dash rather than a disabled box, which would read as "off".
@@ -209,7 +223,14 @@ export const RolesAccessTab: React.FC = () => {
                   if (!eligible && !isBase) {
                     return (
                       <td key={scope} className="px-4 py-3 text-center text-gray-300"
-                        title={`Not available for a ${ROLE_LABEL[String(u.role).toLowerCase()] || u.role}`}>
+                        title={
+                          scope === 'superadmin'
+                            // Not a tidiness rule. Super admin carries every client's
+                            // clinical record along with the clinic configuration, so
+                            // it is not something a checkbox hands to a clinician.
+                            ? 'Super admin is only available to administrator accounts'
+                            : `Not available for a ${ROLE_LABEL[String(u.role).toLowerCase()] || u.role}`
+                        }>
                         —
                       </td>
                     );
@@ -220,8 +241,9 @@ export const RolesAccessTab: React.FC = () => {
                       <input
                         type="checkbox"
                         checked={held}
-                        // The base dashboard is locked on. Allowing it off would
-                        // let a save leave someone with nowhere to land.
+                        // What the role comes with is locked on. Allowing it off
+                        // would let a save leave someone with nowhere to land, or
+                        // strip a superadmin of the tab they are standing in.
                         disabled={isBase || savingId === u.id}
                         onChange={(e) => save(u, scope, e.target.checked)}
                         title={isBase ? 'Comes with the role — always on' : undefined}
@@ -236,7 +258,7 @@ export const RolesAccessTab: React.FC = () => {
 
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={2 + SCOPE_ORDER.length} className="px-4 py-10 text-center text-gray-500">
+                <td colSpan={2 + SCOPE_COLUMN_ORDER.length} className="px-4 py-10 text-center text-gray-500">
                   No users match “{query}”.
                 </td>
               </tr>

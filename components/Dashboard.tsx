@@ -24,7 +24,8 @@ import { OrgSettingsPage } from './OrgSettingsPage';
 import { Routes, Route, useNavigate, useLocation, Navigate, useParams } from 'react-router-dom';
 import { NotificationBell } from './NotificationBell';
 import { DashboardSwitcher } from './DashboardSwitcher';
-import { isBaseAdmin } from '../lib/permissions';
+import { isSuperAdmin } from '../lib/permissions';
+import { useAuth } from '../context/AuthContext';
 import { AdminOnly } from './AdminOnly';
 
 interface DashboardProps {
@@ -34,6 +35,7 @@ interface DashboardProps {
 
 export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
   const { socket } = useSocket();
+  const { scopes } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const searchParams = new URLSearchParams(location.search);
@@ -481,12 +483,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             <span className={activeView === 'refunds' ? 'text-black' : 'text-gray-700'}>Payments</span>
           </div>
           
-          {/* Settings that configure the whole clinic stay with real administrators.
-              A therapist granted the admin dashboard gets the day-to-day panel, not
-              the roster, therapies, pricing or organisation setup behind it — the
-              check is on role, so no grant can open it. Hiding these is only
-              tidiness; requireBaseAdmin on the backend is the actual control. */}
-          {user?.username !== 'Test' && isBaseAdmin(user) && (
+          {/* The admin dashboard runs as far as Payments. Everything below this
+              line configures the whole clinic — the roster, therapies, pricing,
+              organisation setup — and belongs to super admins. Hiding these is
+              only tidiness; requireSuperAdmin on the backend is the control. */}
+          {user?.username !== 'Test' && isSuperAdmin(scopes) && (
             <>
               <div
                 className="rounded-lg px-4 py-3 mb-2 flex items-center gap-3 cursor-pointer hover:bg-gray-100"
@@ -654,7 +655,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             loading ? <Loader /> : (
               <div className="p-8">
                 {/* Header */}
-                <div className="flex justify-between items-start mb-8">
+                <div className="flex justify-between items-start mb-4">
                   <div>
                     <h1 className="text-3xl font-bold mb-1">Dashboard</h1>
                   </div>

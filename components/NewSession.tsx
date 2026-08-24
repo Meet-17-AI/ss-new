@@ -4,6 +4,7 @@ import {
   Mail, Loader2, CheckCircle2, AlertTriangle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useSearchParams } from 'react-router-dom';
 import { InlineCalendar } from './InlineCalendar';
 
 interface Props {
@@ -34,6 +35,25 @@ const COUNTRY_CODES = [
   { code: '+61', country: 'Australia' },
   { code: '+971', country: 'UAE' },
 ];
+
+/**
+ * Split a stored number into the dialling code and the local part.
+ *
+ * A client sent here from their profile arrives as `?phone=…`. The number IS the
+ * way into this form — typing one looks the client up and fills in the rest — so
+ * pre-filling it is the same thing as selecting the client, and needs no second
+ * path to keep in step with the lookup.
+ *
+ * An unrecognised prefix falls back to +91 rather than inventing an option the
+ * dropdown does not offer, which would leave the select showing nothing.
+ */
+const splitPhone = (raw?: string): { code: string; local: string } => {
+  const digits = (raw || '').replace(/\D/g, '');
+  const local = digits.slice(-10);
+  const prefix = digits.slice(0, -10);
+  const known = COUNTRY_CODES.some(c => c.code === `+${prefix}`);
+  return { code: prefix && known ? `+${prefix}` : '+91', local };
+};
 
 const STEPS: { n: Step; label: string }[] = [
   { n: 1, label: 'Client' },
@@ -84,8 +104,11 @@ export const NewSession: React.FC<Props> = ({ onBack }) => {
   const [step, setStep] = useState<Step>(1);
 
   // ── identity ──
-  const [countryCode, setCountryCode] = useState('+91');
-  const [phone, setPhone] = useState('');
+  // Read once, on mount. A later change to the query string should not reach in
+  // and rewrite a number the user is part-way through typing.
+  const [searchParams] = useSearchParams();
+  const [countryCode, setCountryCode] = useState(() => splitPhone(searchParams.get('phone') || '').code);
+  const [phone, setPhone] = useState(() => splitPhone(searchParams.get('phone') || '').local);
   const [lookup, setLookup] = useState<Lookup>('idle');
   const [identified, setIdentified] = useState(false);
   const [isReturning, setIsReturning] = useState(false);
