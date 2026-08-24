@@ -1,3 +1,41 @@
+/**
+ * The true session START instant (ms since epoch), derived from
+ * booking_invitee_time.
+ *
+ * WHY NOT booking_start_at: that column is stored inconsistently across this
+ * table — some rows hold a real UTC instant, others hold IST wall-clock text —
+ * so comparing it against anything gives an answer that is right for some
+ * bookings and silently 5:30 out for others. booking_invitee_time carries its
+ * own zone marker, which convertToIST() normalises into a single IST form that
+ * can be parsed unambiguously.
+ *
+ * Lives here rather than beside its callers because a second implementation of
+ * this parse is exactly how the inconsistency above got started. Anything that
+ * needs to know when a session actually happens should import THIS.
+ *
+ * Returns null when the string cannot be parsed — callers must treat that as
+ * "unknown", never as "now" or "zero".
+ */
+const MONTH_IDX: Record<string, number> = {
+  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+};
+
+export function getBookingStartMs(inviteeTime: string | null | undefined): number | null {
+  if (!inviteeTime) return null;
+  const istStr = convertToIST(inviteeTime);
+  const m = istStr.match(/(\w{3}) (\d{1,2}), (\d{4}) at (\d{1,2}):(\d{2}) ([AP]M)/);
+  if (!m) return null;
+  const [, mon, day, year, hh, mm, period] = m;
+  const monthIdx = MONTH_IDX[mon];
+  if (monthIdx === undefined) return null;
+  let hour = parseInt(hh, 10);
+  if (period === 'PM' && hour !== 12) hour += 12;
+  if (period === 'AM' && hour === 12) hour = 0;
+  // The parsed time is IST wall-clock; the real UTC instant is that minus 5:30.
+  return Date.UTC(parseInt(year, 10), monthIdx, parseInt(day, 10), hour, parseInt(mm, 10)) - 330 * 60000;
+}
+
 export const convertToIST = (timeStr: string): string => {
   if (!timeStr) return timeStr;
   

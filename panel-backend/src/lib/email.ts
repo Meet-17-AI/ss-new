@@ -811,6 +811,104 @@ export async function sendClientBookingCancellationEmail(
 }
 
 /**
+ * Tell a client their therapist has changed.
+ *
+ * WHY THIS EXISTS: a transfer changes more from the client's side than either a
+ * cancellation or a reschedule — their therapist, often their session time, and
+ * ALWAYS their meeting link, because a calendar event cannot be moved between
+ * Google accounts and has to be re-created. Both of those flows already write to
+ * the client; a transfer used to say nothing at all, leaving them to arrive at a
+ * dead Meet room expecting someone else.
+ *
+ * The new joining link is included per session for exactly that reason. A
+ * session whose link could not be regenerated is listed without one rather than
+ * with the stale one, since a link that opens an empty room is worse than a line
+ * asking them to check with us.
+ */
+export async function sendClientTherapistTransferEmail(
+  clientEmail: string,
+  details: {
+    clientName: string;
+    newTherapistName: string;
+    sessions: { sessionName: string; when: string; joiningLink?: string | null }[];
+  }
+): Promise<void> {
+  try {
+    const sessionRows = details.sessions.length
+      ? details.sessions.map(s => `
+        <div class="session">
+          <div class="detail-item"><span class="label">Session:</span><span class="value">${s.sessionName}</span></div>
+          <div class="detail-item"><span class="label">Time:</span><span class="value">${s.when}</span></div>
+          ${s.joiningLink
+            ? `<div class="detail-item"><span class="label">Join:</span><span class="value"><a href="${s.joiningLink}" style="color:#1e6d63;">${s.joiningLink}</a></span></div>`
+            : `<div class="detail-item"><span class="label">Join:</span><span class="value">We'll send your new joining link shortly.</span></div>`}
+        </div>`).join('')
+      : '';
+
+    const sessionBlock = sessionRows
+      ? `<p class="intro-text" style="padding:0;">Your upcoming session${details.sessions.length > 1 ? 's are' : ' is'} unchanged apart from who you'll be seeing:</p>
+         <div class="details-box">${sessionRows}</div>
+         <p class="intro-text" style="padding:0;font-size:13px;color:#777;">Please use the joining link above — any earlier link for these sessions will no longer work.</p>`
+      : `<p class="intro-text" style="padding:0;">You have no sessions booked at the moment. ${details.newTherapistName} will be your therapist when you next book.</p>`;
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background-color: #f9f9f9; }
+  .container { max-width: 480px; margin: 30px auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border: 1px solid #d1d1d1; }
+  .header { text-align: center; padding: 35px 25px 15px; }
+  .brand { font-size: 32px; font-weight: bold; margin: 0; letter-spacing: -0.5px; }
+  .safe { color: #f2c730; } .stories { color: #1e6d63; }
+  .kicker { font-size: 15px; color: #1e6d63; margin-top: 8px; font-weight: 600; text-transform: uppercase; display: block; }
+  .intro-text { font-size: 15px; color: #555; margin-top: 15px; line-height: 1.5; padding: 0 25px; }
+  .content { padding: 0 30px 30px; }
+  .details-box { background-color: #f1f8f6; border-radius: 10px; padding: 20px; margin: 20px 0; border: 1px solid #cfe5df; }
+  .session { padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid #dcebe7; }
+  .session:last-child { padding-bottom: 0; margin-bottom: 0; border-bottom: 0; }
+  .detail-item { margin-bottom: 8px; font-size: 14px; display: flex; }
+  .label { font-weight: bold; color: #1e6d63; width: 70px; flex-shrink: 0; }
+  .value { color: #444; word-break: break-word; }
+  .footer { text-align: center; padding: 25px; background-color: #ffffff; border-top: 1px solid #f0f0f0; }
+  .slogan { font-style: italic; color: #1e6d63; margin: 0; font-size: 15px; font-weight: 500; }
+  .signature { margin-top: 5px; font-size: 14px; color: #888; }
+</style></head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="brand"><span class="safe">Safe</span><span class="stories">Stories</span></div>
+      <strong class="kicker">Your therapist has changed</strong>
+      <p class="intro-text">Hello <strong>${details.clientName}</strong>, you'll now be seeing <strong>${details.newTherapistName}</strong>.</p>
+    </div>
+    <div class="content">
+      ${sessionBlock}
+      <p class="intro-text" style="padding:0;">Your history and notes move with you, so ${details.newTherapistName} already has everything they need. If you'd like to talk about this change, just reply to this email.</p>
+    </div>
+    <div class="footer">
+      <p class="slogan">Always there for your mental health.</p>
+      <p class="signature"><strong><br />Team SafeStories</strong><br />410, 4th Floor, Marvel Vista Business Centre,<br /> Near Gera Junction, Lullanagar, <br />Pune, Maharashtra 411048</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    await sendEmailWithLogging(
+      {
+        from: 'SafeStories <therapy@safestories.in>',
+        to: clientEmail,
+        subject: `Your therapist at SafeStories is now ${details.newTherapistName}`,
+        html: htmlContent,
+      },
+      `Client Therapist Transfer (${details.newTherapistName})`
+    );
+  } catch (error) {
+    console.error('❌ Error sending client therapist transfer email:', error);
+    throw error;
+  }
+}
+
+/**
  * Send the general booking link — the client picks their own therapy, therapist
  * and slot from the public directory.
  *

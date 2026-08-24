@@ -11,9 +11,9 @@ import pool from './lib/db';
 import { startSessionRemindersCron } from './automations/cron';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
-import { convertToIST } from './lib/timezone';
+import { convertToIST, getBookingStartMs } from './lib/timezone';
 import { uploadFile } from './lib/minio';
-import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendTherapistBookingConfirmationEmail, sendClientBookingCancellationEmail, sendPaymentLinkEmail, sendIssueReportEmail, sendBookingLinkEmail } from './lib/email';
+import { sendOTPEmail, sendPasswordResetOTP, sendClientBookingConfirmationEmail, sendAdminBookingConfirmationEmail, sendTherapistBookingConfirmationEmail, sendClientBookingCancellationEmail, sendPaymentLinkEmail, sendIssueReportEmail, sendBookingLinkEmail, sendClientTherapistTransferEmail } from './lib/email';
 import { sendSOSAdminWhatsapp, sendSOSAdminEmail, sendAiSensyMessage, sendSessionFeedbackRequest, sendPostSessionTherapistForm } from './automations/index';
 import { generateAdminOTP, verifyAdminOTP } from './otp';
 import { sendPublicOtp, verifyPublicOtp, otpKey } from './lib/publicOtp';
@@ -21,10 +21,10 @@ import { logWebhookApi } from './lib/webhookApiLogger.js';
 import { createNotification, notifyAllAdmins } from './lib/notifications';
 import { logActivity, categoryForRole, extractSafeMetadata } from './lib/activityLog';
 import {
-  Scope, ALL_SCOPES, isScope, baseScopeForRole, grantableScopes, loadScopes,
-  invalidateAccess, canManageAccess, requireScope, requireAccessAdmin, scopeGate,
+  Scope, ALL_SCOPES, isScope, baseScopeForRole, baseScopesForRole, grantableScopes, loadScopes,
+  invalidateAccess, mayManageAccess, isAccessAdminIdentity, requireScope, requireAccessAdmin, scopeGate,
   requireTherapistScope, mayAccessClientRecords, requireClientRecordAccess,
-  getShadowDenials, isBaseAdminRole, requireBaseAdmin,
+  getShadowDenials, isBaseAdminRole, requireSuperAdmin,
 } from './lib/access';
 import {
   resolvePrice, recordPriceLock, logPriceResolution, resolveServiceIdFromLabel,
@@ -35,6 +35,12 @@ import {
   debitWallet, getTransactions, listWallets, getTotalLiability, remapClientKey,
   consolidateWallet, InsufficientWalletBalance,
 } from './lib/wallet';
+import { loadAvailability, assessSlot, holdsASlot } from './lib/slots';
+import {
+  findClientBookings, buildPreview, assessMoney, sessionNameOf, formatInviteeTime,
+  findExistingTransfer, applyDecision, settleCancelledSession, balanceFor,
+  removeOldEvent, createNewEvent, wasActuallyPaid,
+} from './lib/transfer';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -151,11 +157,23 @@ const app = express();
     await pool.query(`
       CREATE TABLE IF NOT EXISTS user_access_grants (
         user_id     INTEGER     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        scope       TEXT        NOT NULL CHECK (scope IN ('admin_dashboard', 'therapist_dashboard', 'crm')),
+        scope       TEXT        NOT NULL CHECK (scope IN ('admin_dashboard', 'therapist_dashboard', 'crm', 'superadmin')),
         granted_by  INTEGER,
         granted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (user_id, scope)
       )
+    `);
+
+    // The table predates the superadmin tier, so a database created before it
+    // still carries a CHECK that rejects the scope. CREATE TABLE IF NOT EXISTS
+    // says nothing about a table that already exists, so the constraint is
+    // replaced explicitly. Rewriting it to the same definition is a no-op.
+    await pool.query(`
+      ALTER TABLE user_access_grants DROP CONSTRAINT IF EXISTS user_access_grants_scope_check
+    `);
+    await pool.query(`
+      ALTER TABLE user_access_grants ADD CONSTRAINT user_access_grants_scope_check
+        CHECK (scope IN ('admin_dashboard', 'therapist_dashboard', 'crm', 'superadmin'))
     `);
     console.log('[DB] user_access_grants table ensured.');
   } catch (err: any) {
@@ -1095,8 +1113,9 @@ app.get('/api/me/access', async (req: any, res) => {
     res.json({
       role: req.user?.role ?? null,
       baseScope: baseScopeForRole(req.user?.role),
+      baseScopes: baseScopesForRole(req.user?.role),
       scopes,
-      canManageAccess: canManageAccess(req.user),
+      canManageAccess: await mayManageAccess(req.user),
     });
   } catch (error: any) {
     console.error('[access] /api/me/access failed:', error?.message || error);
@@ -1123,12 +1142,22 @@ app.get('/api/admin/access-grants', requireAccessAdmin, async (req: any, res) =>
         LEFT JOIN user_access_grants g ON g.user_id = u.id
        WHERE LOWER(u.role) IN ('admin', 'superadmin', 'therapist', 'sales')
        GROUP BY u.id
-       ORDER BY LOWER(u.role), LOWER(COALESCE(u.full_name, u.name, u.username))
+       -- Grouped by tier, least privileged first, so the list reads as a ladder
+       -- and the few accounts that can change everything sit together at the
+       -- bottom instead of scattered through an alphabetical roster.
+       ORDER BY CASE LOWER(u.role)
+                  WHEN 'therapist'  THEN 1
+                  WHEN 'sales'      THEN 2
+                  WHEN 'admin'      THEN 3
+                  WHEN 'superadmin' THEN 4
+                  ELSE 5
+                END,
+                LOWER(COALESCE(u.full_name, u.name, u.username))
     `);
 
     res.json({
       users: rows.map((u: any) => {
-        const base = baseScopeForRole(u.role);
+        const base = baseScopesForRole(u.role);
         const granted: Scope[] = (u.granted || []).filter(isScope);
         return {
           id: u.id,
@@ -1137,11 +1166,11 @@ app.get('/api/admin/access-grants', requireAccessAdmin, async (req: any, res) =>
           email: u.email,
           role: u.role,
           isActive: u.is_active !== false,
-          // The base scope is reported as held so the checkbox renders ticked,
-          // and separately as non-grantable so it renders disabled. It is never
-          // stored, so it can never be saved away.
-          baseScope: base,
-          scopes: Array.from(new Set<Scope>([...(base ? [base] : []), ...granted])),
+          // Base scopes are reported as held so their checkboxes render ticked,
+          // and separately as base so they render disabled. They are never
+          // stored, so they can never be saved away.
+          baseScopes: base,
+          scopes: Array.from(new Set<Scope>([...base, ...granted])),
           grantable: grantableScopes(u),
         };
       }),
@@ -1177,7 +1206,7 @@ app.put('/api/admin/access-grants/:userId', requireAccessAdmin, async (req: any,
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
     const target = rows[0];
 
-    const base = baseScopeForRole(target.role);
+    const base = baseScopesForRole(target.role);
     const allowed = grantableScopes(target);
 
     // Validate against what this user could ever hold, not against what the form
@@ -1189,19 +1218,35 @@ app.put('/api/admin/access-grants/:userId', requireAccessAdmin, async (req: any,
           // Say why, because "not allowed" reads as a bug when the real reason is
           // that there is no therapist record to point the dashboard at.
           ? 'A therapist dashboard needs a therapist profile; this account has none.'
+          : rejected.includes('superadmin')
+          // The one grant this grid will not make. Say so, rather than letting it
+          // read as a bug in the checkbox.
+          ? 'Super admin is only available to administrator accounts. Change the role first.'
           : `Not available for a ${target.role}: ${rejected.join(', ')}`,
       });
     }
 
-    // The base scope is implicit. Storing it would let a later write delete it and
-    // lock the user out of the only dashboard they are guaranteed.
-    const toStore = Array.from(new Set(requested.filter((s) => s !== base))) as Scope[];
+    // Base scopes are implicit. Storing them would let a later write delete them
+    // and strip access the role is supposed to guarantee.
+    const toStore = Array.from(new Set(requested.filter((s) => !base.includes(s as Scope)))) as Scope[];
 
-    // An account that hands out access must not be able to take its own away —
-    // with the AI team as the only editor, that mistake has no path back except a
-    // database console.
-    if (canManageAccess(target) && !requested.includes('admin_dashboard')) {
-      return res.status(400).json({ error: 'This account cannot remove its own admin access.' });
+    // An account that hands out access must not be able to take its OWN away.
+    // Unticking the box that renders the tab is a mistake with no path back
+    // except a database console, so it is refused rather than confirmed.
+    //
+    // Scoped to the caller editing their own row. Applying it to any manager
+    // would make superadmin a one-way grant: the moment someone held it, nobody
+    // could take it back through the tab that gave it to them.
+    const isSelf = String(target.id) === String(req.user?.id);
+    if (isSelf && (await mayManageAccess(target))) {
+      if (!requested.includes('admin_dashboard')) {
+        return res.status(400).json({ error: 'This account cannot remove its own admin access.' });
+      }
+      // Superadmin is what opens this tab for everyone who is not on the named
+      // recovery list, so dropping it locks the account out of its own controls.
+      if (!isAccessAdminIdentity(target) && !requested.includes('superadmin')) {
+        return res.status(400).json({ error: 'This account cannot remove its own super admin access.' });
+      }
     }
 
     await client.query('BEGIN');
@@ -2844,6 +2889,29 @@ app.delete('/api/therapists/:id', requireRole(['admin','superadmin','fluidadmin'
   }
 });
 
+// GET all clients associated with a specific therapist, including their upcoming sessions count
+app.get('/api/therapists/:id/clients', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      `SELECT
+         MAX(invitee_name) as invitee_name,
+         LOWER(TRIM(invitee_email)) as invitee_email,
+         MAX(invitee_phone) as invitee_phone,
+         COUNT(CASE WHEN booking_status = 'active' AND booking_start_at >= NOW() THEN 1 END) as upcoming_sessions
+       FROM bookings
+       WHERE therapist_id = $1
+       GROUP BY LOWER(TRIM(invitee_email))
+       ORDER BY upcoming_sessions DESC, invitee_name ASC`,
+      [id]
+    );
+    res.json(result.rows);
+  } catch (error: any) {
+    console.error('Error fetching therapist clients:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch clients' });
+  }
+});
+
 // PATCH deactivate therapist
 app.patch('/api/therapists/:id/deactivate', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
   try {
@@ -4277,6 +4345,13 @@ app.get('/api/clients', async (req, res) => {
       if (l.email) leadMaps.email.set(l.email.toLowerCase().trim(), l.id);
     });
 
+    // Fetch transfers to override current therapist
+    const transfersRes = await pool.query(`
+      SELECT client_email, client_phone, to_therapist_name, transfer_date
+      FROM client_transfer_history
+      ORDER BY transfer_date ASC
+    `);
+
     // Group by phone (primary) or email (fallback) - phone is more reliable
     const clientMap = new Map();
     const emailToKey = new Map();
@@ -4401,6 +4476,22 @@ app.get('/api/clients', async (req, res) => {
       }
     });
 
+    // Apply latest transfers to override current therapist
+    transfersRes.rows.forEach(t => {
+      const email = t.client_email ? t.client_email.toLowerCase().trim() : null;
+      const phone = t.client_phone ? t.client_phone.replace(/[\s\-\(\)\+]/g, '') : null;
+      const key = phoneToKey.get(phone) || emailToKey.get(email) || phone || email;
+      
+      if (key && clientMap.has(key)) {
+        const client = clientMap.get(key);
+        const transferDate = new Date(t.transfer_date);
+        const latestBookingDate = new Date(client.latest_booking_date || 0);
+        if (transferDate > latestBookingDate || !client.latest_booking_date) {
+          client.booking_host_name = t.to_therapist_name;
+        }
+      }
+    });
+
     const clients = Array.from(clientMap.values()).sort((a, b) =>
       new Date(b.latest_booking_date || b.created_at).getTime() - new Date(a.latest_booking_date || a.created_at).getTime()
     );
@@ -4481,6 +4572,28 @@ app.get('/api/client-booking-history/:clientId', async (req, res) => {
 
     // Get most recent booking
     const lastBooking = result.rows[0];
+    
+    // Check for a newer transfer to update the assigned therapist
+    const transferRes = await pool.query(`
+      SELECT to_therapist_name, transfer_date
+      FROM client_transfer_history
+      WHERE (client_email = $1 AND $1 IS NOT NULL AND $1 <> '') 
+         OR (client_phone = $2 AND $2 IS NOT NULL AND $2 <> '')
+      ORDER BY transfer_date DESC LIMIT 1
+    `, [email, phone]);
+
+    if (transferRes.rows.length > 0) {
+      const t = transferRes.rows[0];
+      const tDate = new Date(t.transfer_date);
+      const bDate = new Date(lastBooking.booking_start_at || 0);
+      if (tDate > bDate || !lastBooking.booking_start_at) {
+        lastBooking.therapist = t.to_therapist_name;
+        // Make sure the new therapist is also in the therapists array
+        if (!therapists.includes(t.to_therapist_name)) {
+          therapists.push(t.to_therapist_name);
+        }
+      }
+    }
 
     res.json({
       clientId: clientId,
@@ -5438,29 +5551,12 @@ function frontendBaseUrl(): string {
   return configured;
 }
 
-// Derive the true session START instant (ms since epoch) from booking_invitee_time.
-// booking_start_at/booking_end_at are stored inconsistently (some UTC, some IST
-// wall-clock), so they are NOT reliable for time comparisons. convertToIST()
-// normalizes every stored format ("...IST" and "...(GMT+05:30)") into a single
-// IST string, which we parse here to get an unambiguous instant.
-const MONTH_IDX: { [k: string]: number } = {
-  Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
-  Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11
-};
-function getBookingStartMs(inviteeTime: string | null | undefined): number | null {
-  if (!inviteeTime) return null;
-  const istStr = convertToIST(inviteeTime); // -> "Weekday, Mon DD, YYYY at HH:MM AM - HH:MM AM IST"
-  const m = istStr.match(/(\w{3}) (\d{1,2}), (\d{4}) at (\d{1,2}):(\d{2}) ([AP]M)/);
-  if (!m) return null;
-  const [, mon, day, year, hh, mm, period] = m;
-  const monthIdx = MONTH_IDX[mon];
-  if (monthIdx === undefined) return null;
-  let hour = parseInt(hh, 10);
-  if (period === 'PM' && hour !== 12) hour += 12;
-  if (period === 'AM' && hour === 12) hour = 0;
-  // The parsed time is IST wall-clock; the real UTC instant is that minus 5:30.
-  return Date.UTC(parseInt(year, 10), monthIdx, parseInt(day, 10), hour, parseInt(mm, 10)) - 330 * 60000;
-}
+// getBookingStartMs now lives in lib/timezone, next to the convertToIST it
+// depends on, and is imported at the top of this file. It used to be defined
+// here as well — two implementations of the one parse that decides when a
+// session actually happens, in a table whose timestamps are already stored
+// three different ways. That is precisely the duplication that created the
+// inconsistency, so there is deliberately only one of it now.
 
 // ── Client-privacy calendar helpers ─────────────────────────────────────────
 // Resolve the client's MASKED email (client<id>@safestories.in) for a booking.
@@ -5805,7 +5901,7 @@ app.get('/api/therapist/calendar-blocks', requireTherapistScope(r => r.query.the
 
 // Get all therapists
 // The full therapist roster with contact details — a User Settings screen.
-app.get('/api/therapists-admin', requireBaseAdmin, async (req, res) => {
+app.get('/api/therapists-admin', requireSuperAdmin, async (req, res) => {
   try {
     // The "SafeStories" row is the platform's own free-consultation calendar
     // host, not a person, so it is excluded here — both consumers of this
@@ -6183,6 +6279,21 @@ app.get('/api/client-details', async (req, res) => {
         b.emergency_contact_relation,
         b.emergency_contact_number,
         b.invitee_question,
+        -- What this client was charged, and by whom. The profile builds its
+        -- therapist and price history out of the booking record itself, because
+        -- that IS the history — there is no separate "current therapist" or
+        -- "current price" stored anywhere to read instead.
+        b.booking_id,
+        b.booking_subject,
+        b.therapist_id,
+        b.booking_host_user_id,
+        b.service_id,
+        b.invitee_payment_amount,
+        b.invitee_payment_currency,
+        b.quoted_amount,
+        b.price_source,
+        b.wallet_amount_applied,
+        b.refund_amount,
         CASE WHEN (csn.note_id IS NOT NULL OR cpn.id IS NOT NULL OR fcn.id IS NOT NULL OR pcf.booking_id IS NOT NULL OR cch.id IS NOT NULL) THEN true ELSE false END as has_session_notes,
         (b.booking_end_at < NOW()) as is_past
       FROM bookings b
@@ -6227,8 +6338,46 @@ app.get('/api/client-details', async (req, res) => {
       };
     });
 
+    let currentTherapist = null;
+    try {
+      let transferQuery = `
+        SELECT to_therapist_name, transfer_date
+        FROM client_transfer_history
+        WHERE 1=0
+      `;
+      const tParams: any[] = [];
+      if (allEmails.length > 0) {
+        const ePlaceholders = allEmails.map((_, i) => `$${tParams.length + i + 1}`).join(', ');
+        transferQuery += ` OR client_email IN (${ePlaceholders})`;
+        tParams.push(...allEmails);
+      }
+      if (allPhones.length > 0) {
+        const pPlaceholders = allPhones.map((_, i) => `$${tParams.length + i + 1}`).join(', ');
+        transferQuery += ` OR client_phone IN (${pPlaceholders})`;
+        tParams.push(...allPhones);
+      }
+      transferQuery += ' ORDER BY transfer_date DESC LIMIT 1';
+
+      if (tParams.length > 0) {
+        const tRes = await pool.query(transferQuery, tParams);
+        if (tRes.rows.length > 0 && appointmentsResult.rows.length > 0) {
+          const t = tRes.rows[0];
+          const tDate = new Date(t.transfer_date);
+          const bDate = new Date(appointmentsResult.rows[0].booking_start_at || 0);
+          if (tDate > bDate || !appointmentsResult.rows[0].booking_start_at) {
+            currentTherapist = t.to_therapist_name;
+          }
+        } else if (tRes.rows.length > 0) {
+          currentTherapist = tRes.rows[0].to_therapist_name;
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching transfer history in client-details:', e);
+    }
+
     res.json({
-      appointments
+      appointments,
+      currentTherapist
     });
   } catch (error) {
     console.error('Error fetching client details:', error);
@@ -6812,130 +6961,617 @@ app.get('/api/therapist-avg-rating', async (req, res) => {
 });
 
 // Transfer client endpoint
-app.post('/api/transfer-client', requireRole(['admin','superadmin','fluidadmin']), async (req, res) => {
+// ── Client transfer ──────────────────────────────────────────────────────────
+//
+// Replaces a single UPDATE that moved EVERY booking a client had ever made.
+// That rewrote history: past bookings record who delivered the session, the
+// stats endpoints compute revenue live from booking_host_name, and a therapist
+// reaches a client's clinical records only through a booking of their own. So
+// the old behaviour moved the previous therapist's completed work and revenue
+// onto someone else, and revoked their access to notes they had written.
+//
+// Only future, slot-holding sessions move now. See lib/transfer.ts.
 
-  try {
-    const {
-      clientName,
-      clientEmail,
-      clientPhone,
-      fromTherapistName,
-      toTherapistId,
-      transferredByAdminId,
-      transferredByAdminName,
-      reason
-    } = req.body;
+/**
+ * The therapist a client is moving TO, with contact details attached.
+ *
+ * Contact comes from `users`, not `therapists`: that table has no email column
+ * at all and stores the number as phone_number. A booking's host contact has to
+ * be right, or a later cancellation notifies the previous therapist about a
+ * session they no longer hold.
+ */
+async function loadTransferTherapist(therapistId: string): Promise<any | null> {
+  const t = await pool.query('SELECT * FROM therapists WHERE therapist_id = $1 LIMIT 1', [therapistId]);
+  if (t.rows.length === 0) return null;
+  const therapist = t.rows[0];
+  const u = await pool.query(
+    "SELECT id, email, phone FROM users WHERE therapist_id = $1 AND role = 'therapist' LIMIT 1",
+    [therapistId]
+  );
+  return {
+    ...therapist,
+    userId: u.rows[0]?.id ?? null,
+    contactEmail: u.rows[0]?.email ?? null,
+    contactPhone: u.rows[0]?.phone ?? therapist.phone_number ?? null,
+  };
+}
 
-    // Get new therapist details
-    const therapistResult = await pool.query(
-      'SELECT * FROM therapists WHERE therapist_id = $1',
-      [toTherapistId]
-    );
-
-    if (therapistResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Therapist not found' });
-    }
-
-    const newTherapist = therapistResult.rows[0];
-
-    // Get old therapist ID
-    const oldTherapistResult = await pool.query(
-      'SELECT therapist_id FROM therapists WHERE name = $1',
+/** The therapist a client is moving FROM. */
+async function resolveSourceTherapist(fromTherapistId: any, fromTherapistName: any): Promise<any | null> {
+  if (fromTherapistId) {
+    const r = await pool.query('SELECT * FROM therapists WHERE therapist_id = $1 LIMIT 1', [fromTherapistId]);
+    if (r.rows[0]) return r.rows[0];
+  }
+  if (fromTherapistName) {
+    // TRIM/LOWER rather than the old exact `name = $1`, which returned nothing
+    // whenever the stored display name differed by so much as a space — leaving
+    // from_therapist_id null and the outgoing therapist never notified.
+    const r = await pool.query(
+      'SELECT * FROM therapists WHERE TRIM(LOWER(name)) = TRIM(LOWER($1)) LIMIT 1',
       [fromTherapistName]
     );
+    if (r.rows[0]) return r.rows[0];
+  }
+  return null;
+}
 
-    const fromTherapistId = oldTherapistResult.rows[0]?.therapist_id || null;
+/**
+ * Google busy blocks for a therapist.
+ *
+ * A read FAILURE is reported as `degraded`, never as an empty list. "Nothing in
+ * the calendar" and "we could not look" are different answers, and conflating
+ * them would let the wizard call a slot free when nobody checked.
+ */
+async function loadBusyBlocks(therapist: any, fromMs: number, toMs: number) {
+  if (!therapist?.google_refresh_token) return { busy: [], hasCalendar: false, degraded: false };
+  try {
+    const auth = await getAuthenticatedClient(therapist);
+    const calendar = google.calendar({ version: 'v3', auth });
+    const fb = await calendar.freebusy.query({
+      requestBody: {
+        timeMin: new Date(fromMs).toISOString(),
+        timeMax: new Date(toMs).toISOString(),
+        items: [{ id: 'primary' }],
+      },
+    });
+    const busy = (fb.data.calendars?.primary?.busy || [])
+      .map((b: any) => ({ startMs: new Date(b.start).getTime(), endMs: new Date(b.end).getTime() }))
+      .filter((b: any) => Number.isFinite(b.startMs) && Number.isFinite(b.endMs));
+    return { busy, hasCalendar: true, degraded: false };
+  } catch (err: any) {
+    console.error('[transfer] free/busy lookup failed:', err?.message || err);
+    return { busy: [], hasCalendar: true, degraded: true };
+  }
+}
 
-    // Update all bookings to new therapist
-    const updateResult = await pool.query(
-      `UPDATE bookings 
-       SET booking_host_name = $1, therapist_id = $2
-       WHERE ((invitee_email IS NOT NULL AND invitee_email = $3) 
-              OR (invitee_phone IS NOT NULL AND invitee_phone = $4))
-       AND booking_host_name = $5`,
-      [newTherapist.name, toTherapistId, clientEmail || '', clientPhone || '', fromTherapistName]
+/**
+ * Calendar plumbing handed to lib/transfer.
+ *
+ * insertEvent is the SHARED helper on purpose — it is what keeps the client's
+ * real email off a therapist's calendar, falling back to name-only if the
+ * masked address is rejected. A hand-rolled insert here would quietly lose that.
+ */
+const transferCalendarDeps = {
+  getCalendarFor: async (therapist: any) => {
+    if (!therapist?.google_refresh_token) return null;
+    const auth = await getAuthenticatedClient(therapist);
+    return google.calendar({ version: 'v3', auth });
+  },
+  insertEvent: insertClientCalendarEvent,
+  resolveMasked: (maskId: any, realEmail: string | null) => resolveMaskedEmail(pool, maskId, realEmail),
+  canonicalLabel: canonicalTherapyLabel,
+};
+
+const TRANSFER_WINDOW_DAYS = 21;
+
+/**
+ * What WOULD happen. Read-only and safe to call repeatedly — the wizard
+ * re-runs it every time the admin picks a different therapist.
+ */
+app.post('/api/transfer-client/preview', requireRole(ADMIN_ROLES), async (req, res) => {
+  try {
+    const { clientName, clientEmail, clientPhone, fromTherapistName, fromTherapistId, toTherapistId } = req.body;
+
+    if (!toTherapistId) return res.status(400).json({ error: 'Choose a therapist to transfer this client to.' });
+    if (!clientEmail && !clientPhone) {
+      return res.status(400).json({
+        error: 'This client has no email or phone on file, so their bookings cannot be identified.',
+      });
+    }
+
+    const target = await loadTransferTherapist(String(toTherapistId));
+    if (!target) return res.status(404).json({ error: 'That therapist no longer exists.' });
+
+    const source = await resolveSourceTherapist(fromTherapistId, fromTherapistName);
+    if (source && String(source.therapist_id) === String(target.therapist_id)) {
+      return res.status(400).json({ error: 'That is already this client\'s therapist.' });
+    }
+
+    const nowMs = Date.now();
+    const toMs = nowMs + TRANSFER_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const { busy, hasCalendar, degraded } = await loadBusyBlocks(target, nowMs, toMs);
+
+    const availability = await loadAvailability(pool, String(target.therapist_id), busy, {
+      hasCalendar, fromMs: nowMs, toMs,
+    });
+
+    const preview = await buildPreview(
+      { db: pool, availability },
+      {
+        client: { name: clientName, email: clientEmail, phone: clientPhone },
+        fromTherapistId: source?.therapist_id ?? null,
+        fromTherapistName: source?.name ?? fromTherapistName ?? null,
+        toTherapist: target,
+        nowMs,
+      }
     );
 
-    // Insert transfer record
-    await pool.query(
-      `INSERT INTO client_transfer_history 
-       (client_name, client_email, client_phone, from_therapist_id, from_therapist_name, 
-        to_therapist_id, to_therapist_name, transferred_by_admin_id, transferred_by_admin_name, reason)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [
-        clientName,
-        clientEmail,
-        clientPhone,
-        fromTherapistId,
-        fromTherapistName,
-        toTherapistId,
-        newTherapist.name,
-        transferredByAdminId,
-        transferredByAdminName,
-        reason
-      ]
-    );
-
-    // Log client transfer
-    await pool.query(
-      `INSERT INTO audit_logs (therapist_id, therapist_name, action_type, action_description, client_name, timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [transferredByAdminId, transferredByAdminName, 'client_transfer',
-        `Transferred ${clientName} from ${fromTherapistName} to ${newTherapist.name}`, clientName, getCurrentISTTimestamp()]
-    );
-
-    // Trigger n8n webhook (Deprecated/Removed)
-    // Client transfer template is not available in AiSensy, internal notifications are sent below.
-    const webhookData = {
-      clientName,
-      clientEmail,
-      clientPhone,
-      fromTherapist: fromTherapistName,
-      fromTherapistId: fromTherapistId || 'N/A',
-      toTherapist: newTherapist.name,
-      toTherapistId: toTherapistId,
-      transferredBy: transferredByAdminName,
-      reason: reason || 'No reason provided',
-      timestamp: new Date().toISOString()
-    };
-    console.log('✅ Client transfer handled. Internal notifications dispatched.');
-
-    // Notify new therapist
-    const newTherapistUser = await pool.query(
-      "SELECT id FROM users WHERE therapist_id = $1 AND role = 'therapist'",
-      [toTherapistId]
-    );
-    if (newTherapistUser.rows.length > 0) {
-      await pool.query(
-        `INSERT INTO notifications (user_id, user_role, notification_type, title, message)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [newTherapistUser.rows[0].id, 'therapist', 'client_transfer', 'New Client Assigned',
-        `Client ${clientName} has been transferred to you from ${fromTherapistName}`]
+    if (degraded) {
+      preview.warnings.push(
+        `${target.name}'s Google Calendar could not be read just now, so their personal commitments were not checked for clashes.`
       );
     }
 
-    // Notify old therapist
-    if (fromTherapistId) {
-      const oldTherapistUser = await pool.query(
-        "SELECT id FROM users WHERE therapist_id = $1 AND role = 'therapist'",
-        [fromTherapistId]
-      );
-      if (oldTherapistUser.rows.length > 0) {
-        await pool.query(
-          `INSERT INTO notifications (user_id, user_role, notification_type, title, message)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [oldTherapistUser.rows[0].id, 'therapist', 'client_transfer', 'Client Transferred',
-          `Client ${clientName} has been transferred to ${newTherapist.name}`]
-        );
+    res.json(preview);
+  } catch (error: any) {
+    console.error('[transfer] preview failed:', error);
+    res.status(500).json({ error: 'Could not work out what this transfer would do.', detail: error.message });
+  }
+});
+
+/**
+ * Do it.
+ *
+ * Order is load-bearing and is the whole reason this is not one big query:
+ *
+ *   re-validate  ->  remove old calendar events  ->  BEGIN…COMMIT  ->  create
+ *   new calendar events, settle money, notify
+ *
+ * The removals must precede the row updates because a booking's calendar is
+ * resolved from its therapist_id; the creations must follow the commit because
+ * they are network calls and this pool has five connections.
+ */
+app.post('/api/transfer-client/execute', requireRole(ADMIN_ROLES), async (req, res) => {
+  const {
+    idempotencyKey, toTherapistId, reason,
+    clientName, clientEmail, clientPhone,
+    fromTherapistName, fromTherapistId, decisions,
+  } = req.body;
+
+  if (!idempotencyKey) {
+    return res.status(400).json({ error: 'This request is missing its safety key. Reopen the transfer and try again.' });
+  }
+  if (!toTherapistId) return res.status(400).json({ error: 'Choose a therapist to transfer this client to.' });
+  if (!Array.isArray(decisions)) return res.status(400).json({ error: 'No session decisions were supplied.' });
+
+  const actor = optionalUser(req);
+  const actorName = actor?.full_name || actor?.username || actor?.email || 'admin';
+
+  try {
+    // ── Replay guard ─────────────────────────────────────────────────────────
+    // Checked before ANY work, because the calendar half cannot be rolled back:
+    // running this twice would orphan an event on the old therapist's calendar
+    // and duplicate it on the new one.
+    const already = await findExistingTransfer(pool, idempotencyKey);
+    if (already) {
+      return res.json({
+        success: true,
+        replayed: true,
+        transferId: already.transfer_id,
+        bookingsMoved: already.bookings_moved,
+        sessionsCancelled: already.sessions_cancelled,
+        walletCredited: Number(already.wallet_credited) || 0,
+        calendarStatus: already.calendar_status,
+        outcomes: already.outcome || [],
+        message: 'This transfer has already been completed.',
+      });
+    }
+
+    const target = await loadTransferTherapist(String(toTherapistId));
+    if (!target) return res.status(404).json({ error: 'That therapist no longer exists.' });
+
+    const source = await resolveSourceTherapist(fromTherapistId, fromTherapistName);
+    if (source && String(source.therapist_id) === String(target.therapist_id)) {
+      return res.status(400).json({ error: 'That is already this client\'s therapist.' });
+    }
+
+    const nowMs = Date.now();
+    const toMs = nowMs + TRANSFER_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const { busy, hasCalendar } = await loadBusyBlocks(target, nowMs, toMs);
+    const availability = await loadAvailability(pool, String(target.therapist_id), busy, {
+      hasCalendar, fromMs: nowMs, toMs,
+    });
+
+    const all = await findClientBookings(pool, { name: clientName, email: clientEmail, phone: clientPhone });
+    const byId = new Map(all.map((b: any) => [String(b.booking_id), b]));
+
+    // ── Re-validate every decision against the world as it is NOW ────────────
+    // The wizard may have been open for ten minutes. Slots get taken, sessions
+    // get cancelled from other screens. Applying the preview's conclusions
+    // unchecked would act on a world that no longer exists.
+    const validated: any[] = [];
+    for (const d of decisions) {
+      const booking = byId.get(String(d.bookingId));
+      if (!booking) {
+        return res.status(409).json({
+          error: 'stale',
+          message: 'One of these sessions no longer exists. Reload the transfer and try again.',
+        });
+      }
+      if (!holdsASlot(booking.booking_status)) {
+        return res.status(409).json({
+          error: 'stale',
+          message: `"${sessionNameOf(booking)}" was cancelled while this was open. Reload the transfer and try again.`,
+        });
+      }
+
+      const durationMin = booking.booking_duration || 50;
+      const money = assessMoney(booking, nowMs);
+
+      const sName = sessionNameOf(booking);
+      const newServiceId = await resolveServiceIdFromLabel(pool, String(target.therapist_id), sName);
+      let newPrice = money.amount;
+      if (newServiceId && money.amount > 0) {
+        const priceRes = await resolvePrice(pool, {
+          serviceId: newServiceId,
+          clientEmail: clientEmail,
+          clientPhone: clientPhone,
+          at: new Date(nowMs)
+        });
+        newPrice = priceRes.amount;
+      }
+      const priceDifference = newPrice - money.amount;
+
+      // Whether a price difference is allowed to MOVE MONEY. Built on positive
+      // evidence of payment, because invitee_payment_amount is the session's
+      // price rather than proof anyone paid it — see wasActuallyPaid().
+      const paidFor = wasActuallyPaid(money);
+
+      // Only a paid session can be blocked over an upgrade: it carries money the
+      // wizard cannot collect a shortfall against. An unpaid one is re-quoted.
+      if (d.action === 'move' && paidFor && priceDifference > 0) {
+        return res.status(409).json({
+          error: 'upgrade_blocked',
+          message: `"${sName}" is already paid for and ${target.name} charges ₹${priceDifference.toLocaleString('en-IN')} more. Cancel and settle it here, then rebook at the new price.`,
+        });
+      }
+
+      if (d.action === 'cancel') {
+        // Never let the wizard cancel a session whose money this path cannot
+        // handle — a gateway refund belongs to /api/cancel-booking alone.
+        if (!money.cancellable) {
+          return res.status(409).json({ error: 'not_cancellable', message: money.detail });
+        }
+      } else {
+        const startMs = d.action === 'move'
+          ? Number(d.newStartMs)
+          : getBookingStartMs(booking.booking_invitee_time);
+
+        if (!startMs || !Number.isFinite(startMs)) {
+          return res.status(400).json({
+            error: 'bad_time',
+            message: `The time for "${sName}" could not be read, so it cannot be moved.`,
+          });
+        }
+        if (startMs <= nowMs) {
+          return res.status(409).json({
+            error: 'stale',
+            message: `"${sName}" has already started. Reload the transfer and try again.`,
+          });
+        }
+        // Enforced only where it can be judged. An unconfigured schedule is a
+        // warning on the preview, not grounds to refuse the whole transfer.
+        if (availability.hasSchedule) {
+          const verdict = assessSlot(availability, startMs, durationMin, booking.booking_id);
+          if (verdict.kind !== 'none') {
+            return res.status(409).json({
+              error: 'conflict',
+              bookingId: booking.booking_id,
+              message: `${target.name} is no longer free for "${sName}" — ${verdict.detail}`,
+            });
+          }
+        }
+        d.newStartMs = startMs;
+      }
+
+      validated.push({ decision: d, booking, money, durationMin, priceDifference, newPrice, paidFor });
+    }
+
+    // ── 1. Calendar removals, while therapist_id still names the OLD therapist ─
+    const calendarNotes = new Map<string, string>();
+    for (const v of validated) {
+      const r = await removeOldEvent(transferCalendarDeps, v.booking, source);
+      if (!r.removed && r.detail && v.booking.google_event_id) {
+        calendarNotes.set(String(v.booking.booking_id), r.detail);
       }
     }
 
+    // ── 2. Every database write, in one transaction ──────────────────────────
+    const tx = await pool.connect();
+    const applied: any[] = [];
+    let transferId: number | null = null;
+    try {
+      await tx.query('BEGIN');
 
+      for (const v of validated) {
+        const r = await applyDecision(tx, v.booking, v.decision, target, {
+          newPrice: v.newPrice,
+          priceDifference: v.priceDifference
+        });
+        applied.push({ ...v, ...r });
+      }
 
-    res.json({ success: true, message: 'Client transferred successfully' });
-  } catch (error) {
-    console.error('Error transferring client:', error);
-    res.status(500).json({ success: false, error: 'Failed to transfer client' });
+      const movedIds = applied.filter(a => a.moved).map(a => String(a.booking.booking_id));
+      const cancelledCount = applied.filter(a => a.decision.action === 'cancel').length;
+
+      const inserted = await tx.query(
+        `INSERT INTO client_transfer_history
+           (client_name, client_email, client_phone,
+            from_therapist_id, from_therapist_name,
+            to_therapist_id, to_therapist_name,
+            transferred_by_admin_id, transferred_by_admin_name,
+            reason, idempotency_key, booking_ids, bookings_moved,
+            sessions_cancelled, calendar_status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,'pending')
+         RETURNING transfer_id`,
+        [
+          clientName || null, clientEmail || null, clientPhone || null,
+          source?.therapist_id ?? null, source?.name ?? fromTherapistName ?? null,
+          target.therapist_id, target.name,
+          actor?.id ?? null, actorName,
+          reason || null, String(idempotencyKey),
+          JSON.stringify(movedIds), movedIds.length, cancelledCount,
+        ]
+      );
+      transferId = inserted.rows[0].transfer_id;
+
+      await tx.query(
+        `INSERT INTO audit_logs (therapist_id, therapist_name, action_type, action_description, client_name, timestamp)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [
+          // audit_logs.therapist_id is a FOREIGN KEY into therapists, so it must
+          // hold a real therapist or nothing. The therapist this record concerns
+          // is the one losing the client; the ADMIN who performed it is named in
+          // therapist_name, which is free text.
+          //
+          // The previous version passed the admin's users.id here, which cannot
+          // satisfy that constraint — every transfer would have died on it. That
+          // it was never noticed is the clearest evidence this feature had never
+          // once run end to end.
+          source?.therapist_id ?? null, actorName, 'client_transfer',
+          `Transferred ${clientName || 'a client'} from ${source?.name || fromTherapistName || 'unassigned'} ` +
+          `to ${target.name} — ${movedIds.length} session(s) moved, ${cancelledCount} cancelled`,
+          clientName || null, getCurrentISTTimestamp(),
+        ]
+      );
+
+      await tx.query('COMMIT');
+    } catch (err) {
+      await tx.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      tx.release();
+    }
+
+    // ── 3. After commit: external effects, each one recorded ─────────────────
+    const outcomes: any[] = [];
+    let walletTotal = 0;
+    let anyCalendarFailure = false;
+    let anyCalendarSuccess = false;
+
+    for (const a of applied) {
+      const out: any = {
+        bookingId: a.booking.booking_id,
+        sessionName: sessionNameOf(a.booking),
+        action: a.decision.action,
+        moved: a.moved,
+        calendar: 'skipped',
+      };
+
+      if (a.decision.action === 'cancel') {
+        out.calendar = 'removed';
+        try {
+          const credited = await settleCancelledSession(
+            a.booking, a.money, { id: actor?.id ?? null, name: actorName }
+          );
+          if (credited > 0) { out.walletCredited = credited; walletTotal += credited; }
+        } catch (e: any) {
+          out.error = `The session was cancelled but its wallet credit failed: ${e?.message || e}`;
+          console.error('[transfer] wallet credit failed:', e?.message || e);
+        }
+      } else {
+        // A refund is only owed when money actually arrived. Without the
+        // `a.paidFor` guard this credited real, spendable wallet balance against
+        // sessions that were never paid for — inventing money from a quote.
+        if (a.paidFor && a.priceDifference < 0) {
+          try {
+            const refundAmount = Math.abs(a.priceDifference);
+            const credited = await creditWallet({
+              name: a.booking.invitee_name,
+              phone: a.booking.invitee_phone,
+              email: a.booking.invitee_email,
+              bookingId: a.booking.booking_id,
+              amount: refundAmount,
+              currency: a.booking.invitee_payment_currency || 'INR',
+              // NOT 'BOOKING_SETTLEMENT'. That reason sits inside
+              // uq_wallet_txn_booking_reason, which is unique on
+              // (source_booking_id, reason) and ignores direction — so this
+              // credit would collide with the settlement DEBIT written when the
+              // same booking was paid from wallet credit, and be dropped by
+              // ON CONFLICT DO NOTHING. Silently: no row, no error, and a client
+              // owed money who is never told.
+              reason: 'TRANSFER_ADJUSTMENT',
+              sourcePaymentMode: a.booking.invitee_payment_gateway,
+              notes: `Downgrade refund during transfer from ${source?.name || 'unassigned'} to ${target.name}`,
+              userId: actor?.id ?? null,
+              userName: actorName,
+            });
+            if (credited) { out.walletCredited = Number(credited.amount); walletTotal += Number(credited.amount); }
+          } catch (e: any) {
+            out.error = `The session moved but its wallet refund failed: ${e?.message || e}`;
+            console.error('[transfer] wallet refund failed:', e?.message || e);
+          }
+        }
+
+        const ev = await createNewEvent(
+          transferCalendarDeps, a.booking, source, target,
+          { startMs: a.newStartMs, durationMin: a.durationMin }
+        );
+        out.calendar = ev.status;
+        out.joiningLink = ev.meetLink || null;
+        if (ev.detail) out.calendarDetail = ev.detail;
+        if (ev.status === 'failed') anyCalendarFailure = true;
+        if (ev.status === 'moved' || ev.status === 'created') anyCalendarSuccess = true;
+
+        // A new event carries a NEW Meet link. Storing it is not optional: the
+        // old link points at a room on the previous therapist's calendar that
+        // no longer exists, and the client holds that link already.
+        await pool.query(
+          'UPDATE bookings SET google_event_id = $1, booking_joining_link = $2 WHERE booking_id = $3',
+          [ev.eventId, ev.meetLink || null, a.booking.booking_id]
+        ).catch((e: any) => console.error('[transfer] could not store the new event id:', e?.message || e));
+      }
+
+      const note = calendarNotes.get(String(a.booking.booking_id));
+      if (note) out.calendarDetail = [out.calendarDetail, note].filter(Boolean).join(' ');
+      outcomes.push(out);
+    }
+
+    const calendarStatus = anyCalendarFailure ? 'partial' : (anyCalendarSuccess ? 'ok' : 'skipped');
+    await pool.query(
+      `UPDATE client_transfer_history
+          SET calendar_status = $1, wallet_credited = $2, outcome = $3::jsonb
+        WHERE transfer_id = $4`,
+      [calendarStatus, walletTotal, JSON.stringify(outcomes), transferId]
+    ).catch((e: any) => console.error('[transfer] could not record the outcome:', e?.message || e));
+
+    // ── Notifications. Best effort; a failure here must not undo a transfer. ──
+    try {
+      const movedCount = outcomes.filter(o => o.moved).length;
+      const cancelledCount = outcomes.filter(o => o.action === 'cancel').length;
+      const summary =
+        `${clientName || 'A client'} has been transferred from ` +
+        `${source?.name || fromTherapistName || 'unassigned'} to ${target.name}.`;
+
+      if (target.userId) {
+        await pool.query(
+          `INSERT INTO notifications (user_id, user_role, notification_type, title, message)
+           VALUES ($1,'therapist','client_transfer',$2,$3)`,
+          [target.userId, 'New client assigned',
+           `${clientName || 'A client'} is now yours` +
+           (movedCount ? `, with ${movedCount} upcoming session(s).` : '. They have no upcoming sessions.')]
+        );
+      }
+
+      if (source?.therapist_id) {
+        const outgoing = await pool.query(
+          "SELECT id FROM users WHERE therapist_id = $1 AND role = 'therapist' LIMIT 1",
+          [source.therapist_id]
+        );
+        if (outgoing.rows[0]) {
+          await pool.query(
+            `INSERT INTO notifications (user_id, user_role, notification_type, title, message)
+             VALUES ($1,'therapist','client_transfer',$2,$3)`,
+            [outgoing.rows[0].id, 'Client transferred',
+             `${clientName || 'A client'} has moved to ${target.name}. ` +
+             `Your notes for the sessions you delivered remain available to you.`]
+          );
+        }
+      }
+
+      const admins = await pool.query("SELECT id FROM users WHERE role = 'admin'");
+      for (const admin of admins.rows) {
+        await pool.query(
+          `INSERT INTO notifications (user_id, user_role, notification_type, title, message)
+           VALUES ($1,'admin','client_transfer',$2,$3)`,
+          [admin.id, 'Client transferred',
+           `${summary} ${movedCount} session(s) moved, ${cancelledCount} cancelled.`]
+        );
+      }
+    } catch (notifyErr: any) {
+      console.error('[transfer] notifications failed (non-fatal):', notifyErr?.message || notifyErr);
+    }
+
+    // ── Tell the CLIENT. Their therapist, and often their meeting link, changed.
+    // Reschedule and cancel both message the client; a transfer changes more
+    // than either and used to say nothing at all.
+    try {
+      if (clientEmail) {
+        await sendClientTherapistTransferEmail(clientEmail, {
+          clientName: clientName || 'there',
+          newTherapistName: target.name,
+          sessions: applied
+            .filter(a => a.moved)
+            .map(a => {
+              const o = outcomes.find(x => x.bookingId === a.booking.booking_id);
+              return {
+                sessionName: sessionNameOf(a.booking),
+                when: formatInviteeTime(a.newStartMs, a.durationMin),
+                // Only an ACTUAL new link is passed on. A session whose event
+                // could not be re-created is listed without one, because a stale
+                // link opens a room on a calendar that no longer holds it.
+                joiningLink: o?.joiningLink || null,
+              };
+            }),
+        });
+      }
+    } catch (mailErr: any) {
+      console.error('[transfer] client email failed (non-fatal):', mailErr?.message || mailErr);
+    }
+
+    let walletBalance = 0;
+    try { walletBalance = await balanceFor(clientPhone, clientEmail); } catch { /* display only */ }
+
+    res.json({
+      success: true,
+      transferId,
+      fromTherapistName: source?.name ?? fromTherapistName ?? null,
+      toTherapistName: target.name,
+      bookingsMoved: outcomes.filter(o => o.moved).length,
+      sessionsCancelled: outcomes.filter(o => o.action === 'cancel').length,
+      walletCredited: walletTotal,
+      walletBalance,
+      calendarStatus,
+      outcomes,
+    });
+  } catch (error: any) {
+    console.error('[transfer] execute failed:', error);
+    res.status(500).json({ error: 'The transfer could not be completed.', detail: error.message });
+  }
+});
+
+/**
+ * A client's transfer history.
+ *
+ * The client profile derives "current" and "previous" therapist from the
+ * bookings themselves, which cannot see a transfer that produced no booking —
+ * the client had nothing upcoming, or every upcoming session was cancelled and
+ * settled. This table is the only record of those, so the profile reads both
+ * and merges them.
+ */
+app.get('/api/client-transfers', requireRole(ADMIN_ROLES), async (req, res) => {
+  try {
+    const email = typeof req.query.email === 'string' ? req.query.email.trim() : '';
+    const phone = typeof req.query.phone === 'string' ? req.query.phone.trim() : '';
+    if (!email && !phone) return res.json({ transfers: [] });
+
+    const { rows } = await pool.query(
+      `SELECT transfer_id, client_name, from_therapist_name, to_therapist_name,
+              transferred_by_admin_name, transfer_date, reason,
+              bookings_moved, sessions_cancelled, wallet_credited, calendar_status
+         FROM client_transfer_history
+        WHERE ($1::text <> '' AND LOWER(client_email) = LOWER($1::text))
+           OR ($2::text <> '' AND client_phone IS NOT NULL
+               AND regexp_replace(client_phone, '[^0-9]', '', 'g')
+                 = regexp_replace($2::text, '[^0-9]', '', 'g'))
+        ORDER BY transfer_date DESC`,
+      [email, phone]
+    );
+
+    res.json({ transfers: rows });
+  } catch (error: any) {
+    console.error('[transfer] history lookup failed:', error);
+    res.status(500).json({ error: 'Could not load this client\'s transfer history.' });
   }
 });
 
@@ -7788,14 +8424,21 @@ app.post('/api/wallet/adjust', requireRole(['admin', 'superadmin', 'fluidadmin']
     if (!buildClientKey(phone, email)) {
       return res.status(400).json({ error: 'A phone number or email is required to identify the wallet' });
     }
+    // Enforced HERE, not only in the form. This is money moved by hand with no
+    // booking behind it, so the note is the ONLY record of why — and a check
+    // that lives only in the browser is not a check.
+    if (!String(notes || '').trim()) {
+      return res.status(400).json({ error: 'A note explaining this adjustment is required.' });
+    }
 
+    const actorName = req.user?.name || req.user?.username || req.user?.email || 'admin';
     const movement = {
       name, phone, email,
       amount: numericAmount,
       reason: reason as 'MANUAL_ADJUSTMENT' | 'REFUND_OUT',
-      notes: notes || null,
+      notes: String(notes).trim(),
       userId: req.user?.id ?? null,
-      userName: req.user?.name || req.user?.username || null,
+      userName: actorName,
     };
 
     const txn = direction === 'CREDIT'
@@ -7803,6 +8446,37 @@ app.post('/api/wallet/adjust', requireRole(['admin', 'superadmin', 'fluidadmin']
       : await debitWallet(movement);
 
     const balance = await getBalanceForClient(phone, email);
+
+    // The ledger already records this, and the client profile renders it. This
+    // second entry is for the people who look at the AUDIT trail rather than at
+    // one client — cancel-booking files its money decisions the same way, and a
+    // manual payout is the least traceable movement in the system.
+    //
+    // therapist_id stays NULL: it is a foreign key into therapists, and an admin
+    // is not one. The actor is named in therapist_name, which is free text.
+    try {
+      const label = direction === 'CREDIT'
+        ? 'Added to wallet'
+        : (reason === 'REFUND_OUT' ? 'Encashed from wallet' : 'Reduced wallet balance');
+      await pool.query(
+        `INSERT INTO audit_logs (therapist_id, therapist_name, action_type, action_description, client_name, timestamp)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          null,
+          actorName,
+          `wallet_${direction === 'CREDIT' ? 'credit' : 'debit'}`,
+          `${label} — ₹${numericAmount} for ${name || phone || email} (${reason}). ` +
+          `Balance now ₹${balance}. Note: ${String(notes).trim()}`,
+          name || null,
+          getCurrentISTTimestamp(),
+        ]
+      );
+    } catch (auditErr: any) {
+      // Non-fatal: the ledger is the source of truth and the movement has
+      // already happened. Losing the audit copy must not fail the request.
+      console.error('[wallet] audit log insert failed (non-fatal):', auditErr?.message || auditErr);
+    }
+
     res.json({ success: true, transaction: txn, balance });
   } catch (error: any) {
     if (error instanceof InsufficientWalletBalance) {
@@ -8872,7 +9546,7 @@ app.post('/api/fetch-slots', async (req, res) => {
 });
 
 // GET public service details by slug
-app.delete('/api/services/:id', requireBaseAdmin, async (req, res) => {
+app.delete('/api/services/:id', requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query('DELETE FROM therapy_services WHERE id = $1 RETURNING *', [id]);
@@ -9111,7 +9785,7 @@ app.post('/api/public/resolve-price', async (req, res) => {
  * COALESCE defaults both to true so a therapy whose therapist has no matching
  * row (the SafeStories platform calendar) is not silently dropped.
  */
-app.get('/api/admin/pricing/therapies', requireBaseAdmin, async (req, res) => {
+app.get('/api/admin/pricing/therapies', requireSuperAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT
@@ -9164,7 +9838,7 @@ app.get('/api/admin/pricing/therapies', requireBaseAdmin, async (req, res) => {
 });
 
 /** GET /api/admin/pricing/schedule/:serviceId — full price history for one therapy. */
-app.get('/api/admin/pricing/schedule/:serviceId', requireBaseAdmin, async (req, res) => {
+app.get('/api/admin/pricing/schedule/:serviceId', requireSuperAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT id, amount, effective_from, grandfather_existing, note, created_by, created_at, revoked_at
@@ -9184,7 +9858,7 @@ app.get('/api/admin/pricing/schedule/:serviceId', requireBaseAdmin, async (req, 
  * POST /api/admin/pricing/schedule — set a new price from a given date.
  * Body: { service_id, amount, effective_from: 'YYYY-MM-DD', grandfather_existing, note }
  */
-app.post('/api/admin/pricing/schedule', requireBaseAdmin, async (req, res) => {
+app.post('/api/admin/pricing/schedule', requireSuperAdmin, async (req, res) => {
   try {
     const { service_id, amount, effective_from, grandfather_existing = true, note } = req.body || {};
 
@@ -9231,7 +9905,7 @@ app.post('/api/admin/pricing/schedule', requireBaseAdmin, async (req, res) => {
 });
 
 /** POST /api/admin/pricing/schedule/:id/revoke — cancel a price change. */
-app.post('/api/admin/pricing/schedule/:id/revoke', requireBaseAdmin, async (req, res) => {
+app.post('/api/admin/pricing/schedule/:id/revoke', requireSuperAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE therapy_price_schedule
@@ -9257,7 +9931,7 @@ app.post('/api/admin/pricing/schedule/:id/revoke', requireBaseAdmin, async (req,
  * GET /api/admin/pricing/impact?service_id=&amount=
  * What a proposed change would actually do, before it is saved.
  */
-app.get('/api/admin/pricing/impact', requireBaseAdmin, async (req, res) => {
+app.get('/api/admin/pricing/impact', requireSuperAdmin, async (req, res) => {
   try {
     const serviceId = Number(req.query.service_id);
     const amount = Number(req.query.amount);
@@ -9293,7 +9967,7 @@ app.get('/api/admin/pricing/impact', requireBaseAdmin, async (req, res) => {
  * real client record here — all_clients_table is not written by the booking
  * flow and would miss most people.
  */
-app.get('/api/admin/pricing/clients', requireBaseAdmin, async (req, res) => {
+app.get('/api/admin/pricing/clients', requireSuperAdmin, async (req, res) => {
   try {
     const search = String(req.query.search || '').trim().toLowerCase();
     const { rows } = await pool.query(
@@ -9333,7 +10007,7 @@ app.get('/api/admin/pricing/clients', requireBaseAdmin, async (req, res) => {
  * full catalogue — a per-client price is only meaningful for a therapy they
  * use. Deactivated therapies and therapists are excluded, matching the tab.
  */
-app.get('/api/admin/pricing/client-context', requireBaseAdmin, async (req, res) => {
+app.get('/api/admin/pricing/client-context', requireSuperAdmin, async (req, res) => {
   try {
     const email = normalizeEmail(String(req.query.email || ''));
     const phone = normalizePhoneDigits(String(req.query.phone || ''));
@@ -9416,7 +10090,7 @@ app.get('/api/admin/pricing/client-context', requireBaseAdmin, async (req, res) 
 });
 
 /** GET /api/admin/pricing/overrides — all active per-client prices. */
-app.get('/api/admin/pricing/overrides', requireBaseAdmin, async (req, res) => {
+app.get('/api/admin/pricing/overrides', requireSuperAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT o.*, s.title AS service_title, s.therapist_name
@@ -9439,7 +10113,7 @@ app.get('/api/admin/pricing/overrides', requireBaseAdmin, async (req, res) => {
  * All-or-nothing: a partial apply across a batch of clients would leave the
  * admin with no way to tell who got the new price.
  */
-app.post('/api/admin/pricing/overrides', requireBaseAdmin, async (req, res) => {
+app.post('/api/admin/pricing/overrides', requireSuperAdmin, async (req, res) => {
   const client = await pool.connect();
   try {
     const { clients, service_id, amount, reason, effective_until } = req.body || {};
@@ -9496,7 +10170,7 @@ app.post('/api/admin/pricing/overrides', requireBaseAdmin, async (req, res) => {
 });
 
 /** POST /api/admin/pricing/overrides/:id/revoke */
-app.post('/api/admin/pricing/overrides/:id/revoke', requireBaseAdmin, async (req, res) => {
+app.post('/api/admin/pricing/overrides/:id/revoke', requireSuperAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE client_price_override
@@ -9517,7 +10191,7 @@ app.post('/api/admin/pricing/overrides/:id/revoke', requireBaseAdmin, async (req
  * GET /api/admin/pricing/locks?service_id=
  * Who is grandfathered on this therapy, and at what rate.
  */
-app.get('/api/admin/pricing/locks', requireBaseAdmin, async (req, res) => {
+app.get('/api/admin/pricing/locks', requireSuperAdmin, async (req, res) => {
   try {
     const serviceId = req.query.service_id ? Number(req.query.service_id) : null;
     const { rows } = await pool.query(
@@ -9539,7 +10213,7 @@ app.get('/api/admin/pricing/locks', requireBaseAdmin, async (req, res) => {
 });
 
 /** POST /api/admin/pricing/locks/:id/release — move one client onto list price. */
-app.post('/api/admin/pricing/locks/:id/release', requireBaseAdmin, async (req, res) => {
+app.post('/api/admin/pricing/locks/:id/release', requireSuperAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `UPDATE client_price_lock
@@ -9613,7 +10287,7 @@ const ORG_SETTING_KEYS = [
 
 // GET /api/org-settings
 // Organisation configuration. The matching POST was already restricted.
-app.get('/api/org-settings', requireBaseAdmin, async (req, res) => {
+app.get('/api/org-settings', requireSuperAdmin, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT setting_key, setting_value FROM admin_settings WHERE setting_key = ANY($1)`,
@@ -9630,7 +10304,7 @@ app.get('/api/org-settings', requireBaseAdmin, async (req, res) => {
 });
 
 // POST /api/org-settings (Admin)
-app.post('/api/org-settings', requireBaseAdmin, async (req, res) => {
+app.post('/api/org-settings', requireSuperAdmin, async (req, res) => {
   try {
     const { settings } = req.body;
     if (!settings || typeof settings !== 'object') {
@@ -9806,7 +10480,7 @@ async function checkExistingTherapistConflict(
     if (!e && !p) return null;
 
     const res = await pool.query(
-      `SELECT therapist_id, booking_host_name FROM bookings
+      `SELECT therapist_id, booking_host_name, invitee_created_at FROM bookings
        WHERE (($1 <> '' AND LOWER(invitee_email) = LOWER($1))
            OR ($2 <> '' AND invitee_phone = $2))
          AND booking_status NOT IN ('cancelled', 'canceled', 'payment_failed')
@@ -9817,18 +10491,50 @@ async function checkExistingTherapistConflict(
        LIMIT 1`,
       [e, p]
     );
-    if (res.rows.length === 0) return null;
+    
+    const transferRes = await pool.query(
+      `SELECT to_therapist_id, to_therapist_name, transfer_date FROM client_transfer_history
+       WHERE (($1 <> '' AND LOWER(client_email) = LOWER($1))
+           OR ($2 <> '' AND client_phone = $2))
+       ORDER BY transfer_date DESC LIMIT 1`,
+      [e, p]
+    );
 
-    const existing = res.rows[0];
-    const sameId = newTherapistId && existing.therapist_id &&
-      String(newTherapistId) === String(existing.therapist_id);
-    const sameName = newTherapistName && existing.booking_host_name &&
-      existing.booking_host_name.toLowerCase().trim() === newTherapistName.toLowerCase().trim();
+    const existing = res.rows.length > 0 ? res.rows[0] : null;
+    const transfer = transferRes.rows.length > 0 ? transferRes.rows[0] : null;
+
+    if (!existing && !transfer) return null;
+
+    let currentTherapistId = null;
+    let currentTherapistName = null;
+
+    if (transfer && existing) {
+       const transferDate = new Date(transfer.transfer_date);
+       const bookingDate = new Date(existing.invitee_created_at || 0);
+       if (transferDate > bookingDate) {
+          currentTherapistId = transfer.to_therapist_id;
+          currentTherapistName = transfer.to_therapist_name;
+       } else {
+          currentTherapistId = existing.therapist_id;
+          currentTherapistName = existing.booking_host_name;
+       }
+    } else if (transfer) {
+       currentTherapistId = transfer.to_therapist_id;
+       currentTherapistName = transfer.to_therapist_name;
+    } else {
+       currentTherapistId = existing.therapist_id;
+       currentTherapistName = existing.booking_host_name;
+    }
+
+    const sameId = newTherapistId && currentTherapistId &&
+      String(newTherapistId) === String(currentTherapistId);
+    const sameName = newTherapistName && currentTherapistName &&
+      currentTherapistName.toLowerCase().trim() === newTherapistName.toLowerCase().trim();
     if (sameId || sameName) return null;
 
     return {
-      existingTherapistName: existing.booking_host_name || 'their current therapist',
-      existingTherapistId: existing.therapist_id || null,
+      existingTherapistName: currentTherapistName || 'their current therapist',
+      existingTherapistId: currentTherapistId || null,
     };
   } catch (err) {
     // Never block bookings because the check itself failed — log and allow.
@@ -13715,7 +14421,7 @@ app.get('/api/therapist-schedules/:therapist_id', async (req, res) => {
   }
 });
 
-app.post('/api/services', requireBaseAdmin, async (req, res) => {
+app.post('/api/services', requireSuperAdmin, async (req, res) => {
   try {
     const {
       title, duration, type, therapy_type, description, charges, therapist_id, therapist_name,
@@ -13791,7 +14497,7 @@ app.post('/api/services', requireBaseAdmin, async (req, res) => {
   }
 });
 
-app.put('/api/services/:id', requireBaseAdmin, async (req, res) => {
+app.put('/api/services/:id', requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -13844,7 +14550,7 @@ app.put('/api/services/:id', requireBaseAdmin, async (req, res) => {
 });
 
 // DELETE therapy calendar
-app.delete('/api/therapy-calendars/:id', requireBaseAdmin, async (req, res) => {
+app.delete('/api/therapy-calendars/:id', requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query('DELETE FROM therapy_services WHERE id = $1 RETURNING id', [id]);
@@ -13859,7 +14565,7 @@ app.delete('/api/therapy-calendars/:id', requireBaseAdmin, async (req, res) => {
 });
 
 // PATCH deactivate therapy calendar
-app.patch('/api/therapy-calendars/:id/deactivate', requireBaseAdmin, async (req, res) => {
+app.patch('/api/therapy-calendars/:id/deactivate', requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
@@ -13877,7 +14583,7 @@ app.patch('/api/therapy-calendars/:id/deactivate', requireBaseAdmin, async (req,
 });
 
 // PATCH activate therapy calendar
-app.patch('/api/therapy-calendars/:id/activate', requireBaseAdmin, async (req, res) => {
+app.patch('/api/therapy-calendars/:id/activate', requireSuperAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(

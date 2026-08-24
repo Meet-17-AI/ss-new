@@ -24,7 +24,13 @@ export type WalletReason =
   | 'CANCELLATION_CREDIT'
   | 'BOOKING_SETTLEMENT'
   | 'REFUND_OUT'
-  | 'MANUAL_ADJUSTMENT';
+  | 'MANUAL_ADJUSTMENT'
+  // CREDIT: the client moved to a therapist who charges less, and the
+  // difference came back. Deliberately NOT filed as BOOKING_SETTLEMENT — that
+  // reason is inside uq_wallet_txn_booking_reason, so a credit under it would
+  // collide with the settlement DEBIT for the same booking and be dropped by
+  // ON CONFLICT DO NOTHING, silently. See migrations/add_transfer_wizard.sql.
+  | 'TRANSFER_ADJUSTMENT';
 
 export interface WalletTxn {
   txn_id: number;

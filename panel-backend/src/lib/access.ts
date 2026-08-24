@@ -21,40 +21,82 @@
 import { Client } from 'pg';
 import pool from './db';
 
-export type Scope = 'admin_dashboard' | 'therapist_dashboard' | 'crm';
+export type Scope = 'admin_dashboard' | 'therapist_dashboard' | 'crm' | 'superadmin';
 
-export const ALL_SCOPES: Scope[] = ['admin_dashboard', 'therapist_dashboard', 'crm'];
+export const ALL_SCOPES: Scope[] = ['admin_dashboard', 'therapist_dashboard', 'crm', 'superadmin'];
+
+/**
+ * Scopes that name a dashboard someone can be standing in.
+ *
+ * `superadmin` is deliberately not one. It is an elevation OF the admin dashboard
+ * rather than a place to go, so it has no route, never appears in the switcher,
+ * and is never somewhere a redirect can land a user.
+ */
+export const DASHBOARD_SCOPES: Scope[] = ['admin_dashboard', 'therapist_dashboard', 'crm'];
 
 export const isScope = (value: any): value is Scope => ALL_SCOPES.includes(value);
 
 /**
- * The dashboard a role comes with. Never stored and never revocable — it is the
- * reason a user exists, and taking it away would lock them out of everything with
- * no way back in except a DB console.
+ * What a role comes with. Never stored and never revocable — it is the reason a
+ * user exists, and taking it away would lock them out of everything with no way
+ * back in except a DB console.
+ *
+ * A superadmin carries two: the admin dashboard they stand in, and the elevation
+ * that opens the clinic configuration behind it. Both are implicit, so neither can
+ * be saved away by a stray unticked box.
+ *
+ * `fluidadmin` is listed as a superadmin because it already reached every one of
+ * these surfaces before the tier existed; omitting it would be a silent demotion
+ * of the platform account rather than a decision anyone made.
  */
-const BASE_SCOPE: Record<string, Scope> = {
-  therapist: 'therapist_dashboard',
-  admin: 'admin_dashboard',
-  superadmin: 'admin_dashboard',
-  fluidadmin: 'admin_dashboard',
-  sales: 'crm',
+const BASE_SCOPES: Record<string, Scope[]> = {
+  therapist: ['therapist_dashboard'],
+  admin: ['admin_dashboard'],
+  superadmin: ['admin_dashboard', 'superadmin'],
+  fluidadmin: ['admin_dashboard', 'superadmin'],
+  sales: ['crm'],
 };
 
+export const baseScopesForRole = (role: any): Scope[] =>
+  BASE_SCOPES[String(role || '').toLowerCase()] ?? [];
+
+/**
+ * The dashboard a role LANDS on — the first of its base scopes.
+ *
+ * Kept separate from baseScopesForRole because redirects and requireRole need one
+ * destination, not a set, and `superadmin` is not a destination at all.
+ */
 export const baseScopeForRole = (role: any): Scope | null =>
-  BASE_SCOPE[String(role || '').toLowerCase()] ?? null;
+  baseScopesForRole(role).find((s) => DASHBOARD_SCOPES.includes(s)) ?? null;
+
+/** Roles that ARE administrators, as opposed to holding a granted admin dashboard. */
+const BASE_ADMIN_ROLES = ['admin', 'superadmin', 'fluidadmin'];
+
+export const isBaseAdminRole = (user: any): boolean =>
+  BASE_ADMIN_ROLES.includes(String(user?.role || '').toLowerCase());
 
 /**
  * Which scopes a role is even ELIGIBLE to hold.
  *
- * A therapist can hold all three. An admin cannot hold `therapist_dashboard`, and
- * that is a data fact rather than a tidiness rule: an admin row has no
- * therapist_id, so a therapist dashboard would have nothing to scope its
- * schedule, clients or notes to. It would render broken, not privileged.
+ * An admin cannot hold `therapist_dashboard`, and that is a data fact rather than
+ * a tidiness rule: an admin row has no therapist_id, so a therapist dashboard
+ * would have nothing to scope its schedule, clients or notes to. It would render
+ * broken, not privileged.
+ *
+ * `superadmin` is offered only to accounts that are already administrators. It
+ * carries the clinic configuration AND, through isBaseAdminRole, every client's
+ * session notes and case history — so putting it one checkbox away from a
+ * clinician would undo the single boundary this file exists to hold. Promoting a
+ * therapist is a deliberate act on their role, not a tick in a grid.
  */
 export function grantableScopes(user: { role?: any; therapist_id?: any }): Scope[] {
   const role = String(user?.role || '').toLowerCase();
   const hasTherapistId = user?.therapist_id !== null && user?.therapist_id !== undefined;
-  return ALL_SCOPES.filter((s) => s !== 'therapist_dashboard' || (role === 'therapist' && hasTherapistId));
+  return ALL_SCOPES.filter((s) => {
+    if (s === 'therapist_dashboard') return role === 'therapist' && hasTherapistId;
+    if (s === 'superadmin') return isBaseAdminRole(user);
+    return true;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -142,17 +184,22 @@ export function invalidateAllAccess(): void {
 }
 
 /**
- * Every scope a caller currently holds: the one their role implies, plus whatever
- * has been granted on top.
+ * Every scope a caller currently holds: whatever their role implies, plus
+ * whatever has been granted on top.
  *
- * Falls back to the base scope alone if the table is missing or the query fails.
- * Deliberately fail-CLOSED on extras and fail-OPEN on the base: a database blip
- * must not lock a therapist out of their own dashboard, but it must never be a
- * way to acquire access nobody granted.
+ * The ROLE is read from the database here too, not taken from the token. Tokens
+ * live 24h and carry the role they were minted with, so a promotion would not
+ * land until the next login and — the half that matters — a demotion would keep
+ * working for a day with no way to cut it short. The token says who you are; the
+ * database says what that currently means.
+ *
+ * Falls back to the token's role if the lookup fails. Deliberately fail-CLOSED on
+ * extras and fail-OPEN on the base: a database blip must not lock a therapist out
+ * of their own dashboard, but it must never be a way to acquire access nobody
+ * granted.
  */
 export async function loadScopes(user: any): Promise<Set<Scope>> {
-  const base = baseScopeForRole(user?.role);
-  const fallback = new Set<Scope>(base ? [base] : []);
+  const fallback = new Set<Scope>(baseScopesForRole(user?.role));
   if (!user?.id) return fallback;
 
   const key = String(user.id);
@@ -160,11 +207,21 @@ export async function loadScopes(user: any): Promise<Set<Scope>> {
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.scopes;
 
   try {
+    // One round trip for both halves. The role would otherwise be a second query
+    // on a path that runs on every authenticated request.
     const { rows } = await pool.query(
-      'SELECT scope FROM user_access_grants WHERE user_id = $1',
+      `SELECT u.role, g.scope
+         FROM users u
+         LEFT JOIN user_access_grants g ON g.user_id = u.id
+        WHERE u.id = $1`,
       [user.id]
     );
-    const scopes = new Set<Scope>(fallback);
+    // No row means no account. Left as the token's base rather than empty, for the
+    // same fail-open-on-base reason above — and a deleted user cannot log in again
+    // regardless.
+    if (rows.length === 0) return fallback;
+
+    const scopes = new Set<Scope>(baseScopesForRole(rows[0].role));
     for (const row of rows) if (isScope(row.scope)) scopes.add(row.scope);
     cache.set(key, { scopes, at: Date.now() });
     return scopes;
@@ -187,29 +244,27 @@ export async function hasScope(user: any, scope: Scope): Promise<boolean> {
 // require on it. Those routes are secured by asking "is this yours?" instead.
 // ---------------------------------------------------------------------------
 
-/** Roles that ARE administrators, as opposed to holding a granted admin dashboard. */
-const BASE_ADMIN_ROLES = ['admin', 'superadmin', 'fluidadmin'];
-
-export const isBaseAdminRole = (user: any): boolean =>
-  BASE_ADMIN_ROLES.includes(String(user?.role || '').toLowerCase());
-
 /**
- * Reserved to accounts that ARE administrators — not to anyone holding a granted
- * admin dashboard.
+ * Reserved to superadmins.
+ *
+ * The admin dashboard runs as far as the payments page. Everything past it —
+ * organisation settings, pricing, the service catalogue, the therapist roster —
+ * configures how the whole clinic operates, and running the day-to-day panel is
+ * not the same as owning the setup behind it.
  *
  * requireRole deliberately passes on the equivalent scope, which is what lets a
- * granted therapist use the admin panel at all. These routes are the exception:
- * organisation settings, pricing, the service catalogue and the therapist roster
- * shape how the whole clinic operates, and lending someone the day-to-day
- * dashboard is not the same as handing them the configuration behind it.
- *
- * The check is on ROLE, so no grant can confer it — the same reasoning that
- * keeps clinical records out of a granted therapist's reach.
+ * granted therapist use the admin panel at all. These routes are the exception,
+ * and they ask for a scope no ordinary admin holds.
  */
-export const requireBaseAdmin = (req: any, res: any, next: any) => {
+export const requireSuperAdmin = async (req: any, res: any, next: any) => {
   if (!req.user) return res.status(401).json({ error: 'Authentication required' });
-  if (!isBaseAdminRole(req.user)) {
-    return res.status(403).json({ error: 'This area is restricted to administrators.' });
+  try {
+    if (!(await loadScopes(req.user)).has('superadmin')) {
+      return res.status(403).json({ error: 'This area is restricted to super admins.' });
+    }
+  } catch (err: any) {
+    console.error('[access] requireSuperAdmin failed:', err?.message || err);
+    return res.status(500).json({ error: 'Could not verify permissions' });
   }
   next();
 };
@@ -325,20 +380,40 @@ export const requireClientRecordAccess =
 /**
  * Who may see and edit the Roles tab.
  *
- * An identity check, not a role check — the AI team signs in with the `admin`
- * role, the very role this has to be told apart from, so no role test can express
- * it. Same shape as CALENDAR_DISCONNECT_USERS in index.ts, for the same reason.
+ * Superadmins, plus a named list kept as a floor. The list used to be the whole
+ * rule, because the AI team signed in with the `admin` role — the very role it had
+ * to be told apart from — and no role test could express that. The superadmin tier
+ * now says it directly.
+ *
+ * The list stays because it is the recovery path: it holds even when the scope
+ * lookup fails, so a database problem cannot leave nobody able to repair access.
  */
 const ACCESS_ADMIN_USERS = (process.env.ACCESS_ADMIN_USERS || 'aiteam@fluid.live,aiteam')
   .split(',')
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 
-export const canManageAccess = (user: any): boolean =>
+export const isAccessAdminIdentity = (user: any): boolean =>
   Boolean(user) &&
   [user.email, user.username].some(
     (id: any) => id && ACCESS_ADMIN_USERS.includes(String(id).toLowerCase())
   );
+
+/**
+ * Asynchronous because the answer now depends on a scope, which is read from the
+ * database rather than the token — the same reason every other scope check here
+ * is async.
+ */
+export async function mayManageAccess(user: any): Promise<boolean> {
+  if (!user) return false;
+  if (isAccessAdminIdentity(user)) return true;
+  try {
+    return (await loadScopes(user)).has('superadmin');
+  } catch (err: any) {
+    console.error('[access] mayManageAccess lookup failed:', err?.message || err);
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Middleware
@@ -362,9 +437,9 @@ export const requireScope = (scope: Scope) => async (req: any, res: any, next: a
 };
 
 /** Gate a route on being one of the accounts that may hand out access. */
-export const requireAccessAdmin = (req: any, res: any, next: any) => {
+export const requireAccessAdmin = async (req: any, res: any, next: any) => {
   if (!req.user) return res.status(401).json({ error: 'Authentication required' });
-  if (!canManageAccess(req.user)) return res.status(403).json({ error: 'Insufficient permissions' });
+  if (!(await mayManageAccess(req.user))) return res.status(403).json({ error: 'Insufficient permissions' });
   next();
 };
 
