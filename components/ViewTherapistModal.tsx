@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, User, Mail, Phone, Pencil, Save, RefreshCw, Check } from 'lucide-react';
+import { DeactivateTherapistWizard } from './DeactivateTherapistWizard';
 
 interface ViewTherapistModalProps {
   therapist: any;
@@ -25,6 +26,7 @@ const detailsOf = (t: any): EditableDetails => ({
 
 export const ViewTherapistModal: React.FC<ViewTherapistModalProps> = ({ therapist, onClose, onSaved }) => {
   const [editing, setEditing] = useState(false);
+  const [showDeactivateWizard, setShowDeactivateWizard] = useState(false);
   const [form, setForm] = useState<EditableDetails>(detailsOf(therapist));
   const [saved, setSaved] = useState<EditableDetails>(detailsOf(therapist));
   const [saving, setSaving] = useState(false);
@@ -190,44 +192,90 @@ export const ViewTherapistModal: React.FC<ViewTherapistModalProps> = ({ therapis
         </div>
 
         {/* Footer */}
-        <div className="mt-8 flex justify-end gap-3">
-          {editing ? (
-            <>
-              <button
-                onClick={handleCancel}
-                disabled={saving}
-                className="px-6 py-2 border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 text-gray-700 rounded-lg font-medium transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving || !isDirty}
-                className="px-6 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors flex items-center gap-2"
-              >
-                {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
-                {saving ? 'Saving...' : 'Save Changes'}
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={onClose}
-                className="px-6 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition-colors"
-              >
-                Close
-              </button>
-              <button
-                onClick={() => { setEditing(true); setMessage(null); }}
-                className="px-6 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
-              >
-                <Pencil size={16} />
-                Edit Details
-              </button>
-            </>
-          )}
+        <div className="mt-8 flex items-center justify-between">
+          <div>
+            {!editing && (
+              therapist.is_active ? (
+                <button
+                  onClick={() => setShowDeactivateWizard(true)}
+                  className="px-4 py-2 border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 rounded-lg font-medium transition-colors"
+                >
+                  Deactivate Therapist
+                </button>
+              ) : (
+                <button
+                  onClick={async () => {
+                    if (!window.confirm(`Reactivate ${therapist.name}?`)) return;
+                    try {
+                      const res = await fetch(`/api/admin/therapists/${encodeURIComponent(therapist.therapist_id)}/status`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ is_active: true })
+                      });
+                      if (!res.ok) throw new Error('Failed to activate');
+                      onSaved?.({ ...therapist, is_active: true });
+                    } catch (e: any) {
+                      alert(e.message);
+                    }
+                  }}
+                  className="px-4 py-2 border border-green-200 text-green-700 bg-green-50 hover:bg-green-100 rounded-lg font-medium transition-colors"
+                >
+                  Activate Therapist
+                </button>
+              )
+            )}
+          </div>
+          
+          <div className="flex gap-3">
+            {editing ? (
+              <>
+                <button
+                  onClick={handleCancel}
+                  disabled={saving}
+                  className="px-6 py-2 border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 text-gray-700 rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSave}
+                  disabled={saving || !isDirty}
+                  className="px-6 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                >
+                  {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
+                  {saving ? 'Saving...' : 'Save Changes'}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={onClose}
+                  className="px-6 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg font-medium transition-colors"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={() => { setEditing(true); setMessage(null); }}
+                  className="px-6 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+                >
+                  <Pencil size={16} />
+                  Edit Details
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
+      
+      <DeactivateTherapistWizard
+        isOpen={showDeactivateWizard}
+        onClose={() => setShowDeactivateWizard(false)}
+        therapistId={therapist.therapist_id}
+        therapistName={therapist.name}
+        onDeactivated={() => {
+          setShowDeactivateWizard(false);
+          onSaved?.({ ...therapist, is_active: false });
+        }}
+      />
     </div>
   );
 };

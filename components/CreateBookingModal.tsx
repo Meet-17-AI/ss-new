@@ -253,7 +253,11 @@ export const CreateBookingModal: React.FC<CreateBookingModalProps> = ({ isOpen, 
 
   const fetchTherapists = async () => {
     try {
-      const response = await fetch('/api/therapists-dropdown');
+      // /api/therapists-dropdown has never existed on any backend — this call
+      // 404'd, leaving the picker permanently empty. /api/therapists is the
+      // real list. Not /api/therapists-admin: that one is superadmin-only, so
+      // an ordinary admin would get a 403 and the same empty picker.
+      const response = await fetch('/api/therapists');
       if (response.ok) {
         const data = await response.json();
         setTherapists(data);

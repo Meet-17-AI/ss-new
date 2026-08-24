@@ -318,9 +318,11 @@ export const TherapistProfileGrid: React.FC = () => {
             profile_picture_url: resolveMediaUrl(selectedTherapist.profile_picture_url),
           }}
           onClose={() => setSelectedTherapist(null)}
-          // Refetch rather than patching local state: the edit also writes the
-          // linked users row, and the card shows fields derived server-side.
-          onSaved={() => fetchTherapists()}
+          // the card shows fields derived server-side.
+          onSaved={(updated) => {
+            if (updated) setSelectedTherapist(updated);
+            fetchTherapists();
+          }}
         />
       )}
     </div>

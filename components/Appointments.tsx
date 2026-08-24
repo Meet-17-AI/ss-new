@@ -573,8 +573,12 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
       const rawDate = apt.booking_start_at_raw
         ? new Date(apt.booking_start_at_raw)
         : (() => {
-            const m = apt.booking_start_at?.match(/(\w+, \w+ \d+, \d+)/);
-            return m ? new Date(m[1]) : null;
+            const m = apt.booking_start_at?.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+)/);
+            if (m) {
+              const cleanDateStr = m[1].replace(/(\d+)(st|nd|rd|th)/, '$1');
+              return new Date(cleanDateStr);
+            }
+            return null;
           })();
       if (!rawDate) return false;
       if (rawDate.getFullYear() !== parseInt(mYear) || rawDate.getMonth() !== monthMap[mName]) return false;
@@ -682,7 +686,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
             if (selectedMonth !== 'All Time') {
               const [mName, mYear] = selectedMonth.split(' ');
               const monthMap: { [key: string]: number } = { 'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5, 'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11 };
-              const rawDate = apt.booking_start_at_raw ? new Date(apt.booking_start_at_raw) : (() => { const m = apt.booking_start_at?.match(/(\w+, \w+ \d+, \d+)/); return m ? new Date(m[1]) : null; })();
+              const rawDate = apt.booking_start_at_raw ? new Date(apt.booking_start_at_raw) : (() => { const m = apt.booking_start_at?.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+)/); return m ? new Date(m[1].replace(/(\d+)(st|nd|rd|th)/, '$1')) : null; })();
               if (!rawDate) return false;
               if (rawDate.getFullYear() !== parseInt(mYear) || rawDate.getMonth() !== monthMap[mName]) return false;
             }
@@ -718,7 +722,7 @@ ${formatMode(apt.booking_mode)} joining info${apt.booking_joining_link ? `\nVide
       </div>
 
       {/* Search Bar */}
-      <div className="relative mb-6 flex gap-4">
+      <div className="relative mb-3 flex gap-4">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
           <input
