@@ -834,10 +834,11 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
             if (apt.booking_status === 'no_show' || apt.booking_status === 'no show') return false;
             if (apt.has_session_notes) return false;
             if (apt.session_timings) {
-              const timeMatch = apt.session_timings.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M)/);
+              const timeMatch = apt.session_timings.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M)/);
               if (timeMatch) {
                 const [, dateStr, , endTimeStr] = timeMatch;
-                const endDateTime = new Date(`${dateStr} ${endTimeStr}`);
+                const cleanDateStr = dateStr.replace(/(\d+)(st|nd|rd|th)/, '$1');
+                const endDateTime = new Date(`${cleanDateStr} ${endTimeStr}`);
                 return endDateTime < new Date();
               }
             }
@@ -953,6 +954,10 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
   const openClientProfile = async (client: any) => {
     setActiveView('clients');
+    // Reset the profile's session filter. It is shared state, so without this a
+    // client opened after one filtered to "No show" renders as though they have
+    // almost no sessions — the previous client's filter silently applied to them.
+    setActiveAppointmentTab('all');
     setSelectedClient(client);
     await fetchClientDetails(client);
   };
@@ -987,10 +992,11 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   };
 
   const isMeetingStarted = (apt: any) => {
-    const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M)/);
+    const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M)/);
     if (timeMatch) {
       const [, dateStr, startTimeStr] = timeMatch;
-      const startDateTime = new Date(`${dateStr} ${startTimeStr}`);
+      const cleanDateStr = dateStr.replace(/(\d+)(st|nd|rd|th)/, '$1');
+      const startDateTime = new Date(`${cleanDateStr} ${startTimeStr}`);
       if (!isNaN(startDateTime.getTime())) return new Date() >= startDateTime;
     }
     // Fallback: if session is in the past based on booking_date
@@ -999,10 +1005,11 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
   };
 
   const isMeetingEnded = (apt: any) => {
-    const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M)/);
+    const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M)/);
     if (timeMatch) {
       const [, dateStr, , endTimeStr] = timeMatch;
-      const endDateTime = new Date(`${dateStr} ${endTimeStr}`);
+      const cleanDateStr = dateStr.replace(/(\d+)(st|nd|rd|th)/, '$1');
+      const endDateTime = new Date(`${cleanDateStr} ${endTimeStr}`);
       if (!isNaN(endDateTime.getTime())) return new Date() > endDateTime;
     }
     if (apt.booking_date) return new Date() > new Date(apt.booking_date);
@@ -1037,11 +1044,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
   const handleSOSClick = (booking: any) => {
     // Time validation ENABLED - 24-hour window after session ends
-    const timeMatch = booking.session_timings?.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M) IST/);
+    const timeMatch = booking.session_timings?.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M) IST/);
     if (timeMatch) {
       const [, dateStr, startTimeStr, endTimeStr] = timeMatch;
-      const startDateTime = new Date(`${dateStr} ${startTimeStr}`);
-      const endDateTime = new Date(`${dateStr} ${endTimeStr}`);
+      const cleanDateStr = dateStr.replace(/(\d+)(st|nd|rd|th)/, '$1');
+      const startDateTime = new Date(`${cleanDateStr} ${startTimeStr}`);
+      const endDateTime = new Date(`${cleanDateStr} ${endTimeStr}`);
       const now = new Date();
       const hoursSinceStart = (now.getTime() - startDateTime.getTime()) / (1000 * 60 * 60);
       const hoursSinceEnd = (now.getTime() - endDateTime.getTime()) / (1000 * 60 * 60);
@@ -1076,11 +1084,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
       session_timings: apt.session_timings
     };
 
-    const timeMatch = booking.session_timings?.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M) IST/);
+    const timeMatch = booking.session_timings?.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M) IST/);
     if (timeMatch) {
       const [, dateStr, startTimeStr, endTimeStr] = timeMatch;
-      const startDateTime = new Date(`${dateStr} ${startTimeStr}`);
-      const endDateTime = new Date(`${dateStr} ${endTimeStr}`);
+      const cleanDateStr = dateStr.replace(/(\d+)(st|nd|rd|th)/, '$1');
+      const startDateTime = new Date(`${cleanDateStr} ${startTimeStr}`);
+      const endDateTime = new Date(`${cleanDateStr} ${endTimeStr}`);
       const now = new Date();
       const hoursSinceStart = (now.getTime() - startDateTime.getTime()) / (1000 * 60 * 60);
       const hoursSinceEnd = (now.getTime() - endDateTime.getTime()) / (1000 * 60 * 60);
@@ -1582,7 +1591,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                             <tr
                               className={`border-b hover:bg-gray-50 transition-colors cursor-pointer ${selectedClients.has(client.client_name) ? 'bg-teal-50/50' : ''
                                 }`}
-                              onClick={() => toggleRow(index)}
+                              // The row opens the client's profile, matching the
+                              // admin clients table. Row actions live behind the
+                              // chevron at the end, because clicking a client and
+                              // getting a "Send Booking Link" button instead of
+                              // the client reads as the page ignoring you.
+                              onClick={() => openClientProfile(client)}
                             >
                               <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
                                 <input
@@ -1596,10 +1610,11 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                               <td className="px-6 py-4 text-sm">
                                   <span
                                     onClick={(e) => {
+                                      // The row already opens the profile; this
+                                      // stays so the name still reads as the link
+                                      // it looks like.
                                       e.stopPropagation();
-                                      setActiveAppointmentTab('all');
-                                      fetchClientDetails(client);
-                                      setSelectedClient(client);
+                                      openClientProfile(client);
                                     }}
                                     className="text-teal-700 hover:underline cursor-pointer"
                                   >
@@ -1611,22 +1626,35 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                                     </span>
                                   )}
                               </td>
-                              <td className="px-6 py-4 text-sm">{client.booking_resource_name || 'N/A'}</td>
+                              <td className="px-6 py-4 text-sm">{(client.booking_resource_name || '').split(/\s+/).slice(0, 2).join(' ') || 'N/A'}</td>
                               <td className="px-6 py-4 text-sm">{formatMode(client.booking_mode)}</td>
                               <td className="px-6 py-4 text-sm">{client.total_sessions}</td>
                               <td className="px-6 py-4 text-sm">{formatLastSessionDate(client.last_session_date)}</td>
                               <td className="px-6 py-4 text-sm">
-                                <span
-                                  className="px-3 py-1 rounded-full text-xs font-medium text-white whitespace-nowrap"
-                                  style={{
-                                    backgroundColor:
-                                      status === 'active' ? '#21615D' :
-                                        status === 'drop-out' ? '#B91C1C' :
-                                          '#9CA3AF'
-                                  }}
-                                >
-                                  {status === 'active' ? 'Active' : status === 'drop-out' ? 'Drop-out' : 'Inactive'}
-                                </span>
+                                <div className="flex items-center justify-between gap-2">
+                                  <span
+                                    className="px-3 py-1 rounded-full text-xs font-medium text-white whitespace-nowrap"
+                                    style={{
+                                      backgroundColor:
+                                        status === 'active' ? '#21615D' :
+                                          status === 'drop-out' ? '#B91C1C' :
+                                            '#9CA3AF'
+                                    }}
+                                  >
+                                    {status === 'active' ? 'Active' : status === 'drop-out' ? 'Drop-out' : 'Inactive'}
+                                  </span>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); toggleRow(index); }}
+                                    className="p-1 rounded hover:bg-gray-200 text-gray-500 transition-colors"
+                                    title={isExpanded ? 'Hide actions' : 'Show actions'}
+                                    aria-label={isExpanded ? 'Hide actions' : 'Show actions'}
+                                  >
+                                    <ChevronDown
+                                      size={16}
+                                      className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                                    />
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                             {isExpanded && (
@@ -1799,12 +1827,13 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
     // Parse session_timings to check if session ended - handle both IST and GMT formats
     if (apt.session_timings) {
       // Match format: "Wednesday, Feb 18, 2026 at 12:00 PM - 12:50 PM (GMT+01:00)" or "Wednesday, Feb 18, 2026 at 12:00 PM - 12:50 PM IST"
-      const timeMatch = apt.session_timings.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M)/);
+      const timeMatch = apt.session_timings.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M)/);
       if (timeMatch) {
         const [, dateStr, , endTimeStr] = timeMatch;
+        const cleanDateStr = dateStr.replace(/(\d+)(st|nd|rd|th)/, '$1');
 
         // Create date string in a format that works across browsers
-        const endDateTime = new Date(`${dateStr} ${endTimeStr}`);
+        const endDateTime = new Date(`${cleanDateStr} ${endTimeStr}`);
 
         // Check if the date is valid and if session has ended
         if (!isNaN(endDateTime.getTime())) {
@@ -1932,7 +1961,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           `"${formatClientName(client.client_name).replace(/"/g, '""')}"`,
           `"${(client.client_email || '').replace(/"/g, '""')}"`,
           `"${(client.client_phone || '').replace(/"/g, '""')}"`,
-          `"${(client.booking_resource_name || 'N/A').replace(/"/g, '""')}"`,
+          `"${((client.booking_resource_name || '').split(/\s+/).slice(0, 2).join(' ') || 'N/A').replace(/"/g, '""')}"`,
           `"${formatMode(client.booking_mode).replace(/"/g, '""')}"`,
           `"${client.total_sessions}"`,
           `"${formatLastSessionDate(client.last_session_date)}"`,
@@ -1997,7 +2026,7 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
             </div>
 
             {/* Search Bar + Month Filter */}
-            <div className="mb-6 flex gap-3">
+            <div className="mb-3 flex gap-3">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
                 <input
@@ -2098,11 +2127,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                           if (apt.booking_date) {
                             return new Date(apt.booking_date);
                           }
-                          // Parse from session_timings format like "Wednesday, Feb 18, 2026 at 12:00 PM - 12:50 PM IST"
-                          const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M)/);
+                          // Parse from formatted string like "Monday, March 30th, 2026 at 10:00 AM - 10:50 AM IST"
+                          const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+) at (\d+:\d+ [AP]M)/);
                           if (timeMatch) {
                             const [, dateStr, timeStr] = timeMatch;
-                            return new Date(`${dateStr} ${timeStr}`);
+                            const cleanDateStr = dateStr.replace(/(\d+)(st|nd|rd|th)/, '$1');
+                            return new Date(`${cleanDateStr} ${timeStr}`);
                           }
                           return new Date(0); // fallback to epoch if can't parse
                         };
@@ -2281,11 +2311,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                       if (apt.booking_date) {
                         return new Date(apt.booking_date);
                       }
-                      // Parse from session_timings format like "Wednesday, Feb 18, 2026 at 12:00 PM - 12:50 PM IST"
-                      const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M)/);
+                      // Parse from formatted string like "Monday, March 30th, 2026 at 10:00 AM - 10:50 AM IST"
+                      const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+) at (\d+:\d+ [AP]M)/);
                       if (timeMatch) {
                         const [, dateStr, timeStr] = timeMatch;
-                        return new Date(`${dateStr} ${timeStr}`);
+                        const cleanDateStr = dateStr.replace(/(\d+)(st|nd|rd|th)/, '$1');
+                        return new Date(`${cleanDateStr} ${timeStr}`);
                       }
                       return new Date(0); // fallback to epoch if can't parse
                     };
@@ -2828,10 +2859,10 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
 
                             if (completed && completed.session_timings) {
                               // Parse date from session_timings to match what's shown in the table
-                              const timeMatch = completed.session_timings.match(/(\w+, \w+ \d+, \d+) at/);
+                              const timeMatch = completed.session_timings.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+) at/);
                               if (timeMatch) {
-                                const dateStr = timeMatch[1];
-                                const date = new Date(dateStr);
+                                const cleanDateStr = timeMatch[1].replace(/(\d+)(st|nd|rd|th)/, '$1');
+                                const date = new Date(cleanDateStr);
                                 if (!isNaN(date.getTime())) {
                                   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
                                 }
@@ -2927,11 +2958,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                                     if (apt.booking_date) {
                                       return new Date(apt.booking_date);
                                     }
-                                    // Parse from session_timings format like "Wednesday, Feb 18, 2026 at 12:00 PM - 12:50 PM IST"
-                                    const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M)/);
+                                    // Parse from formatted string like "Monday, March 30th, 2026 at 10:00 AM - 10:50 AM IST"
+                                    const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+) at (\d+:\d+ [AP]M)/);
                                     if (timeMatch) {
                                       const [, dateStr, timeStr] = timeMatch;
-                                      return new Date(`${dateStr} ${timeStr}`);
+                                      const cleanDateStr = dateStr.replace(/(\d+)(st|nd|rd|th)/, '$1');
+                                      return new Date(`${cleanDateStr} ${timeStr}`);
                                     }
                                     return new Date(0); // fallback to epoch if can't parse
                                   };
@@ -2968,11 +3000,12 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
                                       if (apt.booking_date) {
                                         return new Date(apt.booking_date);
                                       }
-                                      // Parse from session_timings format like "Wednesday, Feb 18, 2026 at 12:00 PM - 12:50 PM IST"
-                                      const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M)/);
+                                      // Parse from formatted string like "Monday, March 30th, 2026 at 10:00 AM - 10:50 AM IST"
+                                      const timeMatch = apt.session_timings?.match(/(\w+, \w+ \d+(?:st|nd|rd|th)?, \d+) at (\d+:\d+ [AP]M)/);
                                       if (timeMatch) {
                                         const [, dateStr, timeStr] = timeMatch;
-                                        return new Date(`${dateStr} ${timeStr}`);
+                                        const cleanDateStr = dateStr.replace(/(\d+)(st|nd|rd|th)/, '$1');
+                                        return new Date(`${cleanDateStr} ${timeStr}`);
                                       }
                                       return new Date(0); // fallback to epoch if can't parse
                                     };
