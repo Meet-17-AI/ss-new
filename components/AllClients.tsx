@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { MessageCircle, Search, Download, ChevronDown, ChevronRight, ArrowRightLeft, Plus, Send, Pencil, Check } from 'lucide-react';
 import * as XLSX from 'xlsx'
 import { SendBookingModal } from './SendBookingModal';
-import { TransferClientModal } from './TransferClientModal';
+import { TransferClientWizard } from './TransferClientWizard';
 import { EditClientContactModal } from './EditClientContactModal';
 import { Loader } from './Loader';
 import { Toast } from './Toast';
@@ -73,18 +73,10 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
   const formatSessionName = (sessionName: string | undefined, therapistName: string | undefined): string => {
     if (!sessionName) return 'N/A';
 
-    // If session name already includes "Session with", return as is
-    if (sessionName.toLowerCase().includes('session with')) {
-      return sessionName;
-    }
-
-    // If we have a therapist name, append it
-    if (therapistName) {
-      const standardizedTherapist = standardizeTherapistName(therapistName);
-      return `${sessionName} Session with ${standardizedTherapist}`;
-    }
-
-    return sessionName;
+    // The user requested to only show the first 2 words of the session name
+    // e.g. "Individual Therapy" or "Adolescent Therapy"
+    const words = sessionName.trim().split(/\s+/);
+    return words.slice(0, 2).join(' ');
   };
 
   const standardizeTherapistName = (name: string | undefined): string => {
@@ -188,6 +180,18 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [expandedRows]);
+
+  /** Open a client's profile. Shared by the row and the name link. */
+  const openClientProfile = (client: any) => {
+    if (isEditMode) return; // mid-edit, a navigation would throw the changes away
+    onClientClick?.({
+      invitee_name: client.invitee_name,
+      invitee_email: client.invitee_email,
+      invitee_phone: client.invitee_phone,
+      client_type: client.client_type,
+      tab: activeTab,
+    });
+  };
 
   const toggleRow = (index: number) => {
     const newExpanded = new Set(expandedRows);
@@ -314,23 +318,23 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
     XLSX.writeFile(wb, `clients_export_${new Date().toISOString().split('T')[0]}.xlsx`)
   };
 
+  /**
+   * A client with an upcoming session is no longer blocked from transferring.
+   *
+   * The old guard hid the button whenever latest_booking_date was in the future,
+   * because the endpoint behind it moved bookings without touching Google
+   * Calendar — transferring would have stranded the event on the previous
+   * therapist's calendar with nothing to say so. The wizard now decides each
+   * upcoming session explicitly and moves its calendar event with it, so the
+   * guard has nothing left to protect. (It read latest_booking_date, derived
+   * from booking_start_at, which is not a reliable instant anyway.)
+   */
   const handleTransferClick = (client: Client) => {
-    if (isTransferDisabled(client)) {
-      return;
-    }
-
     const actualTherapist = client.therapists && client.therapists.length > 0
       ? client.therapists[0].booking_host_name
       : client.booking_host_name;
     setSelectedClient({ ...client, booking_host_name: actualTherapist });
     setIsTransferModalOpen(true);
-  };
-
-  const isTransferDisabled = (client: Client) => {
-    if (client.latest_booking_date) {
-      return new Date(client.latest_booking_date) > new Date();
-    }
-    return false;
   };
 
   const handleSendBookingLink = async (client: Client) => {
@@ -694,7 +698,11 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
                       <React.Fragment key={index}>
                         <tr
                           className="border-b hover:bg-gray-50 cursor-pointer"
-                          onClick={() => toggleRow(index)}
+                          // The row opens the profile. Row actions moved to the
+                          // chevron at the end, because clicking a client's row
+                          // and getting two buttons instead of the client reads
+                          // as the page ignoring you.
+                          onClick={() => openClientProfile(client)}
                         >
                           <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
                               <input
@@ -718,18 +726,7 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
                               <div className="flex items-center gap-2">
                                 <span>
                                   <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (onClientClick) {
-                                        onClientClick({
-                                          invitee_name: client.invitee_name,
-                                          invitee_email: client.invitee_email,
-                                          invitee_phone: client.invitee_phone,
-                                          client_type: client.client_type,
-                                          tab: activeTab
-                                        });
-                                      }
-                                    }}
+                                    onClick={(e) => { e.stopPropagation(); openClientProfile(client); }}
                                     className="text-teal-700 hover:underline font-medium"
                                   >
                                     {formatClientName(client.invitee_name)}
@@ -792,6 +789,7 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
                                 {isLead ? formatBookingLinkDate(client.booking_link_sent_at) : (client.last_session_date ? formatDate(client.last_session_date) : 'N/A')}
                               </td>
                               <td className="px-6 py-4 text-sm">
+                                <div className="flex items-center justify-between gap-2">
                                   {(() => {
                                     const status = getClientStatus(client);
                                     return (
@@ -808,6 +806,18 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
                                       </span>
                                     );
                                   })()}
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); toggleRow(index); }}
+                                    className="p-1 rounded hover:bg-gray-200 text-gray-500 transition-colors"
+                                    title={expandedRows.has(index) ? 'Hide actions' : 'Show actions'}
+                                    aria-label={expandedRows.has(index) ? 'Hide actions' : 'Show actions'}
+                                  >
+                                    <ChevronDown
+                                      size={16}
+                                      className={`transition-transform ${expandedRows.has(index) ? 'rotate-180' : ''}`}
+                                    />
+                                  </button>
+                                </div>
                               </td>
                         </tr>
 
@@ -832,11 +842,7 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
                                       e.stopPropagation();
                                       handleTransferClick(client);
                                     }}
-                                    disabled={isTransferDisabled(client)}
-                                    className={`flex items-center gap-1 text-sm font-medium ${isTransferDisabled(client)
-                                        ? 'text-gray-400 cursor-not-allowed'
-                                        : 'text-orange-600 hover:text-orange-700'
-                                      }`}
+                                    className="flex items-center gap-1 text-sm font-medium text-orange-600 hover:text-orange-700"
                                   >
                                     <ArrowRightLeft size={16} />
                                     Transfer
@@ -902,12 +908,16 @@ export const AllClients: React.FC<{ onClientClick?: (client: any) => void; onCre
         }}
         prefilledClient={prefilledClientData}
       />
-      <TransferClientModal
+      <TransferClientWizard
         isOpen={isTransferModalOpen}
         onClose={() => setIsTransferModalOpen(false)}
-        client={selectedClient}
-        onTransferSuccess={handleTransferSuccess}
-        adminUser={adminUser}
+        client={selectedClient ? {
+          invitee_name: selectedClient.invitee_name,
+          invitee_email: selectedClient.invitee_email,
+          invitee_phone: String(selectedClient.invitee_phone || '').split(',')[0].trim(),
+        } : null}
+        currentTherapistName={selectedClient?.booking_host_name ?? null}
+        onTransferred={handleTransferSuccess}
       />
       {editingClient && (
         <EditClientContactModal

@@ -1,6 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { Search, ArrowLeft, User, Mail, Calendar as CalendarIcon, List, Eye, EyeOff, Edit, X, Upload, Link, ChevronDown, Copy, ExternalLink, Pencil, Check, Power } from 'lucide-react';
+import { Search, ArrowLeft, ArrowLeftRight, User, Mail, Calendar as CalendarIcon, List, Eye, EyeOff, Edit, X, Upload, Link, ChevronDown, Copy, ExternalLink, Pencil, Check, Power, Plus, IndianRupee, Users } from 'lucide-react';
+import {
+  therapistHistory, therapistChange, priceHistory, priceChange,
+  amountOf, formatMoney, sessionLabel, bookingDate, isCountable,
+} from '../lib/clientHistory';
 import { Loader } from './Loader';
 import { Toast } from './Toast';
 import { TherapistCalendar } from './TherapistCalendar';
@@ -15,8 +19,17 @@ import { isAwaitingPayment, statusLabel, statusBadgeClass } from '../lib/booking
 import { ViewTherapistModal } from './ViewTherapistModal';
 import { EditTherapistForm } from './EditTherapistForm';
 import { ConfirmModal } from './ConfirmModal';
+import { TransferClientWizard } from './TransferClientWizard';
 import EditEvent from './EditEvent';
 import TherapistAvailabilityCalendar from './TherapistAvailabilityCalendar';
+
+/**
+ * The client profile's tabs. `caseHistory` has no button of its own — the left
+ * column renders it — but the state still carries it, so it stays in the union.
+ */
+type ClientViewTab =
+  | 'overview' | 'bookings' | 'therapists' | 'pricing'
+  | 'sessions' | 'documents' | 'wallet' | 'caseHistory';
 
 interface Client {
   invitee_name: string;
@@ -121,8 +134,122 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
   const [assignedClientStatusFilter, setAssignedClientStatusFilter] = useState<'all' | 'active' | 'inactive' | 'drop-out'>('all');
   const [appointmentsPage, setAppointmentsPage] = useState(1);
   const appointmentsPerPage = 10;
-  const [clientViewTab, setClientViewTab] = useState<'overview' | 'sessions' | 'documents' | 'caseHistory' | 'wallet'>('overview');
+  const [clientViewTab, setClientViewTab] = useState<ClientViewTab>('overview');
   const [clientStats, setClientStats] = useState({ bookings: 0, sessionsCompleted: 0, noShows: 0, cancelled: 0 });
+
+  /**
+   * Therapist and price history, read off the bookings themselves — see
+   * lib/clientHistory for why "previous" means "the last one that was different"
+   * rather than "the one before this".
+   */
+  const [showTransferWizard, setShowTransferWizard] = useState(false);
+
+  /**
+   * Transfers recorded against this client, read from client_transfer_history.
+   *
+   * The therapist list below is DERIVED from bookings, which cannot see a
+   * transfer that produced no booking — the client had nothing upcoming, or
+   * every upcoming session was cancelled and settled during the handover. Those
+   * transfers exist only in this table, so the tab reads both and shows them
+   * together. Without this a real handover can leave no trace in the profile.
+   */
+  const [clientTransfers, setClientTransfers] = useState<any[]>([]);
+
+  const loadClientTransfers = React.useCallback(() => {
+    const params = new URLSearchParams();
+    if (selectedClient?.invitee_email) params.append('email', selectedClient.invitee_email);
+    if (selectedClient?.invitee_phone) params.append('phone', String(selectedClient.invitee_phone).split(',')[0].trim());
+    if (!params.has('email') && !params.has('phone')) { setClientTransfers([]); return; }
+    fetch(`/api/client-transfers?${params.toString()}`)
+      .then(r => (r.ok ? r.json() : { transfers: [] }))
+      .then(d => setClientTransfers(Array.isArray(d.transfers) ? d.transfers : []))
+      .catch(() => setClientTransfers([]));
+  }, [selectedClient?.invitee_email, selectedClient?.invitee_phone]);
+
+  useEffect(() => {
+    if (selectedClient) loadClientTransfers();
+    else setClientTransfers([]);
+  }, [selectedClient?.invitee_email, selectedClient?.invitee_phone, loadClientTransfers]);
+
+  const clientTherapists = useMemo(() => {
+    const fromBookings = therapistHistory(clientAppointments);
+    // If there's a recent transfer, it overrides the current therapist.
+    if (clientTransfers.length > 0) {
+      const latestTransfer = clientTransfers[0];
+      const transferDate = new Date(latestTransfer.transfer_date).getTime();
+      const latestBookingDate = fromBookings.length > 0 ? fromBookings[0].lastAt : 0;
+      
+      if (transferDate > latestBookingDate || fromBookings.length === 0) {
+        // Reset all to not current
+        fromBookings.forEach(t => t.isCurrent = false);
+        
+        // Find if transferred therapist is in history
+        const existing = fromBookings.find(t => t.name === latestTransfer.to_therapist_name);
+        if (existing) {
+          existing.isCurrent = true;
+          // Move to top
+          const idx = fromBookings.indexOf(existing);
+          fromBookings.splice(idx, 1);
+          fromBookings.unshift(existing);
+        } else {
+          // Add as new entry with 0 sessions
+          fromBookings.unshift({
+            name: latestTransfer.to_therapist_name,
+            sessions: 0,
+            firstAt: transferDate,
+            lastAt: transferDate,
+            isCurrent: true
+          });
+        }
+      }
+    }
+    return fromBookings;
+  }, [clientAppointments, clientTransfers]);
+
+  const clientTherapistChange = useMemo(() => {
+    return {
+      current: clientTherapists[0]?.name ?? null,
+      previous: clientTherapists.find(t => t.name !== clientTherapists[0]?.name)?.name ?? null
+    };
+  }, [clientTherapists]);
+
+  /**
+   * Who the client is with now, as an ID rather than a name.
+   *
+   * therapistHistory() groups by NAME, because older bookings carry no
+   * therapist_id. The transfer needs the id — matching a therapist by name is
+   * what made the old endpoint miss renamed therapists — so it is recovered
+   * from the most recent booking that has both.
+   */
+  const currentTherapistName = useMemo(
+    () => clientTherapists.find(t => t.isCurrent)?.name ?? null,
+    [clientTherapists]
+  );
+  const currentTherapistId = useMemo(() => {
+    if (!currentTherapistName) return null;
+    const match = clientAppointments.find(
+      (a: any) => (a.booking_host_name || '').trim() === currentTherapistName && a.therapist_id
+    );
+    return match?.therapist_id ?? null;
+  }, [clientAppointments, currentTherapistName]);
+  const clientPrices = useMemo(() => priceHistory(clientAppointments), [clientAppointments]);
+  const clientPriceChange = useMemo(() => priceChange(clientAppointments), [clientAppointments]);
+
+  /**
+   * Open the new-session wizard with this client already chosen.
+   *
+   * The wizard is driven by the phone number — typing one looks the client up and
+   * fills in the rest — so handing it the number is the same thing as selecting
+   * the client, and needs no second code path to keep in step with it.
+   */
+  const startNewSessionForClient = () => {
+    const raw = String(selectedClient?.invitee_phone || '').split(',')[0].trim();
+    if (!raw) {
+      setToast({ message: 'This client has no phone number on file to start a session with.', type: 'error' });
+      return;
+    }
+    navigate(`/admin/new-session?phone=${encodeURIComponent(raw)}`);
+  };
   const [isCaseHistoryVisible, setIsCaseHistoryVisible] = useState(false);
   const [caseHistoryData, setCaseHistoryData] = useState<any>(null);
   const [showCaseHistoryPasswordModal, setShowCaseHistoryPasswordModal] = useState(false);
@@ -1170,6 +1297,14 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
               <Pencil size={14} />
               Edit Profile
             </button>
+            <button
+              onClick={startNewSessionForClient}
+              className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg
+                         transition-colors bg-teal-700 text-white hover:bg-teal-800"
+            >
+              <Plus size={14} />
+              Create New
+            </button>
           </div>
         </div>
 
@@ -1274,44 +1409,33 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
 
           {/* Right Column - Tabbed Content */}
           <div className="col-span-8 space-y-6">
-            {/* Navigation Tabs */}
-            <div className="flex gap-8 border-b">
-              {clientSessionType.hasPaidSessions ? (
-                // Show all tabs for paid sessions (removed Case History tab)
-                [
-                  { id: 'overview' as const, label: 'Overview' },
-                  { id: 'sessions' as const, label: 'Progress Notes' },
-                  { id: 'documents' as const, label: 'Goal Tracking' },
-                  { id: 'wallet' as const, label: 'Wallet' }
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setClientViewTab(tab.id)}
-                    className={`pb-3 font-medium text-sm ${clientViewTab === tab.id
-                        ? 'text-teal-700 border-b-2 border-teal-700'
-                        : 'text-gray-500 hover:text-gray-700'
-                      }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))
-              ) : (
-                // Show only Overview for free consultation only (removed Pre-therapy Notes tab)
-                [
-                  { id: 'overview' as const, label: 'Overview' }
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setClientViewTab(tab.id)}
-                    className={`pb-3 font-medium text-sm ${clientViewTab === tab.id
-                        ? 'text-teal-700 border-b-2 border-teal-700'
-                        : 'text-gray-500 hover:text-gray-700'
-                      }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))
-              )}
+            {/* Navigation Tabs
+                Overview, Bookings, Therapists and Pricing are built from the
+                booking record, so they work for anyone with a booking at all —
+                including a client who has only had a free consultation. The last
+                three read clinical and wallet records that only exist once a paid
+                session has happened, so they stay behind that. */}
+            <div className="flex flex-wrap gap-x-8 gap-y-2 border-b">
+              {([
+                { id: 'overview' as const, label: 'Overview', paidOnly: false },
+                { id: 'bookings' as const, label: 'Bookings', paidOnly: false },
+                { id: 'therapists' as const, label: 'Therapists', paidOnly: false },
+                { id: 'pricing' as const, label: 'Pricing', paidOnly: false },
+                { id: 'sessions' as const, label: 'Progress Notes', paidOnly: true },
+                { id: 'documents' as const, label: 'Goal Tracking', paidOnly: true },
+                { id: 'wallet' as const, label: 'Wallet', paidOnly: true },
+              ]).filter((tab) => !tab.paidOnly || clientSessionType.hasPaidSessions).map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setClientViewTab(tab.id)}
+                  className={`pb-3 font-medium text-sm ${clientViewTab === tab.id
+                      ? 'text-teal-700 border-b-2 border-teal-700'
+                      : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
             </div>
 
             {/* Date Filter */}
@@ -1495,11 +1619,76 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                   </div>
                 </div>
 
+                {/* Who they see and what they pay, with what it was before it
+                    changed. "Previous" is blank when nothing has changed — see
+                    lib/clientHistory — because repeating the current value under
+                    a "previous" label would say nothing. */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-white border rounded-lg p-4">
+                    <p className="text-sm text-gray-600 mb-3 flex items-center gap-2">
+                      <Users size={15} className="text-gray-400" /> Therapist
+                    </p>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-xs uppercase tracking-wide text-gray-400">Current</span>
+                      <span className="text-lg font-bold text-gray-900 text-right">
+                        {clientTherapistChange.current || 'Not assigned'}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-baseline justify-between gap-3 border-t pt-2">
+                      <span className="text-xs uppercase tracking-wide text-gray-400">Previous</span>
+                      <span className="text-sm font-medium text-gray-500 text-right">
+                        {clientTherapistChange.previous || '—'}
+                      </span>
+                    </div>
+                    {clientTherapists.length > 1 && (
+                      <button
+                        onClick={() => setClientViewTab('therapists')}
+                        className="mt-3 text-xs font-medium text-teal-700 hover:underline"
+                      >
+                        {clientTherapists.length} therapists in total →
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="bg-white border rounded-lg p-4">
+                    <p className="text-sm text-gray-600 mb-3 flex items-center gap-2">
+                      <IndianRupee size={15} className="text-gray-400" /> Session price
+                    </p>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-xs uppercase tracking-wide text-gray-400">Current</span>
+                      <span className="text-lg font-bold text-gray-900 text-right">
+                        {formatMoney(clientPriceChange.current?.amount ?? null, clientPriceChange.current?.currency)}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-baseline justify-between gap-3 border-t pt-2">
+                      <span className="text-xs uppercase tracking-wide text-gray-400">Previous</span>
+                      <span className="text-sm font-medium text-gray-500 text-right">
+                        {formatMoney(clientPriceChange.previous?.amount ?? null, clientPriceChange.previous?.currency)}
+                      </span>
+                    </div>
+                    {clientPrices.length > 0 && (
+                      <button
+                        onClick={() => setClientViewTab('pricing')}
+                        className="mt-3 text-xs font-medium text-teal-700 hover:underline"
+                      >
+                        See price history →
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Tab Content - Bookings */}
+            {clientViewTab === 'bookings' && (
+              <>
                 <div>
-                  <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                    <User size={20} className="text-gray-700" />
-                    Bookings
-                  </h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                      <User size={20} className="text-gray-700" />
+                      Bookings
+                    </h3>
+                  </div>
 
                   <div className="flex gap-6 mb-4">
                     {[
@@ -1645,6 +1834,208 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
               </>
             )}
 
+            {/* Tab Content - Therapists
+                Every therapist this client has been with, newest first. Built
+                from the bookings, because that is where the history is. */}
+            {clientViewTab === 'therapists' && (
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold flex items-center gap-2">
+                    <Users size={20} className="text-gray-700" />
+                    Therapists
+                  </h3>
+                  {/* Available even when the client has upcoming sessions: the
+                      wizard decides each one, rather than the old rule that
+                      simply hid the button whenever a future booking existed. */}
+                  <button
+                    onClick={() => setShowTransferWizard(true)}
+                    disabled={clientDetailsLoading || clientTherapists.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium
+                               border border-teal-700 text-teal-700 hover:bg-teal-50
+                               disabled:border-gray-200 disabled:text-gray-300 disabled:hover:bg-transparent"
+                    title={clientTherapists.length === 0 ? 'This client has no therapist to transfer from yet.' : undefined}
+                  >
+                    <ArrowLeftRight size={15} />
+                    Transfer client
+                  </button>
+                </div>
+                {clientDetailsLoading ? (
+                  <div className="p-8 text-center"><Loader /></div>
+                ) : clientTherapists.length === 0 ? (
+                  <div className="bg-white border rounded-lg p-8 text-center text-gray-400 text-sm">
+                    No therapist has been assigned to this client yet.
+                  </div>
+                ) : (
+                  <div className="bg-white border rounded-lg overflow-hidden">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Therapist</th>
+                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Sessions</th>
+                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">First session</th>
+                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Last session</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {clientTherapists.map((t) => (
+                          <tr key={t.name} className="border-b last:border-0">
+                            <td className="px-4 py-3 text-sm">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-gray-900">{t.name}</span>
+                                {t.isCurrent ? (
+                                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-teal-50 text-teal-700 border border-teal-200">
+                                    Current
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 border">
+                                    Previous
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-600">{t.sessions}</td>
+                            <td className="px-4 py-3 text-sm text-gray-600">
+                              {t.sessions > 0 && t.firstAt ? new Date(t.firstAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                            </td>
+                            <td className="px-4 py-3 text-sm text-gray-600">
+                              {t.sessions > 0 && t.lastAt ? new Date(t.lastAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Handovers, from client_transfer_history.
+                    Shown alongside the table rather than merged into it because
+                    the two answer different questions: the table says who this
+                    client has SEEN, this says when they were moved and by whom —
+                    including a transfer that moved no sessions, which the
+                    booking-derived table above cannot show at all. */}
+                {clientTransfers.length > 0 && (
+                  <div className="mt-6">
+                    <p className="text-xs font-medium uppercase tracking-wide text-gray-500 mb-2">
+                      Transfer history
+                    </p>
+                    <div className="bg-white border rounded-lg divide-y">
+                      {clientTransfers.map((t) => (
+                        <div key={t.transfer_id} className="p-3 text-sm">
+                          <div className="flex flex-wrap items-baseline gap-x-2">
+                            <span className="text-gray-600">{t.from_therapist_name || 'Unassigned'}</span>
+                            <ArrowLeftRight size={13} className="text-gray-400" />
+                            <span className="font-medium text-gray-900">{t.to_therapist_name}</span>
+                            <span className="text-gray-400 text-xs ml-auto">
+                              {t.transfer_date
+                                ? new Date(t.transfer_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                                : '—'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {t.bookings_moved} session{t.bookings_moved === 1 ? '' : 's'} moved
+                            {t.sessions_cancelled > 0 && `, ${t.sessions_cancelled} cancelled`}
+                            {Number(t.wallet_credited) > 0 && ` · ₹${Number(t.wallet_credited).toLocaleString('en-IN')} credited`}
+                            {t.transferred_by_admin_name && ` · by ${t.transferred_by_admin_name}`}
+                          </p>
+                          {t.reason && <p className="text-xs text-gray-500 mt-0.5 italic">{t.reason}</p>}
+                          {t.calendar_status === 'partial' && (
+                            <p className="text-xs text-amber-700 mt-1">
+                              A calendar event from this transfer could not be created and may need adding manually.
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab Content - Pricing
+                What this client was actually charged, session by session. Quoted
+                is shown alongside because the two differ whenever wallet credit
+                or a discount was applied, and only showing one hides that. */}
+            {clientViewTab === 'pricing' && (
+              <div>
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <IndianRupee size={20} className="text-gray-700" />
+                  Pricing
+                </h3>
+
+                <div className="grid grid-cols-2 gap-4 mb-5">
+                  <div className="bg-white border rounded-lg p-4">
+                    <p className="text-sm text-gray-600 mb-1">Current price</p>
+                    <p className="text-3xl font-bold text-gray-900">
+                      {formatMoney(clientPriceChange.current?.amount ?? null, clientPriceChange.current?.currency)}
+                    </p>
+                    {clientPriceChange.current && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        {bookingDate(clientPriceChange.current.booking)}
+                      </p>
+                    )}
+                  </div>
+                  <div className="bg-white border rounded-lg p-4">
+                    <p className="text-sm text-gray-600 mb-1">Previous price</p>
+                    <p className="text-3xl font-bold text-gray-500">
+                      {formatMoney(clientPriceChange.previous?.amount ?? null, clientPriceChange.previous?.currency)}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      {clientPriceChange.previous
+                        ? bookingDate(clientPriceChange.previous.booking)
+                        : 'Price has not changed'}
+                    </p>
+                  </div>
+                </div>
+
+                {clientDetailsLoading ? (
+                  <div className="p-8 text-center"><Loader /></div>
+                ) : clientPrices.length === 0 ? (
+                  <div className="bg-white border rounded-lg p-8 text-center text-gray-400 text-sm">
+                    No priced sessions yet.
+                  </div>
+                ) : (
+                  <div className="bg-white border rounded-lg overflow-hidden">
+                    <table className="w-full">
+                      <thead className="bg-gray-50 border-b">
+                        <tr>
+                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Date</th>
+                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Session</th>
+                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-600">Therapist</th>
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-600">Quoted</th>
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-600">Paid</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {clientPrices.map((p, i) => {
+                          const quoted = p.booking.quoted_amount != null && p.booking.quoted_amount !== ''
+                            ? Number(p.booking.quoted_amount) : null;
+                          const wallet = Number(p.booking.wallet_amount_applied || 0);
+                          return (
+                            <tr key={p.booking.booking_id || i} className="border-b last:border-0">
+                              <td className="px-4 py-3 text-sm text-gray-600">{bookingDate(p.booking)}</td>
+                              <td className="px-4 py-3 text-sm">{sessionLabel(p.booking)}</td>
+                              <td className="px-4 py-3 text-sm text-gray-600">{p.booking.booking_host_name || '—'}</td>
+                              <td className="px-4 py-3 text-sm text-right text-gray-500">
+                                {formatMoney(quoted && quoted > 0 ? quoted : null, p.currency)}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-right font-medium text-gray-900">
+                                {formatMoney(p.amount, p.currency)}
+                                {wallet > 0 && (
+                                  <span className="ml-1 text-xs font-normal text-teal-700">
+                                    (₹{wallet.toLocaleString('en-IN')} wallet)
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Sessions Tab */}
             {clientViewTab === 'sessions' && clientSessionType.hasPaidSessions && (
               selectedProgressNoteId ? (
@@ -1710,6 +2101,26 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
         </div>
 
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+        <TransferClientWizard
+          isOpen={showTransferWizard}
+          onClose={() => setShowTransferWizard(false)}
+          client={selectedClient ? {
+            invitee_name: selectedClient.invitee_name,
+            invitee_email: selectedClient.invitee_email,
+            // Bookings may carry several numbers for one client; the first is
+            // the one the rest of this profile is keyed on.
+            invitee_phone: String(selectedClient.invitee_phone || '').split(',')[0].trim(),
+          } : null}
+          currentTherapistName={currentTherapistName}
+          currentTherapistId={currentTherapistId}
+          onTransferred={() => {
+            // Both views must refresh: the therapist table is derived from
+            // bookings, the history below it from client_transfer_history.
+            if (selectedClient) openClientDetails(selectedClient);
+            loadClientTransfers();
+          }}
+        />
 
         {/* Case History Password Modal */}
         {showCaseHistoryPasswordModal && (
@@ -2237,7 +2648,7 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                             apt.invitee_email === client.invitee_email ||
                             phoneNumbers.some(phone => apt.invitee_phone === phone)
                           );
-                          const sessionName = clientAppointment?.booking_resource_name || 'N/A';
+                          const sessionName = (clientAppointment?.booking_resource_name || '').split(/\s+/).slice(0, 2).join(' ') || 'N/A';
                           const mode = formatBookingMode(clientAppointment?.booking_mode || clientAppointment?.mode);
 
                           return (
@@ -2874,21 +3285,6 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
                               </div>
                             </td>
                           </tr>
-                          {selectedExpandedTherapistIndex === index && (
-                            <tr className="bg-gray-100">
-                              <td colSpan={7} className="px-6 py-4">
-                                <div className="flex gap-2 justify-center items-center">
-                                  <button
-                                    onClick={(e) => { e.stopPropagation(); toggleTherapistStatus(therapist); }}
-                                    className="px-6 py-2 border border-gray-400 rounded-lg text-sm text-gray-700 hover:bg-white flex items-center gap-2"
-                                  >
-                                    <Power size={16} />
-                                    {therapist.is_active ? 'Deactivate Therapist' : 'Activate Therapist'}
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          )}
                         </React.Fragment>
                       ))
                     )}
