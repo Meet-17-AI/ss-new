@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Loader, Wallet as WalletIcon, ArrowDownLeft, ArrowUpRight } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Loader, Wallet as WalletIcon, ArrowDownLeft, ArrowUpRight, Plus, HandCoins } from 'lucide-react';
+import { WalletAdjustModal, WalletAdjustMode } from './WalletAdjustModal';
 
 /**
  * Wallet tab on the client profile.
@@ -37,8 +38,10 @@ interface WalletTxn {
 const REASON_LABELS: Record<string, string> = {
   CANCELLATION_CREDIT: 'Added from cancelled session',
   BOOKING_SETTLEMENT: 'Redeemed on booking',
-  REFUND_OUT: 'Paid back to client',
+  REFUND_OUT: 'Encashed — paid back to client',
   MANUAL_ADJUSTMENT: 'Manual adjustment',
+  // Written when a client is transferred to a therapist who charges less.
+  TRANSFER_ADJUSTMENT: 'Price difference on transfer',
 };
 
 const formatMoney = (v: number | string | null | undefined): string =>
@@ -70,42 +73,48 @@ export const ClientWalletTab: React.FC<ClientWalletTabProps> = ({ clientPhone, c
   const [balance, setBalance] = useState(0);
   const [transactions, setTransactions] = useState<WalletTxn[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [adjustMode, setAdjustMode] = useState<WalletAdjustMode | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+
+  /**
+   * Reading the ledger. Pulled out of the effect so an adjustment can re-run it:
+   * the balance and the activity list are both derived from these rows, so
+   * re-fetching is what keeps the header, the totals and the list in agreement
+   * after a movement.
+   */
+  const load = useCallback(async () => {
+    if (!clientPhone && !clientEmail) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (clientPhone) params.set('phone', clientPhone);
+      if (clientEmail) params.set('email', clientEmail);
+      params.set('limit', '100');
+
+      const res = await fetch(`/api/wallet/transactions?${params.toString()}`);
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const data = await res.json();
+      setBalance(Number(data?.balance) || 0);
+      setTransactions(Array.isArray(data?.transactions) ? data.transactions : []);
+    } catch (err) {
+      setError('Could not load wallet details.');
+      console.error('[ClientWalletTab] Error loading wallet:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [clientPhone, clientEmail]);
 
   useEffect(() => {
     let cancelled = false;
-
-    const load = async () => {
-      if (!clientPhone && !clientEmail) {
-        setLoading(false);
-        return;
-      }
-      setLoading(true);
-      setError(null);
-      try {
-        const params = new URLSearchParams();
-        if (clientPhone) params.set('phone', clientPhone);
-        if (clientEmail) params.set('email', clientEmail);
-        params.set('limit', '100');
-
-        const res = await fetch(`/api/wallet/transactions?${params.toString()}`);
-        if (!res.ok) throw new Error(`Request failed (${res.status})`);
-        const data = await res.json();
-        if (cancelled) return;
-        setBalance(Number(data?.balance) || 0);
-        setTransactions(Array.isArray(data?.transactions) ? data.transactions : []);
-      } catch (err) {
-        if (!cancelled) setError('Could not load wallet details.');
-        console.error('[ClientWalletTab] Error loading wallet:', err);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    load();
     // Guards against a stale response from a previously-selected client
     // overwriting the current one.
+    load().then(() => { if (cancelled) return; });
     return () => { cancelled = true; };
-  }, [clientPhone, clientEmail]);
+  }, [load]);
 
   const totalCredited = transactions
     .filter(t => t.direction === 'CREDIT')
@@ -138,15 +147,48 @@ export const ClientWalletTab: React.FC<ClientWalletTabProps> = ({ clientPhone, c
         <div className="bg-white rounded-lg border p-5">
           <p className="text-xs uppercase tracking-wider text-gray-500 mb-1">Total Added</p>
           <p className="text-2xl font-bold text-green-700">{formatMoney(totalCredited)}</p>
-          <p className="text-xs text-gray-500 mt-1">From cancelled sessions</p>
+          {/* Deliberately not "from cancelled sessions" any more — credit can
+              now also be added by hand, so naming one source would be wrong. */}
+          <p className="text-xs text-gray-500 mt-1">Everything ever credited</p>
         </div>
 
         <div className="bg-white rounded-lg border p-5">
-          <p className="text-xs uppercase tracking-wider text-gray-500 mb-1">Total Redeemed</p>
+          <p className="text-xs uppercase tracking-wider text-gray-500 mb-1">Total Taken Out</p>
           <p className="text-2xl font-bold text-gray-800">{formatMoney(totalRedeemed)}</p>
-          <p className="text-xs text-gray-500 mt-1">Applied to later bookings</p>
+          <p className="text-xs text-gray-500 mt-1">Spent on bookings or paid back</p>
         </div>
       </div>
+
+      {/* Actions. Encash is disabled at a zero balance rather than hidden, so it
+          is clear the action exists and simply has nothing to pay out. */}
+      <div className="flex flex-wrap gap-3">
+        <button
+          onClick={() => setAdjustMode('CREDIT')}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
+                     bg-teal-700 text-white hover:bg-teal-800 transition-colors"
+        >
+          <Plus size={16} />
+          Add money to wallet
+        </button>
+
+        <button
+          onClick={() => setAdjustMode('REFUND_OUT')}
+          disabled={balance <= 0}
+          title={balance <= 0 ? 'There is no balance to pay back.' : undefined}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border
+                     border-red-300 text-red-700 hover:bg-red-50 transition-colors
+                     disabled:border-gray-200 disabled:text-gray-300 disabled:hover:bg-transparent"
+        >
+          <HandCoins size={16} />
+          Encash / offline refund
+        </button>
+      </div>
+
+      {flash && (
+        <div className="p-3 rounded-lg bg-green-50 border border-green-200 text-sm text-green-800">
+          {flash}
+        </div>
+      )}
 
       {error && (
         <div className="p-4 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">{error}</div>
@@ -226,6 +268,33 @@ export const ClientWalletTab: React.FC<ClientWalletTabProps> = ({ clientPhone, c
           </ul>
         )}
       </div>
+
+      {adjustMode && (
+        <WalletAdjustModal
+          client={{
+            client_name: clientName,
+            client_phone: clientPhone,
+            client_email: clientEmail,
+            balance,
+          }}
+          initialMode={adjustMode}
+          onClose={() => setAdjustMode(null)}
+          onDone={() => {
+            const done = adjustMode === 'CREDIT'
+              ? 'Money added to the wallet.'
+              : adjustMode === 'REFUND_OUT'
+                ? 'Payout recorded. The balance has been reduced.'
+                : 'Balance adjusted.';
+            setAdjustMode(null);
+            setFlash(done);
+            // Re-read the ledger rather than patching state locally: the server
+            // is the source of truth for the balance, and the new movement has
+            // to appear in the activity list below with its running balance.
+            load();
+            setTimeout(() => setFlash(null), 5000);
+          }}
+        />
+      )}
     </div>
   );
 };
