@@ -2464,6 +2464,13 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
           </div>
 
         </nav>
+
+        {/* Switching dashboards is navigation, so it lives with the nav rather
+            than up in the account area. Renders nothing — footer and all —
+            unless this therapist has been granted another dashboard as well. */}
+        <div className="border-t p-4 empty:hidden">
+          <DashboardSwitcher />
+        </div>
       </div>
 
       {/* Main Content */}
@@ -2473,10 +2480,6 @@ export function TherapistDashboard({ onLogout, user }: TherapistDashboardProps) 
         <header className="bg-white border-b px-8 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm">
           <div className="flex-1"></div>
           <div className="flex items-center gap-4">
-            {/* Renders nothing unless this therapist has been granted another
-                dashboard as well. */}
-            <DashboardSwitcher />
-
             <button
               onClick={() => setActiveView('tickets')}
               className="p-2 text-gray-600 hover:bg-gray-100 rounded-full transition-colors relative"

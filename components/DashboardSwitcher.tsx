@@ -19,6 +19,11 @@ import {
  *
  * Renders nothing for the ordinary case of a single dashboard, so the three
  * shells can mount it unconditionally.
+ *
+ * Presented for the foot of the sidebar — full width, opening upward. It used to
+ * sit in the top-right header beside the account menu, where it read as one more
+ * account control rather than as navigation. Switching dashboards is navigation,
+ * so it belongs with the nav.
  */
 export const DashboardSwitcher: React.FC<{ className?: string }> = ({ className = '' }) => {
   const { scopes } = useAuth();
@@ -78,20 +83,23 @@ export const DashboardSwitcher: React.FC<{ className?: string }> = ({ className 
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={leaving}
-        className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2
+        className="flex w-full items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2.5
                    text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50
                    disabled:cursor-wait disabled:opacity-60"
       >
-        <LayoutGrid size={16} className="text-teal-700" />
-        <span className="hidden sm:inline">
+        <LayoutGrid size={16} className="shrink-0 text-teal-700" />
+        <span className="flex-1 truncate text-left">
           {leaving ? 'Opening CRM…' : current ? SCOPE_LABEL[current] : 'Switch dashboard'}
         </span>
-        <ChevronDown size={14} className="text-gray-400" />
+        <ChevronDown size={14} className="shrink-0 text-gray-400" />
       </button>
 
       {open && (
+        // Opens UPWARD: this sits at the bottom of the sidebar, so a downward
+        // menu would render off-screen.
         <div role="menu"
-          className="absolute right-0 z-50 mt-2 w-56 rounded-xl border bg-white py-1 shadow-lg">
+          className="absolute bottom-full left-0 z-50 mb-2 w-full min-w-[13rem] rounded-xl border
+                     bg-white py-1 shadow-lg">
           <p className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
             Switch to
           </p>

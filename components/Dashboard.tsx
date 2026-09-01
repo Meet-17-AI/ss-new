@@ -514,6 +514,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
             </>
           )}
         </nav>
+
+        {/* Switching dashboards is navigation, so it lives with the nav rather
+            than up in the account area. Renders nothing — footer and all —
+            unless this user holds more than one dashboard. */}
+        <div className="border-t p-4 empty:hidden">
+          <DashboardSwitcher />
+        </div>
       </div>
 
       {/* Main Content */}
@@ -523,9 +530,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onLogout, user }) => {
         <header className="bg-white border-b px-8 py-4 flex items-center justify-between z-10 sticky top-0 shadow-sm">
           <div className="flex-1"></div>
           <div className="flex items-center gap-4">
-            {/* Renders nothing unless this user holds more than one dashboard. */}
-            <DashboardSwitcher />
-
             {user?.username !== 'Test' && (
               <button
                 className="flex items-center gap-2 rounded-lg px-4 py-2 hover:opacity-90 transition-colors shadow-sm"
