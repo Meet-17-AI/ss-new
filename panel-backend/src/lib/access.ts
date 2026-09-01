@@ -528,13 +528,92 @@ export const isEnforcing = (): boolean => ENFORCING;
  * becomes unreadable. What the audit actually needs is the DISTINCT set of
  * (route, role) pairs that would break, which is a short list.
  *
- * Call `getShadowDenials()` to read it. In-memory rather than a table because it
- * is a diagnostic for a one-off rollout decision, not a record worth keeping.
+ * PERSISTED, because the decision it feeds takes a week and the process does not
+ * live that long.
+ *
+ * This was a Map, on the reasoning that a one-off rollout diagnostic is not worth
+ * a table. That is true of the DATA and false of the JOB: the instruction is "run
+ * in shadow for a week, then read the list", and an in-memory list is emptied by
+ * every deploy, restart and idle spin-down in between. Whoever finally read it
+ * would see the traffic since the last restart and mistake a short quiet window
+ * for a clean week — which is precisely the wrong way to be wrong about a
+ * permissions rollout. It also could not aggregate across instances, so a second
+ * container would split the evidence in two.
+ *
+ * Written fire-and-forget: a diagnostic must never slow down or fail the request
+ * it is observing.
  */
-const shadowSeen = new Map<string, { route: string; role: string; scope: Scope; count: number; firstAt: string; lastAt: string }>();
+/**
+ * Which service recorded a denial.
+ *
+ * Part of the key because both services share ONE database and both define
+ * /api/leads and /api/crm/*. Keyed on (route, role) alone their rows would merge,
+ * and the reader could not tell whether the panel's embedded CRM or the real CRM
+ * produced the traffic — which is the whole question when deciding what to fix.
+ */
+const SERVICE = 'panel-backend';
 
-export const getShadowDenials = () =>
-  Array.from(shadowSeen.values()).sort((a, b) => b.count - a.count);
+const SHADOW_TABLE = `
+  CREATE TABLE IF NOT EXISTS access_shadow_denials (
+    service    TEXT        NOT NULL,
+    route      TEXT        NOT NULL,
+    role       TEXT        NOT NULL,
+    scope      TEXT        NOT NULL,
+    count      BIGINT      NOT NULL DEFAULT 1,
+    first_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (service, route, role)
+  )`;
+
+let shadowTableReady: Promise<void> | null = null;
+const ensureShadowTable = (): Promise<void> =>
+  (shadowTableReady ??= pool.query(SHADOW_TABLE).then(
+    () => undefined,
+    (err: any) => {
+      // Reset so a later call retries rather than caching the failure forever.
+      shadowTableReady = null;
+      console.error('[access] could not create shadow denial table:', err?.message || err);
+      throw err;
+    }
+  ));
+
+/** Local dedup for the console only, so the log shows the distinct list once. */
+const shadowPrinted = new Set<string>();
+
+const recordShadowDenial = (route: string, role: string, scope: Scope): void => {
+  void ensureShadowTable()
+    .then(() =>
+      pool.query(
+        `INSERT INTO access_shadow_denials (service, route, role, scope)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (service, route, role)
+         DO UPDATE SET count = access_shadow_denials.count + 1, last_at = now()`,
+        [SERVICE, route, role, scope]
+      )
+    )
+    .catch((err: any) => console.error('[access] shadow denial not recorded:', err?.message || err));
+};
+
+/**
+ * Reads BOTH services' rows, not just this one's. The gate has to be switched on
+ * in both together, so the decision needs both halves in one list.
+ */
+export const getShadowDenials = async () => {
+  try {
+    await ensureShadowTable();
+    const { rows } = await pool.query(
+      `SELECT service, route, role, scope, count::int AS count,
+              first_at AS "firstAt", last_at AS "lastAt"
+         FROM access_shadow_denials ORDER BY count DESC`
+    );
+    return rows;
+  } catch {
+    // An unreadable diagnostic must not be reported as an empty one — that reads
+    // as "nothing would break", which is the single most dangerous wrong answer
+    // this endpoint can give.
+    throw new Error('shadow denial log is unavailable');
+  }
+};
 
 export const scopeGate = async (req: any, res: any, next: any) => {
   const path = req.path || '';
@@ -555,15 +634,13 @@ export const scopeGate = async (req: any, res: any, next: any) => {
   const role = String(req.user.role || 'unknown');
 
   if (!ENFORCING) {
-    const key = `${req.method} ${path}|${role}`;
-    const now = new Date().toISOString();
-    const seen = shadowSeen.get(key);
-    if (seen) {
-      seen.count += 1;
-      seen.lastAt = now;
-    } else {
-      shadowSeen.set(key, { route: `${req.method} ${path}`, role, scope: match.scope, count: 1, firstAt: now, lastAt: now });
-      // Printed only the FIRST time, so the console shows the distinct list.
+    const route = `${req.method} ${path}`;
+    const key = `${route}|${role}`;
+    recordShadowDenial(route, role, match.scope);
+    // Printed only the FIRST time in this process, so the console shows the
+    // distinct list. The durable count lives in the table.
+    if (!shadowPrinted.has(key)) {
+      shadowPrinted.add(key);
       console.warn(`[access] SHADOW would deny ${role} ${req.method} ${path} — needs ${match.scope}`);
     }
     return next();

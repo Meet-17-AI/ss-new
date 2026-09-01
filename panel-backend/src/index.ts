@@ -1562,14 +1562,22 @@ app.post('/api/handoff/redeem', async (req: any, res) => {
  * identical lines. An empty list means nothing legitimate is being caught and the
  * gate is safe to enforce.
  */
-app.get('/api/admin/access-shadow-denials', requireAccessAdmin, (req: any, res) => {
-  res.json({
-    // Read from access.ts rather than re-derived from the env var here. The two
-    // had already drifted: this tested `=== 'true'` while the gate defaults to
-    // enforcing unless explicitly disabled, so it reported "off" while blocking.
-    enforcing: isEnforcing(),
-    denials: getShadowDenials(),
-  });
+app.get('/api/admin/access-shadow-denials', requireAccessAdmin, async (req: any, res) => {
+  try {
+    res.json({
+      // Read from access.ts rather than re-derived from the env var here. The two
+      // had already drifted: this tested `=== 'true'` while the gate defaults to
+      // enforcing unless explicitly disabled, so it reported "off" while blocking.
+      enforcing: isEnforcing(),
+      denials: await getShadowDenials(),
+    });
+  } catch (err: any) {
+    // A 500 rather than an empty list. This endpoint's answer decides whether
+    // the gate gets switched on, and "[]" means "nothing would break" — the one
+    // wrong answer that causes an outage.
+    console.error('[access] shadow denial read failed:', err?.message || err);
+    res.status(500).json({ error: 'The shadow denial log could not be read. Do not treat this as an empty list.' });
+  }
 });
 
 // Verify password endpoint (for case history access)
