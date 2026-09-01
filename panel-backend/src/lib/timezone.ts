@@ -24,7 +24,7 @@ const MONTH_IDX: Record<string, number> = {
 export function getBookingStartMs(inviteeTime: string | null | undefined): number | null {
   if (!inviteeTime) return null;
 
-  // Only a string convertToIST() actually converted may be parsed.
+  // Only a string that is actually IST may be parsed as IST.
   //
   // convertToIST() returns its INPUT UNCHANGED when the shape does not match —
   // and the regex below was loose enough to match most of that unconverted
@@ -35,8 +35,9 @@ export function getBookingStartMs(inviteeTime: string | null | undefined): numbe
   // sat in the wrong place: the real slot free, a phantom one blocked.
   //
   // tryConvertToIST() returns null on that path instead, so the failure is a
-  // failure. The trailing IST anchor below is the second half of the same
-  // guard — nothing but a converted string carries it.
+  // failure — while still accepting the many rows that are stored already in
+  // IST and need no conversion at all. The trailing IST anchor below is the
+  // second half of the same guard.
   const istStr = tryConvertToIST(inviteeTime);
   if (istStr === null) {
     console.warn(`[timezone] unparseable booking time, treating as unknown: ${JSON.stringify(inviteeTime)}`);
@@ -66,18 +67,36 @@ export function getBookingStartMs(inviteeTime: string | null | undefined): numbe
  * every display caller relies on it handing back something printable. Anything
  * that needs to KNOW whether the conversion worked must use this — see
  * getBookingStartMs() for what silent failure cost.
+ *
+ * TWO shapes are valid, and conflating them is a bug this function has already
+ * caused once:
+ *
+ *   1. Carries a zone offset — "… 3:00 PM - 3:50 PM (GMT-06:00)". Needs
+ *      converting, and convertToIST() does it.
+ *   2. ALREADY IST — "… 3:00 PM - 3:50 PM IST". Needs nothing done to it.
+ *
+ * The second is not a failure, and treating it as one is not a safe default:
+ * 19% of live bookings are stored that way, and returning null for them made
+ * every one of those sessions stop blocking its own slot. Identity alone is
+ * therefore NOT the failure signal — an already-IST string is legitimately
+ * returned unchanged. The trailing 'IST' marker is what separates the two.
  */
 export const tryConvertToIST = (timeStr: string): string | null => {
   const converted = convertToIST(timeStr);
-  // convertToIST() returns its input on every failure path, so identity is the
-  // failure signal. A successful conversion always ends in ' IST'.
-  return converted !== timeStr && converted.endsWith('IST') ? converted : null;
+  // Ends in IST either because convertToIST() put it there, or because it was
+  // already IST and came back untouched. Both are usable; neither is a failure.
+  // Anything else is a shape this module does not understand.
+  return converted.trimEnd().endsWith('IST') ? converted : null;
 };
 
 export const convertToIST = (timeStr: string): string => {
   if (!timeStr) return timeStr;
 
-  const match = timeStr.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M) \(GMT([+-]\d+:\d+)\)/);
+  // `Z` is accepted alongside ±HH:MM because live rows carry "(GMTZ)" — the
+  // ISO spelling of UTC. Without it those rows matched nothing, convertToIST
+  // returned them unchanged, and they were then read as though they were
+  // already IST: 5:30 out, silently.
+  const match = timeStr.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M) \(GMT([+-]\d+:\d+|Z)\)/);
   if (!match) return timeStr;
 
   try {
@@ -113,7 +132,9 @@ export const convertToIST = (timeStr: string): string => {
     // is -0, and `-0 < 0` is false in JavaScript, so '-00:30' added its minutes
     // instead of subtracting them and landed an hour out.
     const sign = offset.trim().startsWith('-') ? -1 : 1;
-    const [offsetH, offsetM] = offset.split(':').map(n => Math.abs(parseInt(n)));
+    const [offsetH, offsetM] = offset === 'Z'
+      ? [0, 0]
+      : offset.split(':').map(n => Math.abs(parseInt(n)));
     const offsetMinutes = sign * (offsetH * 60 + offsetM);
 
     // Create a date in the source timezone by treating it as UTC, then adjusting

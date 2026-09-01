@@ -502,12 +502,23 @@ const SCOPED_API_ROUTES: { pattern: RegExp; scope: Scope }[] = [
  * permissions check should fail in.
  *
  * STAGING A ROLLOUT: set ACCESS_ENFORCE=false, run for a week, read
- * GET /api/access/shadow-denials — it lists the distinct route+role pairs that
+ * GET /api/admin/access-shadow-denials — it lists the distinct route+role pairs that
  * would break — fix or reclassify them, then remove the variable. Both services
  * must be flipped together; the CRM enforcing while the panel does not is a
  * policy split rather than a rollout.
  */
 const ENFORCING = String(process.env.ACCESS_ENFORCE ?? 'true').toLowerCase() !== 'false';
+
+/**
+ * The gate's real state, for the diagnostic endpoint to report.
+ *
+ * Exported rather than recomputed at the call site: the diagnostic used to test
+ * `ACCESS_ENFORCE === 'true'` on its own, which stopped matching this file the
+ * moment the default flipped — so it would have told an operator the gate was
+ * off while it was enforcing. A status readout that can disagree with the thing
+ * it reports on is worse than no readout.
+ */
+export const isEnforcing = (): boolean => ENFORCING;
 
 /**
  * Shadow denials, collapsed to one entry per route+role+day.

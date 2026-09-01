@@ -26,7 +26,7 @@ import {
   Scope, ALL_SCOPES, isScope, baseScopeForRole, baseScopesForRole, grantableScopes, loadScopes,
   invalidateAccess, mayManageAccess, isAccessAdminIdentity, requireScope, requireAccessAdmin, scopeGate,
   requireTherapistScope, mayAccessClientRecords, requireClientRecordAccess,
-  getShadowDenials, isBaseAdminRole, requireSuperAdmin,
+  getShadowDenials, isEnforcing, isBaseAdminRole, requireSuperAdmin,
 } from './lib/access';
 import {
   resolvePrice, recordPriceLock, logPriceResolution, resolveServiceIdFromLabel,
@@ -243,6 +243,29 @@ app.set('trust proxy', 1);
        WHERE public_token IS NULL
     `);
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_bookings_public_token ON bookings (public_token)`);
+
+    // Repoint the stored check-in URLs at the token.
+    //
+    // Every existing row holds ".../booking-confirmation/<booking_id>", and that
+    // link now 404s — the reschedule flow sends this exact string to clients over
+    // WhatsApp and email, so leaving it would break the link in every message
+    // about an existing booking. The origin is preserved (rows carry a mix of
+    // production and localhost) and only the final path segment is swapped.
+    //
+    // The NOT LIKE guard makes this a no-op on every boot after the first.
+    const repointed = await pool.query(`
+      UPDATE bookings
+         SET public_booking_checkin_url =
+               regexp_replace(public_booking_checkin_url,
+                              '/booking-confirmation/[^/]*$',
+                              '/booking-confirmation/' || public_token)
+       WHERE public_token IS NOT NULL
+         AND public_booking_checkin_url LIKE '%/booking-confirmation/%'
+         AND public_booking_checkin_url NOT LIKE '%' || public_token
+    `);
+    if (repointed.rowCount) {
+      console.log(`[DB] repointed ${repointed.rowCount} check-in URL(s) at public_token.`);
+    }
     console.log('[DB] bookings.public_token column ensured.');
   } catch (err: any) {
     console.log('[DB Migration Error]', err.message);
@@ -1541,7 +1564,10 @@ app.post('/api/handoff/redeem', async (req: any, res) => {
  */
 app.get('/api/admin/access-shadow-denials', requireAccessAdmin, (req: any, res) => {
   res.json({
-    enforcing: String(process.env.ACCESS_ENFORCE || '').toLowerCase() === 'true',
+    // Read from access.ts rather than re-derived from the env var here. The two
+    // had already drifted: this tested `=== 'true'` while the gate defaults to
+    // enforcing unless explicitly disabled, so it reported "off" while blocking.
+    enforcing: isEnforcing(),
     denials: getShadowDenials(),
   });
 });
@@ -5500,7 +5526,16 @@ app.post('/api/reschedule-booking', async (req, res) => {
       try {
         const { sendBookingRescheduledClient, sendBookingRescheduledTherapist } = await import('./automations/index.js');
         const baseUrl = frontendBaseUrl();
-        const shortLink = bookingDetails.public_booking_checkin_url || `${baseUrl}/booking-confirmation/${booking_id}`;
+        // Rebuilt from public_token rather than trusting the stored column.
+        //
+        // The confirmation page is keyed on the token now, so a link ending in
+        // booking_id 404s. The stored column is backfilled at boot, but it is
+        // also the older of the two values and the token is the authority —
+        // deriving it here means a row that somehow missed the backfill still
+        // sends the client a link that works.
+        const shortLink = bookingDetails.public_token
+          ? `${baseUrl}/booking-confirmation/${bookingDetails.public_token}`
+          : bookingDetails.public_booking_checkin_url;
 
         try {
           await sendBookingRescheduledClient(
