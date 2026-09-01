@@ -487,12 +487,27 @@ const SCOPED_API_ROUTES: { pattern: RegExp; scope: Scope }[] = [
 /**
  * Whether the gate BLOCKS or merely reports.
  *
- * Defaults to shadow mode: every would-be denial is logged and allowed through.
- * Run it that way first, read the log for a week, then set ACCESS_ENFORCE=true.
- * The alternative — enforcing on day one against routes nobody has audited — is
- * how a permissions rollout becomes an outage.
+ * DEFAULTS TO ENFORCING. Shadow mode is now opt-in, via ACCESS_ENFORCE=false.
+ *
+ * It was the other way round, and the rollout it was staged for never finished:
+ * the variable was set in no environment file, no Dockerfile and no compose
+ * file, so both services ran the gate in shadow for months. Every route it
+ * covers — /api/admin/*, /api/wallets, /api/org-settings, /api/refunds,
+ * /api/crm/*, /api/leads — was in practice gated on nothing but "presented a
+ * valid token".
+ *
+ * A control whose default is "off" and whose "on" switch lives only in a
+ * comment is not a control. Defaulting to enforce means a new environment that
+ * forgets the variable is safe rather than open, which is the direction a
+ * permissions check should fail in.
+ *
+ * STAGING A ROLLOUT: set ACCESS_ENFORCE=false, run for a week, read
+ * GET /api/access/shadow-denials — it lists the distinct route+role pairs that
+ * would break — fix or reclassify them, then remove the variable. Both services
+ * must be flipped together; the CRM enforcing while the panel does not is a
+ * policy split rather than a rollout.
  */
-const ENFORCING = String(process.env.ACCESS_ENFORCE || '').toLowerCase() === 'true';
+const ENFORCING = String(process.env.ACCESS_ENFORCE ?? 'true').toLowerCase() !== 'false';
 
 /**
  * Shadow denials, collapsed to one entry per route+role+day.

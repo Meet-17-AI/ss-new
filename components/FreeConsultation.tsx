@@ -295,7 +295,7 @@ export const FreeConsultation: React.FC = () => {
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || 'Could not book your consultation.');
-      navigate(`/booking-confirmation/${d.booking_id || d.bookingId || ''}`);
+      navigate(`/booking-confirmation/${d.public_token || ''}`);
     } catch (e: any) {
       setError(e.message || 'Something went wrong.');
       setSubmitting(false);

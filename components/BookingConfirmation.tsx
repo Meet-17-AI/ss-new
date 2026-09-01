@@ -53,6 +53,11 @@ export const BookingConfirmation: React.FC<BookingConfirmationProps> = ({ bookin
     const params = new URLSearchParams(window.location.search);
     return params.get('view') === 'cancel' ? 'cancelling' : 'details';
   });
+  // Held apart from `booking` because it arrives from its own time-gated call.
+  const [joinLink, setJoinLink] = useState<{ url: string | null; opensAt: string | null }>({
+    url: null,
+    opensAt: null,
+  });
   const [cancelReason, setCancelReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
@@ -70,6 +75,24 @@ export const BookingConfirmation: React.FC<BookingConfirmationProps> = ({ bookin
       const data = await res.json();
       setBooking(data);
       setError(null);
+
+      // The video link is fetched separately and only released around the
+      // session time — it is a door into a live therapy session, not a detail of
+      // the record. Before the window opens the server answers 425 with the
+      // time it unlocks, which is what the page shows instead of a link.
+      try {
+        const linkRes = await fetch(`/api/public/booking/${bookingId}/join-link`);
+        const linkData = await linkRes.json().catch(() => ({}));
+        if (linkRes.ok) {
+          setJoinLink({ url: linkData.joiningLink, opensAt: null });
+        } else if (linkRes.status === 425) {
+          setJoinLink({ url: null, opensAt: linkData.opensAt || null });
+        } else {
+          setJoinLink({ url: null, opensAt: null });
+        }
+      } catch {
+        setJoinLink({ url: null, opensAt: null });
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -86,7 +109,9 @@ export const BookingConfirmation: React.FC<BookingConfirmationProps> = ({ bookin
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          booking_id: bookingId,
+          // The route identifies the booking by token for unauthenticated
+          // callers; the id in this URL is one.
+          public_token: bookingId,
           reason: cancelReason,
           notify: true
         })
@@ -307,9 +332,13 @@ export const BookingConfirmation: React.FC<BookingConfirmationProps> = ({ bookin
                       <div className="bp-conf-item-text">
                         <span style={{ display: 'block', fontWeight: 600, marginBottom: 2 }}>{sessionMode.label}</span>
                         {sessionMode.isOnline
-                          ? (booking.booking_joining_link
-                              ? <a href={booking.booking_joining_link} target="_blank" rel="noopener noreferrer" className="bp-conf-meet-link">{booking.booking_joining_link}</a>
-                              : <span style={{ fontSize: 13, color: '#6b7280' }}>The meeting link will be shared before your session.</span>)
+                          ? (joinLink.url
+                              ? <a href={joinLink.url} target="_blank" rel="noopener noreferrer" className="bp-conf-meet-link">{joinLink.url}</a>
+                              : <span style={{ fontSize: 13, color: '#6b7280' }}>
+                                  {joinLink.opensAt
+                                    ? `Your meeting link opens at ${moment(joinLink.opensAt).format('h:mm A on D MMM')}.`
+                                    : 'The meeting link will be shared before your session.'}
+                                </span>)
                           : <span style={{ fontSize: 13, color: '#374151' }}>{OFFICE_LOCATION}</span>}
                       </div>
                     </div>
@@ -323,7 +352,7 @@ export const BookingConfirmation: React.FC<BookingConfirmationProps> = ({ bookin
                       const start = startTime.clone().utc().format('YYYYMMDDTHHmmss') + 'Z';
                       const end = startTime.clone().add(duration, 'minutes').utc().format('YYYYMMDDTHHmmss') + 'Z';
                       const title = encodeURIComponent(service.title);
-                      const details = encodeURIComponent(`Meeting link: ${booking.booking_joining_link || ''}`);
+                      const details = encodeURIComponent(joinLink.url ? `Meeting link: ${joinLink.url}` : 'Your meeting link will be available shortly before the session.');
                       const location = encodeURIComponent('SafeStories, Lullanagar, Pune / Google Meet');
                       const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${start}/${end}&details=${details}&location=${location}`;
                       window.open(url, '_blank');

@@ -295,14 +295,35 @@ export async function remapClientKey(
   const newKey = buildClientKey(newPhone, newEmail);
   if (!oldKey || !newKey || oldKey === newKey) return;
 
-  const { rowCount } = await pool.query(
-    `UPDATE wallet_transactions
-     SET client_key = $1, client_phone = $2, client_email = $3
-     WHERE client_key = $4`,
-    [newKey, newPhone || null, newEmail || null, oldKey]
-  );
-  if (rowCount) {
-    console.log(`[wallet] Remapped ${rowCount} ledger row(s) from ${oldKey} to ${newKey}`);
+  // Takes the SAME advisory locks debitWallet() takes, for the same reason.
+  // This moves rows out from under a key; a debit that had already computed a
+  // balance from those rows would otherwise commit against a set that no longer
+  // exists, and overdraw the destination. Both keys are locked, and always in
+  // sorted order — two remaps running in opposite directions would deadlock if
+  // each grabbed its own "first" key.
+  const [lockA, lockB] = [oldKey, newKey].sort();
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockA]);
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [lockB]);
+
+    const { rowCount } = await client.query(
+      `UPDATE wallet_transactions
+       SET client_key = $1, client_phone = $2, client_email = $3
+       WHERE client_key = $4`,
+      [newKey, newPhone || null, newEmail || null, oldKey]
+    );
+    await client.query('COMMIT');
+    if (rowCount) {
+      console.log(`[wallet] Remapped ${rowCount} ledger row(s) from ${oldKey} to ${newKey}`);
+    }
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
 }
 
@@ -346,14 +367,34 @@ export async function consolidateWallet(
   candidateKeys.delete(currentKey);
   if (candidateKeys.size === 0) return currentKey;
 
-  const { rowCount } = await pool.query(
-    `UPDATE wallet_transactions
-     SET client_key = $1, client_phone = $2, client_email = $3
-     WHERE client_key = ANY($4::varchar[])`,
-    [currentKey, phone || null, e, Array.from(candidateKeys)]
-  );
-  if (rowCount) {
-    console.log(`[wallet] Consolidated ${rowCount} ledger row(s) onto ${currentKey}`);
+  // Locked on the destination key, matching debitWallet(). Consolidation only
+  // ever ADDS rows to currentKey, so an unlocked run could not overdraw it —
+  // but it could make a concurrent debit read a balance that was mid-move and
+  // reject a payment the client could afford. Locking makes the two serialise.
+  //
+  // Only the destination is locked, not every source: the sources are keys this
+  // client has abandoned, nothing else writes to them, and locking an unbounded
+  // set in a loop is how deadlocks get introduced.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [currentKey]);
+
+    const { rowCount } = await client.query(
+      `UPDATE wallet_transactions
+       SET client_key = $1, client_phone = $2, client_email = $3
+       WHERE client_key = ANY($4::varchar[])`,
+      [currentKey, phone || null, e, Array.from(candidateKeys)]
+    );
+    await client.query('COMMIT');
+    if (rowCount) {
+      console.log(`[wallet] Consolidated ${rowCount} ledger row(s) onto ${currentKey}`);
+    }
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
   return currentKey;
 }

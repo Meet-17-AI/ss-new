@@ -5,41 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/Favicon-SafeStories.png" />
     <title>Welcome to Safestories Panel</title>
-    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['Poppins', 'sans-serif'],
-            },
-            colors: {
-              teal: {
-                700: '#21615D', // Approximate deep teal from image
-                800: '#1A4D4A',
-                900: '#123836',
-              },
-              brand: {
-                yellow: '#F4A936',
-                teal: '#21615D',
-              }
-            },
-            keyframes: {
-              'slide-in': {
-                '0%': { transform: 'translateX(100%)', opacity: '0' },
-                '100%': { transform: 'translateX(0)', opacity: '1' }
-              }
-            },
-            animation: {
-              'slide-in': 'slide-in 0.3s ease-out'
-            }
-          }
-        }
-      }
-    </script>
     <style>
       /* Custom utility for the specific shadow/glow if needed, but Tailwind usually suffices */
       body {
@@ -47,16 +15,6 @@
         -moz-osx-font-smoothing: grayscale;
       }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0"
-  }
-}
-</script>
 <link rel="stylesheet" href="/index.css">
 </head>
   <body>

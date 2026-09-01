@@ -226,10 +226,21 @@ export async function resolvePrice(
       );
 
       if (voided.rows.length === 0) {
-        const amount = Number(row.locked_amount);
+        // A lock protects the client from an INCREASE. It is not a floor.
+        //
+        // Taking locked_amount unconditionally meant that when a therapy's price
+        // was cut, everyone holding a lock kept paying the old higher rate — and
+        // isGrandfathered, computed as `!==`, reported them as being on a
+        // discount while they were overpaying. Nobody audits the clients who are
+        // supposedly getting a deal, so it stayed invisible.
+        //
+        // `Math.min` is the whole fix: a lock never costs more than a new client
+        // would pay today. The flag is now `<`, matching the override branch
+        // above and the documented meaning on ResolvedPrice.
+        const amount = Math.min(Number(row.locked_amount), listAmount);
         return {
           amount, currency: 'INR', source: 'lock', ruleId: row.id,
-          isGrandfathered: amount !== listAmount, listAmount, serviceId,
+          isGrandfathered: amount < listAmount, listAmount, serviceId,
         };
       }
     }
@@ -299,6 +310,16 @@ export async function recordPriceLock(
       );
     }
 
+    // Two partial unique indexes back this ON CONFLICT, not one:
+    //   uq_client_price_lock_email      ... WHERE client_email IS NOT NULL
+    //   uq_client_price_lock_phone_only ... WHERE client_email IS NULL
+    //
+    // Only the first existed before. A client with no email on file therefore
+    // matched no unique index, nothing could conflict, and this wrote a fresh
+    // lock row on every single confirmed booking — unbounded growth, and a
+    // release-and-reset above that then retired all of them at once. The second
+    // index closes exactly that gap while leaving the documented
+    // many-phones-per-one-email case free to insert.
     await db.query(
       `INSERT INTO client_price_lock (
          client_email, client_phone_digits, service_id, locked_amount,

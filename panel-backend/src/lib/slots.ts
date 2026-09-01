@@ -25,6 +25,53 @@
 
 import { getBookingStartMs } from './timezone';
 
+/**
+ * Serialise everything that books a given therapist.
+ *
+ * Every conflict check in this codebase reads, decides, then inserts, with
+ * nothing held in between — so two admins (or two visitors on the public form)
+ * choosing the same slot at the same moment both pass the check and both write.
+ * The window is small and the paths are many.
+ *
+ * The database is the only place that can hold this invariant, since the racing
+ * parties are separate requests and potentially separate processes. An advisory
+ * lock keyed on the therapist is the cheap version: it costs one round trip,
+ * needs no schema change, and releases automatically on COMMIT or ROLLBACK.
+ * Different therapists never contend.
+ *
+ * The thorough version is an exclusion constraint on (therapist_id, time range).
+ * It is deliberately NOT used yet: it would have to be built on
+ * booking_start_at, which holds a mix of UTC instants and IST wall-clock text —
+ * so it would compare values that do not mean the same thing and reject valid
+ * bookings. Normalise that column first, then add the constraint and keep this
+ * as belt-and-braces.
+ *
+ * Callers must do the conflict check INSIDE the callback, not before it.
+ */
+export async function withTherapistSlotLock<T>(
+  pool: { connect: () => Promise<any> },
+  therapistId: string | null | undefined,
+  fn: (tx: any) => Promise<T>
+): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // A null therapist cannot double-book anyone, but still needs the
+    // transaction so the caller has one connection to work on.
+    if (therapistId) {
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`therapist:${therapistId}`]);
+    }
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 /** A half-open interval [startMs, endMs). */
 export interface Window {
   startMs: number;
@@ -146,14 +193,35 @@ export async function loadAvailability(
     }
   }
 
-  // Every session this therapist is holding. Read via booking_invitee_time
-  // rather than booking_start_at, for the reason in this file's header.
+  // Every session this therapist is holding in the window of interest.
+  //
+  // Read via booking_invitee_time rather than booking_start_at, for the reason
+  // in this file's header — but FILTERED on booking_start_at, which is the
+  // column with an index and a usable type. That column's timezone conventions
+  // are inconsistent, so the bound is widened by a day at each end and the
+  // precise cut is still made in JS below against getBookingStartMs(). A sloppy
+  // pre-filter is safe here in a way a sloppy final answer is not.
+  //
+  // Without this the query returned every booking the therapist had ever taken,
+  // and assessSlot() then scanned all of them for each candidate slot —
+  // suggestAcrossDays() made that days × slots × entire-career.
+  const SQL_FILTER_SLACK_MS = 24 * 60 * MINUTE;
   const params: any[] = [therapistId];
+  const bounds: string[] = [];
+  if (opts.fromMs) {
+    params.push(new Date(opts.fromMs - SQL_FILTER_SLACK_MS).toISOString());
+    bounds.push(`booking_start_at >= $${params.length}`);
+  }
+  if (opts.toMs) {
+    params.push(new Date(opts.toMs + SQL_FILTER_SLACK_MS).toISOString());
+    bounds.push(`booking_start_at <= $${params.length}`);
+  }
   const bookingRows = await db.query(
     `SELECT booking_id, booking_invitee_time, booking_duration, booking_status
        FROM bookings
       WHERE therapist_id = $1
-        AND booking_invitee_time IS NOT NULL`,
+        AND booking_invitee_time IS NOT NULL
+        ${bounds.length ? `AND booking_start_at IS NOT NULL AND ${bounds.join(' AND ')}` : ''}`,
     params
   );
 

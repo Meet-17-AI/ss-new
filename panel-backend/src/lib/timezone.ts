@@ -23,9 +23,31 @@ const MONTH_IDX: Record<string, number> = {
 
 export function getBookingStartMs(inviteeTime: string | null | undefined): number | null {
   if (!inviteeTime) return null;
-  const istStr = convertToIST(inviteeTime);
-  const m = istStr.match(/(\w{3}) (\d{1,2}), (\d{4}) at (\d{1,2}):(\d{2}) ([AP]M)/);
-  if (!m) return null;
+
+  // Only a string convertToIST() actually converted may be parsed.
+  //
+  // convertToIST() returns its INPUT UNCHANGED when the shape does not match —
+  // and the regex below was loose enough to match most of that unconverted
+  // string anyway, then subtract 5:30 from it as though it were IST. A booking
+  // recorded as "Aug 27, 2026 at 10:00 AM (GMT-06:00)" (no weekday, no end
+  // time) came back 11.5 hours out, with no null and no error. slots.ts builds
+  // its whole picture of a therapist's booked time from this, so the session
+  // sat in the wrong place: the real slot free, a phantom one blocked.
+  //
+  // tryConvertToIST() returns null on that path instead, so the failure is a
+  // failure. The trailing IST anchor below is the second half of the same
+  // guard — nothing but a converted string carries it.
+  const istStr = tryConvertToIST(inviteeTime);
+  if (istStr === null) {
+    console.warn(`[timezone] unparseable booking time, treating as unknown: ${JSON.stringify(inviteeTime)}`);
+    return null;
+  }
+
+  const m = istStr.match(/(\w{3}) (\d{1,2}), (\d{4}) at (\d{1,2}):(\d{2}) ([AP]M)[^]*IST/);
+  if (!m) {
+    console.warn(`[timezone] converted string did not parse: ${JSON.stringify(istStr)}`);
+    return null;
+  }
   const [, mon, day, year, hh, mm, period] = m;
   const monthIdx = MONTH_IDX[mon];
   if (monthIdx === undefined) return null;
@@ -36,12 +58,28 @@ export function getBookingStartMs(inviteeTime: string | null | undefined): numbe
   return Date.UTC(parseInt(year, 10), monthIdx, parseInt(day, 10), hour, parseInt(mm, 10)) - 330 * 60000;
 }
 
+/**
+ * IST rendering of a booking time, or null when the input is not a shape this
+ * understands.
+ *
+ * The null-returning half of convertToIST(), which cannot report failure because
+ * every display caller relies on it handing back something printable. Anything
+ * that needs to KNOW whether the conversion worked must use this — see
+ * getBookingStartMs() for what silent failure cost.
+ */
+export const tryConvertToIST = (timeStr: string): string | null => {
+  const converted = convertToIST(timeStr);
+  // convertToIST() returns its input on every failure path, so identity is the
+  // failure signal. A successful conversion always ends in ' IST'.
+  return converted !== timeStr && converted.endsWith('IST') ? converted : null;
+};
+
 export const convertToIST = (timeStr: string): string => {
   if (!timeStr) return timeStr;
-  
+
   const match = timeStr.match(/(\w+, \w+ \d+, \d+) at (\d+:\d+ [AP]M) - (\d+:\d+ [AP]M) \(GMT([+-]\d+:\d+)\)/);
   if (!match) return timeStr;
-  
+
   try {
     const [, dateStr, startTime, endTime, offset] = match;
     
@@ -68,15 +106,24 @@ export const convertToIST = (timeStr: string): string => {
     const start = parseTime(startTime);
     const end = parseTime(endTime);
     
-    // Parse timezone offset (e.g., "-06:00" or "+05:30")
-    const [offsetH, offsetM] = offset.split(':').map(n => parseInt(n));
-    const offsetMinutes = offsetH * 60 + (offsetH < 0 ? -offsetM : offsetM);
-    
+    // Parse timezone offset (e.g., "-06:00" or "+05:30").
+    //
+    // The sign is taken from the STRING, not from the parsed hour. Reading it
+    // from the number went wrong for sub-hour negative offsets: parseInt('-00')
+    // is -0, and `-0 < 0` is false in JavaScript, so '-00:30' added its minutes
+    // instead of subtracting them and landed an hour out.
+    const sign = offset.trim().startsWith('-') ? -1 : 1;
+    const [offsetH, offsetM] = offset.split(':').map(n => Math.abs(parseInt(n)));
+    const offsetMinutes = sign * (offsetH * 60 + offsetM);
+
     // Create a date in the source timezone by treating it as UTC, then adjusting
     // The time given is in the source timezone, so we create it as if it's UTC
     const sourceDate = Date.UTC(parseInt(year), monthMap[month], parseInt(day), start.hour, start.minute);
-    const sourceEndDate = Date.UTC(parseInt(year), monthMap[month], parseInt(day), end.hour, end.minute);
-    
+    // A session that runs past midnight ends on the NEXT day. Building both from
+    // the same date reported an end ~23 hours before the start.
+    let sourceEndDate = Date.UTC(parseInt(year), monthMap[month], parseInt(day), end.hour, end.minute);
+    if (sourceEndDate < sourceDate) sourceEndDate += 24 * 60 * 60000;
+
     // Convert from source timezone to UTC (subtract the source offset)
     const utcDate = sourceDate - (offsetMinutes * 60000);
     const utcEndDate = sourceEndDate - (offsetMinutes * 60000);

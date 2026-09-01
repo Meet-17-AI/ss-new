@@ -1,3 +1,9 @@
+/* Tailwind, compiled into this file at build time. Replaces the runtime CDN
+   script that used to sit in index.html — see tailwind.config.js for why. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 /* Global styles */
 * {
   margin: 0;

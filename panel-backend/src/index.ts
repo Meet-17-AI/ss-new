@@ -20,6 +20,8 @@ import { sendPublicOtp, verifyPublicOtp, otpKey } from './lib/publicOtp';
 import { logWebhookApi } from './lib/webhookApiLogger.js';
 import { createNotification, notifyAllAdmins } from './lib/notifications';
 import { logActivity, categoryForRole, extractSafeMetadata } from './lib/activityLog';
+import { authLimiter, publicLimiter, apiLimiter } from './lib/rateLimit';
+import { securityHeaders } from './lib/securityHeaders';
 import {
   Scope, ALL_SCOPES, isScope, baseScopeForRole, baseScopesForRole, grantableScopes, loadScopes,
   invalidateAccess, mayManageAccess, isAccessAdminIdentity, requireScope, requireAccessAdmin, scopeGate,
@@ -35,7 +37,7 @@ import {
   debitWallet, getTransactions, listWallets, getTotalLiability, remapClientKey,
   consolidateWallet, InsufficientWalletBalance,
 } from './lib/wallet';
-import { loadAvailability, assessSlot, holdsASlot } from './lib/slots';
+import { loadAvailability, assessSlot, holdsASlot, withTherapistSlotLock } from './lib/slots';
 import {
   findClientBookings, buildPreview, assessMoney, sessionNameOf, formatInviteeTime,
   findExistingTransfer, applyDecision, settleCancelledSession, balanceFor,
@@ -142,6 +144,14 @@ function issueToken(user: { id: any; username?: string; role: string; therapist_
 
 const app = express();
 
+// Render (and every other PaaS here) terminates TLS at a proxy, so req.ip is the
+// proxy's address unless this is set. Rate limiters key on req.ip — without this
+// they would treat the entire internet as one client and throttle everyone the
+// moment any single caller misbehaved. `1` = trust exactly one hop, which is the
+// correct value for a single load balancer; trusting all hops would let a caller
+// forge X-Forwarded-For and get a fresh bucket per request.
+app.set('trust proxy', 1);
+
 // Auto-migrate schema
 (async () => {
   try {
@@ -201,6 +211,72 @@ const app = express();
     console.log('[DB Migration Error]', err.message);
   }
 
+  // How many wrong codes have been offered against one reset request.
+  //
+  // This column is the actual fix for the reset-code brute force: throttling how
+  // often a code can be SENT does nothing, because the attacker only needs one
+  // code to exist and then wants a million guesses at it. Counting guesses
+  // against the record is what bounds that. See /api/forgot-password/verify-otp.
+  try {
+    await pool.query(`ALTER TABLE password_reset_tokens ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0`);
+    console.log('[DB] password_reset_tokens.attempts column ensured.');
+  } catch (err: any) {
+    console.log('[DB Migration Error]', err.message);
+  }
+
+  // A public, unguessable handle for one booking.
+  //
+  // booking_id is a six-digit number, so the public confirmation lookup keyed on
+  // it could be walked end to end — every client's name, therapist, therapy type
+  // and video joining link, for the price of 900k requests. This column is the
+  // capability the public route keys on instead; booking_id stays the internal
+  // key and stops being a credential.
+  try {
+    await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS public_token TEXT`);
+    // Backfill every existing row, then keep it unique. gen_random_uuid() is
+    // built in from PG13 and needs no extension; two uuids give 256 bits, well
+    // past anything enumerable.
+    await pool.query(`
+      UPDATE bookings
+         SET public_token = replace(gen_random_uuid()::text, '-', '')
+                         || replace(gen_random_uuid()::text, '-', '')
+       WHERE public_token IS NULL
+    `);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_bookings_public_token ON bookings (public_token)`);
+    console.log('[DB] bookings.public_token column ensured.');
+  } catch (err: any) {
+    console.log('[DB Migration Error]', err.message);
+  }
+
+  // Close the duplicate-lock path for clients who have no email on file.
+  //
+  // uq_client_price_lock_email only covers rows WHERE client_email IS NOT NULL,
+  // so a phone-only client matched no unique index at all and recordPriceLock's
+  // ON CONFLICT DO NOTHING could never fire — one new lock row per confirmed
+  // booking, forever. This mirrors that index for exactly the rows it misses.
+  // Scoped to client_email IS NULL so the documented many-phones-per-email case
+  // (338 emails, 376 phones in live data) still inserts freely.
+  try {
+    await pool.query(`
+      DELETE FROM client_price_lock a
+       USING client_price_lock b
+       WHERE a.released_at IS NULL AND b.released_at IS NULL
+         AND a.client_email IS NULL AND b.client_email IS NULL
+         AND a.client_phone_digits IS NOT NULL
+         AND a.client_phone_digits = b.client_phone_digits
+         AND a.service_id = b.service_id
+         AND a.id > b.id
+    `);
+    await pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_client_price_lock_phone_only
+        ON client_price_lock (client_phone_digits, service_id)
+        WHERE released_at IS NULL AND client_email IS NULL AND client_phone_digits IS NOT NULL
+    `);
+    console.log('[DB] client_price_lock phone-only uniqueness ensured.');
+  } catch (err: any) {
+    console.log('[DB Migration Error]', err.message);
+  }
+
   // Give the Fluid admin a real users row.
   //
   // It used to be a hardcoded username/password pair compared in the login
@@ -251,6 +327,9 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
+// CSP and friends, on every response including static assets and errors.
+app.use(securityHeaders);
+
 // Health check endpoint for zero-downtime deployment
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
@@ -295,6 +374,31 @@ const optionalUser = (req: any): any | null => {
     return null;
   }
 };
+
+/**
+ * Identifiers, from the CSPRNG rather than Math.random().
+ *
+ * Every generated id in this file used to be
+ * `Math.floor(100000 + Math.random() * 900000)`. Two problems, and the second is
+ * the one that bit: V8's generator is reconstructible from observed output, and
+ * 900,000 values is small enough to walk end to end in an afternoon.
+ *
+ * `newBookingId` is deliberately 12 digits. At six, the birthday bound alone
+ * makes a collision likely within a few thousand bookings — and booking_id is
+ * the primary key, so a collision is a failed booking for a real client.
+ */
+const newSixDigitCode = (): string => String(crypto.randomInt(100000, 1000000));
+const newBookingId = (): string => String(crypto.randomInt(100000000000, 1000000000000));
+
+/**
+ * The unguessable handle a client's confirmation link is keyed on.
+ *
+ * Separate from booking_id because the two do different jobs: booking_id is an
+ * internal key that appears in logs, exports and staff conversation, while this
+ * is a capability handed to one person. 256 bits, so enumeration is not a
+ * consideration at any scale.
+ */
+const newPublicToken = (): string => crypto.randomBytes(32).toString('base64url');
 
 const ADMIN_ROLES = ['admin', 'superadmin', 'fluidadmin'];
 const isAdminUser = (user: any): boolean => Boolean(user && ADMIN_ROLES.includes(user.role));
@@ -389,7 +493,10 @@ const PUBLIC_API_ROUTES: { methods: string[]; pattern: RegExp }[] = [
   { methods: ['POST'], pattern: /^\/api\/confirm-payment$/ },
 
   // --- booking confirmation (/booking-confirmation/*) ---
+  // Keyed on the booking's 256-bit public_token, not its id — the token IS the
+  // credential, which is what makes an unauthenticated route acceptable here.
   { methods: ['GET'],  pattern: /^\/api\/public\/booking\/[^/]+$/ },
+  { methods: ['GET'],  pattern: /^\/api\/public\/booking\/[^/]+\/join-link$/ },
   { methods: ['POST'], pattern: /^\/api\/cancel-booking$/ },
 
   // --- client-facing session notes (/session-notes/*) ---
@@ -411,6 +518,24 @@ const PUBLIC_API_ROUTES: { methods: string[]; pattern: RegExp }[] = [
 const isPublicApiRoute = (method: string, path: string): boolean =>
   PUBLIC_API_ROUTES.some(r => r.methods.includes(method) && r.pattern.test(path));
 
+// ==================== RATE LIMITS ====================
+// Registered BEFORE the auth gate on purpose: a credential-guessing attempt is
+// exactly the traffic that never gets past authentication, so a limiter behind
+// the gate would never see it.
+//
+// Anything that answers "is this credential correct?". These are the endpoints
+// where volume is the whole attack.
+const AUTH_RATE_LIMITED = /^\/api\/(login|verify-password|forgot-password\/|handoff\/redeem|verify-therapist-otp|otp\/|public\/(send|verify)-otp)/;
+
+app.use((req: any, res: any, next: any) => {
+  if (!req.path.startsWith('/api/')) return next();
+  if (req.method === 'OPTIONS') return next();
+  if (AUTH_RATE_LIMITED.test(req.path)) return authLimiter(req, res, next);
+  // Unauthenticated reads that can be walked to harvest data in bulk.
+  if (isPublicApiRoute(req.method, req.path)) return publicLimiter(req, res, next);
+  return next();
+});
+
 // Global gate. Registered here — before any route is defined — so it applies
 // regardless of the order routes are added further down the file.
 app.use((req: any, res: any, next: any) => {
@@ -429,6 +554,15 @@ app.use((req: any, res: any, next: any) => {
 // Set ACCESS_ENFORCE=true once the log is quiet. See lib/access.ts for why it is
 // not default-deny on day one.
 app.use(scopeGate);
+
+// Backstop for authenticated traffic, keyed per user now that req.user exists.
+// Generous — several dashboards poll — and aimed at a runaway loop or a scripted
+// scrape rather than at ordinary use.
+app.use((req: any, res: any, next: any) => {
+  if (!req.path.startsWith('/api/')) return next();
+  if (req.method === 'OPTIONS') return next();
+  return apiLimiter(req, res, next);
+});
 
 // ==================== ACTIVITY LOGGING ====================
 // Registered AFTER the auth gate so req.user is populated — that identity is the
@@ -1413,16 +1547,25 @@ app.get('/api/admin/access-shadow-denials', requireAccessAdmin, (req: any, res) 
 });
 
 // Verify password endpoint (for case history access)
-app.post('/api/verify-password', async (req, res) => {
+/**
+ * Re-confirm the CALLER'S OWN password.
+ *
+ * Identified from the session, never from a username in the body. Taking the
+ * username from the request made this a password oracle: any signed-in account
+ * could test guesses against any other account — superadmins included — and get
+ * a clean true/false back, at HTTP 200 either way so the failures did not even
+ * show up as an error rate. crm-backend carried the identical route and the
+ * identical fix; the two must not drift.
+ */
+app.post('/api/verify-password', async (req: any, res) => {
   try {
-    const { username, password } = req.body;
+    const { password } = req.body;
+    if (!req.user?.id) return res.status(401).json({ success: false, message: 'Authentication required' });
+    if (!password) return res.status(400).json({ success: false, error: 'Password is required' });
 
     // Must not compare in SQL — that only matches the legacy plaintext rows and
     // silently reports "wrong password" for anyone whose password is hashed.
-    const result = await pool.query(
-      'SELECT password FROM users WHERE LOWER(username) = LOWER($1)',
-      [username]
-    );
+    const result = await pool.query('SELECT password FROM users WHERE id = $1', [req.user.id]);
 
     if (result.rows.length > 0 && await verifyPassword(password, result.rows[0].password)) {
       res.json({ success: true });
@@ -1600,7 +1743,7 @@ app.post('/api/new-therapist-requests', requireRole(['admin']), async (req, res)
       });
     }
 
-    const otpToken = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpToken = newSixDigitCode();
     const otpExpiresAt = new Date();
     otpExpiresAt.setHours(otpExpiresAt.getHours() + 24);
 
@@ -1718,7 +1861,7 @@ app.post('/api/new-therapist-requests/:requestId/resend', requireRole(['admin'])
 
     // Mint a fresh OTP and window rather than resending a code that may already
     // have expired — a resend is only useful if the code in it still works.
-    const otpToken = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpToken = newSixDigitCode();
     const otpExpiresAt = new Date();
     otpExpiresAt.setHours(otpExpiresAt.getHours() + 24);
 
@@ -3518,9 +3661,16 @@ app.post('/api/update-password', async (req, res) => {
 
 // ==================== FORGOT PASSWORD ENDPOINTS ====================
 
-// Helper function to generate 6-digit OTP
+/**
+ * A 6-digit code from the CSPRNG.
+ *
+ * Math.random() is V8's xorshift128+ — fast, well distributed, and
+ * reconstructible from a modest run of observed outputs. That is fine for a
+ * jitter value and wrong for anything that gates access. generateToken() two
+ * lines below already used crypto; this now matches it.
+ */
 function generateOTP(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return String(crypto.randomInt(100000, 1000000));
 }
 
 // Helper function to generate secure token
@@ -3610,6 +3760,16 @@ app.post('/api/forgot-password/send-otp', async (req, res) => {
 });
 
 // 2. Verify OTP
+/**
+ * Attempts allowed against ONE reset request before it is burned.
+ *
+ * Five is enough for a mistyped code and nowhere near enough to search a
+ * 900,000-value space. Exceeding it marks the record used, so recovery costs a
+ * fresh email — and send-otp's three-per-hour ceiling governs how fast an
+ * attacker can buy new records to guess at.
+ */
+const MAX_OTP_ATTEMPTS = 5;
+
 app.post('/api/forgot-password/verify-otp', async (req, res) => {
   try {
     const { email, otp } = req.body;
@@ -3619,12 +3779,21 @@ app.post('/api/forgot-password/verify-otp', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Email and OTP are required' });
     }
 
-    // Find OTP record
+    // Look the record up by EMAIL, never by email+otp.
+    //
+    // Matching on the code meant a wrong guess found no row, and a request that
+    // finds no row cannot be charged an attempt — which is precisely why
+    // unlimited guessing worked. Fetching the live record first means every
+    // guess is counted whether or not it was right.
+    //
+    // Restricted to the newest unexpired record, where the old query took any
+    // unused one: every code a user had ever requested and abandoned stayed
+    // valid until it expired, multiplying an attacker's chances for free.
     const result = await pool.query(
-      `SELECT * FROM password_reset_tokens 
-       WHERE LOWER(email) = LOWER($1) AND otp = $2 AND used = false
+      `SELECT * FROM password_reset_tokens
+       WHERE LOWER(email) = LOWER($1) AND used = false AND expires_at > NOW()
        ORDER BY created_at DESC LIMIT 1`,
-      [email, otp]
+      [email]
     );
 
     if (result.rows.length === 0) {
@@ -3633,10 +3802,35 @@ app.post('/api/forgot-password/verify-otp', async (req, res) => {
 
     const resetRecord = result.rows[0];
 
-    // Check if expired
-    if (new Date() > new Date(resetRecord.expires_at)) {
-      console.log('❌ Expired OTP for:', email);
-      return res.status(410).json({ success: false, error: 'OTP has expired. Please request a new one.' });
+    if (resetRecord.attempts >= MAX_OTP_ATTEMPTS) {
+      await pool.query(`UPDATE password_reset_tokens SET used = true WHERE id = $1`, [resetRecord.id]);
+      console.warn(`[reset] attempt limit reached for ${email}; code burned`);
+      return res.status(429).json({
+        success: false,
+        error: 'Too many incorrect attempts. Please request a new code.',
+      });
+    }
+
+    // Constant-time compare, on equal-length buffers — timingSafeEqual throws on
+    // a length mismatch, so a wrong-length guess must be rejected before it and
+    // still charged an attempt.
+    const supplied = Buffer.from(String(otp));
+    const expected = Buffer.from(String(resetRecord.otp));
+    const matches =
+      supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+
+    if (!matches) {
+      const bumped = await pool.query(
+        `UPDATE password_reset_tokens SET attempts = attempts + 1 WHERE id = $1 RETURNING attempts`,
+        [resetRecord.id]
+      );
+      const used = bumped.rows[0]?.attempts ?? MAX_OTP_ATTEMPTS;
+      console.warn(`[reset] wrong code for ${email} (${used}/${MAX_OTP_ATTEMPTS})`);
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid OTP',
+        attemptsRemaining: Math.max(MAX_OTP_ATTEMPTS - used, 0),
+      });
     }
 
     // Mark as verified (but not used yet)
@@ -3681,12 +3875,17 @@ app.post('/api/forgot-password/reset', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Password must contain at least one number' });
     }
 
-    // Find verified OTP record
+    // Looked up by email and charged per guess, exactly as verify-otp is.
+    //
+    // Reaching here already requires a record someone verified, so this is the
+    // second lock rather than the first — but a step that takes a code and
+    // answers "right or wrong" is a guessing oracle wherever it sits, and this
+    // one hands back a password change.
     const result = await pool.query(
-      `SELECT * FROM password_reset_tokens 
-       WHERE LOWER(email) = LOWER($1) AND otp = $2 AND verified = true AND used = false
+      `SELECT * FROM password_reset_tokens
+       WHERE LOWER(email) = LOWER($1) AND verified = true AND used = false AND expires_at > NOW()
        ORDER BY created_at DESC LIMIT 1`,
-      [email, otp]
+      [email]
     );
 
     if (result.rows.length === 0) {
@@ -3695,10 +3894,22 @@ app.post('/api/forgot-password/reset', async (req, res) => {
 
     const resetRecord = result.rows[0];
 
-    // Check if expired
-    if (new Date() > new Date(resetRecord.expires_at)) {
-      console.log('❌ Expired OTP for:', email);
-      return res.status(410).json({ success: false, error: 'OTP has expired. Please request a new one.' });
+    if (resetRecord.attempts >= MAX_OTP_ATTEMPTS) {
+      await pool.query(`UPDATE password_reset_tokens SET used = true WHERE id = $1`, [resetRecord.id]);
+      return res.status(429).json({
+        success: false,
+        error: 'Too many incorrect attempts. Please request a new code.',
+      });
+    }
+
+    const suppliedOtp = Buffer.from(String(otp));
+    const expectedOtp = Buffer.from(String(resetRecord.otp));
+    if (suppliedOtp.length !== expectedOtp.length || !crypto.timingSafeEqual(suppliedOtp, expectedOtp)) {
+      await pool.query(
+        `UPDATE password_reset_tokens SET attempts = attempts + 1 WHERE id = $1`,
+        [resetRecord.id]
+      );
+      return res.status(400).json({ success: false, error: 'Invalid or unverified OTP' });
     }
 
     // Update password
@@ -4267,11 +4478,26 @@ app.patch('/api/clients/update-contact', async (req: any, res: any) => {
       if (new_phone !== undefined) { actSet.push(`phone_number = $${a++}`); actVals.push(new_phone); }
       if (new_email !== undefined) { actSet.push(`email_id = $${a++}`); actVals.push(new_email); }
       if (new_client_type !== undefined) { actSet.push(`client_type = $${a++}`); actVals.push(new_client_type); }
-      if (actSet.length > 0) {
-        const actConds: string[] = [];
-        if (old_phone) { actConds.push(`RIGHT(regexp_replace(COALESCE(phone_number,''), '[^0-9]', '', 'g'), 10) = RIGHT(regexp_replace($${a++}, '[^0-9]', '', 'g'), 10)`); actVals.push(old_phone); }
-        if (old_email) { actConds.push(`LOWER(TRIM(email_id)) = LOWER(TRIM($${a++}))`); actVals.push(old_email); }
-        await pool.query(`UPDATE all_clients_table SET ${actSet.join(', ')} WHERE ${actConds.join(' OR ')}`, actVals).catch((e: any) => console.error('all_clients_table sync failed:', e.message));
+      const actConds: string[] = [];
+      if (old_phone) { actConds.push(`RIGHT(regexp_replace(COALESCE(phone_number,''), '[^0-9]', '', 'g'), 10) = RIGHT(regexp_replace($${a++}, '[^0-9]', '', 'g'), 10)`); actVals.push(old_phone); }
+      if (old_email) { actConds.push(`LOWER(TRIM(email_id)) = LOWER(TRIM($${a++}))`); actVals.push(old_email); }
+      // Both halves checked before building the SQL. An empty SET or an empty
+      // WHERE produced `UPDATE … SET  WHERE` — a syntax error that failed safe
+      // but reported as an unexplained 500, and here was swallowed entirely so
+      // the table silently stopped matching bookings.
+      if (actSet.length > 0 && actConds.length > 0) {
+        try {
+          await pool.query(`UPDATE all_clients_table SET ${actSet.join(', ')} WHERE ${actConds.join(' OR ')}`, actVals);
+        } catch (e: any) {
+          // Still non-fatal — the bookings update above is the real write — but
+          // named loudly enough to be findable, since the two tables are now
+          // out of step for this client.
+          console.error(
+            `[clients] all_clients_table sync FAILED for ${old_email || old_phone}; ` +
+            `bookings updated but the client list still shows the old details:`,
+            e?.message || e
+          );
+        }
       }
     }
 
@@ -4754,24 +4980,39 @@ app.put('/api/dayschedule/schedules/:id', requireTherapistScope(r => r.body?.the
 
 // Cancel Booking Backend (Dev Server)
 app.post('/api/cancel-booking', async (req, res) => {
-  const { booking_id, reason, notify, action, otpId, otp } = req.body;
+  const { booking_id: suppliedBookingId, public_token, reason, notify, action, otpId, otp } = req.body;
 
-  if (!booking_id) {
+  if (!suppliedBookingId && !public_token) {
     return res.status(400).json({ error: 'booking_id is required' });
   }
 
-  console.log(`[Cancel Booking] Processing cancellation for booking: ${booking_id}`);
-
   try {
-    // 1. Fetch current booking details from database
-    const bookingResult = await pool.query('SELECT * FROM bookings WHERE booking_id = $1', [booking_id]);
+    // Which identifier is accepted depends on who is asking.
+    //
+    // This route is public so a client can cancel their own session from the
+    // confirmation page. Keyed on booking_id alone that meant anyone who
+    // guessed a number could cancel a stranger's therapy appointment — the same
+    // enumeration hole as the confirmation lookup, with a write on the end of
+    // it. An unauthenticated caller must now present the 256-bit token; staff,
+    // who are authenticated and hold the dashboard, still pass the id.
+    const requester = optionalUser(req);
+    const bookingResult = requester
+      ? await pool.query(
+          'SELECT * FROM bookings WHERE booking_id = $1 OR (public_token IS NOT NULL AND public_token = $2)',
+          [suppliedBookingId ?? null, public_token ?? null]
+        )
+      : await pool.query('SELECT * FROM bookings WHERE public_token = $1', [public_token ?? null]);
 
     if (bookingResult.rows.length === 0) {
-      console.warn(`[Cancel Booking] Booking ${booking_id} not found in database.`);
+      console.warn('[Cancel Booking] No booking matched the supplied identifier.');
       return res.status(404).json({ error: 'Booking not found' });
     }
 
     const bookingDetails = bookingResult.rows[0];
+    // Everything downstream works from the row's own id, never the request's —
+    // a public caller supplies only a token and never names an id at all.
+    const booking_id = bookingDetails.booking_id;
+    console.log(`[Cancel Booking] Processing cancellation for booking: ${booking_id}`);
 
     // ── Cancellation action (Cash/QR only) ──────────────────────────────────
     // This route is on the public allowlist so a client can cancel their own
@@ -5356,11 +5597,26 @@ app.post('/api/reschedule-booking', async (req, res) => {
 });
 
 // GET Public Booking Details
+/**
+ * The client's own view of their booking, for the confirmation page.
+ *
+ * Keyed on public_token, NOT booking_id.
+ *
+ * booking_id was a six-digit number, which made this route a directory: 900,000
+ * requests returned every client's name, their therapist, which therapy they
+ * were in, and the video link to the session itself. The token is 256 bits, so
+ * the only way to reach a booking is to have been given its link.
+ *
+ * The :booking_id parameter name is kept because the route shape is unchanged
+ * from the client's side — what changed is what a valid value looks like. Legacy
+ * six-digit ids are deliberately NOT accepted as a fallback; accepting them
+ * would leave the enumeration path open and make the fix cosmetic.
+ */
 app.get('/api/public/booking/:booking_id', async (req, res) => {
   const { booking_id } = req.params;
   try {
     const result = await pool.query(`
-      SELECT 
+      SELECT
         booking_id,
         invitee_name,
         booking_start_at,
@@ -5369,12 +5625,11 @@ app.get('/api/public/booking/:booking_id', async (req, res) => {
         booking_host_name,
         booking_status,
         booking_cancel_reason,
-        booking_joining_link,
         booking_mode,
         therapist_id,
         invitee_payment_amount
       FROM bookings
-      WHERE booking_id = $1
+      WHERE public_token = $1
     `, [booking_id]);
 
     if (result.rows.length === 0) {
@@ -5426,6 +5681,64 @@ app.get('/api/public/booking/:booking_id', async (req, res) => {
     res.json(booking);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * The video link for a session, released only around the time it runs.
+ *
+ * Split off from the booking details above because the two are different kinds
+ * of secret. Details are a record the client may look at whenever they like; the
+ * joining link is a door into a live therapy session, and a door should be
+ * unlocked for as long as it is needed and no longer.
+ *
+ * The window is generous on both sides — a client who arrives early should not
+ * be told to come back, and a session that overruns should not lock its own
+ * participant out.
+ */
+const JOIN_LINK_OPENS_MIN_BEFORE = 30;
+const JOIN_LINK_CLOSES_MIN_AFTER = 120;
+
+app.get('/api/public/booking/:public_token/join-link', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT booking_joining_link, booking_invitee_time, booking_status, booking_mode
+         FROM bookings WHERE public_token = $1`,
+      [req.params.public_token]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Booking not found' });
+
+    const booking = rows[0];
+    if (!holdsASlot(booking.booking_status)) {
+      return res.status(409).json({ error: 'This session is no longer scheduled.' });
+    }
+    if (!booking.booking_joining_link) {
+      return res.status(404).json({ error: 'This session has no video link.' });
+    }
+
+    const startMs = getBookingStartMs(booking.booking_invitee_time);
+    if (startMs === null) {
+      // Cannot place the session in time, so cannot say whether the window is
+      // open. Refuse rather than guess — see lib/timezone.ts on why a null here
+      // must never be treated as "now".
+      return res.status(409).json({ error: 'This session could not be scheduled for joining.' });
+    }
+
+    const now = Date.now();
+    if (now < startMs - JOIN_LINK_OPENS_MIN_BEFORE * 60000) {
+      return res.status(425).json({
+        error: 'The link opens 30 minutes before your session.',
+        opensAt: new Date(startMs - JOIN_LINK_OPENS_MIN_BEFORE * 60000).toISOString(),
+      });
+    }
+    if (now > startMs + JOIN_LINK_CLOSES_MIN_AFTER * 60000) {
+      return res.status(410).json({ error: 'This session has finished.' });
+    }
+
+    res.json({ joiningLink: booking.booking_joining_link, mode: booking.booking_mode });
+  } catch (error: any) {
+    console.error('[public join-link] failed:', error?.message || error);
+    res.status(500).json({ error: 'Could not load the joining link' });
   }
 });
 
@@ -8333,13 +8646,21 @@ app.get('/api/bookings/:bookingId/cancellation-options', requireRole(ADMIN_ROLES
 // Balance + recent statement for one client. Called by the booking form for
 // EVERY client, so a client with no wallet is a 200 with a zero balance, never
 // a 404.
-app.get('/api/wallet', async (req, res) => {
+//
+// Role-gated, like /api/wallets and /api/wallet/adjust beside it. It was the odd
+// one out: no middleware at all, taking the client's identity straight from the
+// query string, so any authenticated account — a therapist, a sales user — could
+// read any client's balance and statement by supplying a phone number. Client
+// keys are normalised phone numbers, so they are guessable, not secret.
+app.get('/api/wallet', requireRole(ADMIN_ROLES), async (req, res) => {
   try {
     const phone = typeof req.query.phone === 'string' ? req.query.phone : '';
     const email = typeof req.query.email === 'string' ? req.query.email : '';
-    // Self-healing: pulls credit off any older phone number this client used
-    // before returning the balance, so the booking form never shows a stale zero.
-    const clientKey = await consolidateWallet(phone, email);
+    // Read-only. Consolidation used to run here, which made a GET rewrite the
+    // ledger — a caller chose which keys got merged, and a prefetch or a retry
+    // moved rows on its own. It now runs on the write paths that have a reason
+    // to touch the ledger: /api/wallet/adjust and booking creation.
+    const clientKey = buildClientKey(phone, email);
 
     if (!clientKey) {
       return res.json({ client_key: null, balance: 0, currency: 'INR', transactions: [] });
@@ -8363,19 +8684,27 @@ app.get('/api/wallet', async (req, res) => {
   }
 });
 
-// Full statement for the client-profile Wallet tab.
-app.get('/api/wallet/transactions', async (req, res) => {
+// Full statement for the client-profile Wallet tab. Role-gated for the same
+// reason as /api/wallet above.
+app.get('/api/wallet/transactions', requireRole(ADMIN_ROLES), async (req, res) => {
   try {
     const phone = typeof req.query.phone === 'string' ? req.query.phone : '';
     const email = typeof req.query.email === 'string' ? req.query.email : '';
+    // clientKey is accepted because the Payments page opens a statement straight
+    // from the wallets list, where the key is what it already holds. That is safe
+    // now the route is admin-gated — the same caller can enumerate every wallet
+    // through /api/wallets anyway, so naming one directly grants nothing extra.
+    // It would NOT have been safe on the ungated version this replaces.
     const clientKey = typeof req.query.clientKey === 'string' && req.query.clientKey
       ? req.query.clientKey
       : buildClientKey(phone, email);
 
     if (!clientKey) return res.json({ balance: 0, transactions: [] });
 
-    const limit = Math.min(parseInt(String(req.query.limit || '50'), 10) || 50, 200);
-    const offset = parseInt(String(req.query.offset || '0'), 10) || 0;
+    // Clamped rather than trusted: parseInt('abc') is NaN, and NaN survives
+    // Math.min to reach the query as `LIMIT NaN`, which Postgres rejects.
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
 
     const [balance, transactions] = await Promise.all([
       getBalance(clientKey),
@@ -8427,6 +8756,12 @@ app.post('/api/wallet/adjust', requireRole(['admin', 'superadmin', 'fluidadmin']
     // Enforced HERE, not only in the form. This is money moved by hand with no
     // booking behind it, so the note is the ONLY record of why — and a check
     // that lives only in the browser is not a check.
+    // Consolidation moved here from GET /api/wallet, which is a read and should
+    // not have been rewriting the ledger. This is the right place for it: the
+    // balance is about to change, so pulling in credit stranded under an older
+    // phone number has to happen first or the adjustment lands on a partial one.
+    await consolidateWallet(phone, email);
+
     if (!String(notes || '').trim()) {
       return res.status(400).json({ error: 'A note explaining this adjustment is required.' });
     }
@@ -11082,7 +11417,7 @@ app.post('/api/razorpay/verify-payment', async (req, res) => {
     // If the Webhook already processed this payment milliseconds ago, let the frontend succeed!
     if (booking.booking_status === 'confirmed' || booking.payment_status === 'Paid') {
       console.log(`[verify-payment] Booking ${bookingId} already confirmed by webhook. Returning success to frontend.`);
-      return res.json({ success: true, booking_id: bookingId });
+      return res.json({ success: true, booking_id: bookingId, public_token: booking.public_token });
     }
 
     // Otherwise, ensure it's pending
@@ -11154,7 +11489,7 @@ app.post('/api/razorpay/verify-payment', async (req, res) => {
 
     await processConfirmedBooking(bookingId, razorpayPaymentId, razorpayOrderId, booking, payload, paymentInfo);
 
-    res.json({ success: true, booking_id: bookingId });
+    res.json({ success: true, booking_id: bookingId, public_token: booking.public_token });
   } catch (error) {
     console.error('❌ Error in verify-payment:', error);
     res.status(500).json({ error: error.message || 'Payment verification failed' });
@@ -11503,8 +11838,13 @@ app.post('/api/create-booking', async (req, res) => {
   try {
     const payload = req.body;
     const { randomUUID } = require('crypto');
-    const booking_id = payload.bookingId || Math.floor(100000 + Math.random() * 900000).toString();
-    const invitee_id = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generated here, never taken from the request. This route is on the public
+    // allowlist because it also serves the client-facing /book/* flow, so
+    // `payload.bookingId` let an anonymous caller choose a primary key — squat
+    // identifiers, or force collisions against what used to be a 900k space.
+    const booking_id = newBookingId();
+    const public_token = newPublicToken();
+    const invitee_id = newBookingId();
 
     // 1. Generate Masked Email
     const maskInsertRes = await pool.query(
@@ -11749,7 +12089,9 @@ app.post('/api/create-booking', async (req, res) => {
       console.warn(`⚠️ [Create Booking] Therapist "${therapist.name}" does not have Google Calendar connected. Event will not appear on therapist's calendar.`);
     }
 
-    const publicBookingCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
+    // Keyed on the token, not the id: this URL is emailed and pasted around, and
+    // it is the only thing standing between a stranger and this client's record.
+    const publicBookingCheckinUrl = `${origin}/booking-confirmation/${public_token}`;
 
     const bookingResourceName = payload.isFreeConsultation
       ? (payload.therapyName || 'Free Consultation')
@@ -11817,7 +12159,29 @@ app.post('/api/create-booking', async (req, res) => {
       ? (walletCoversAll ? 'Wallet' : `Wallet+${manualModeLabel || 'Cash'}`)
       : (manualModeLabel || payload.payment_gateway || null);
 
-    await pool.query(
+    // The overlap check ~150 lines above and this INSERT are far apart, with a
+    // Google Calendar round trip in between — so two requests for the same slot
+    // could both pass that check and both land here. Re-checked under a lock on
+    // the therapist, immediately before the write, which is the only place the
+    // answer is still true when it is acted on.
+    //
+    // Deliberately NOT wrapping the whole handler: that would hold a database
+    // connection across the calendar call, and the pool has ten.
+    const slotTaken = await withTherapistSlotLock(pool, therapistId, async (tx) => {
+      if (therapistId) {
+        const clash = await tx.query(
+          `SELECT booking_id FROM bookings
+            WHERE therapist_id = $1
+              AND booking_status NOT IN ('cancelled', 'canceled', 'payment_failed')
+              AND booking_start_at < $3
+              AND booking_end_at > $2
+            LIMIT 1`,
+          [therapistId, startAt.toISOString(), endAt.toISOString()]
+        );
+        if (clash.rows.length > 0) return clash.rows[0].booking_id as string;
+      }
+
+      await tx.query(
       `INSERT INTO bookings (
         booking_id, invitee_id, source, invitee_name, invitee_email, invitee_phone, invitee_timezone,
         booking_resource_name, booking_start_at, booking_end_at,
@@ -11825,9 +12189,9 @@ app.post('/api/create-booking', async (req, res) => {
         booking_status, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, booking_joining_link, mask_id, google_event_id,
         payment_id, payment_status, invitee_payment_gateway, invitee_question,
-        service_id, price_source, quoted_amount,
+        service_id, price_source, quoted_amount, public_token,
         invitee_created_at, booking_updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, NOW(), NOW())`,
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, NOW(), NOW())`,
       [
         booking_id,
         invitee_id,
@@ -11857,9 +12221,20 @@ app.post('/api/create-booking', async (req, res) => {
         payload.invitee_question || payload.notes || null,
         bookingPrice.serviceId,
         payload.isAdmin ? 'admin_manual' : bookingPrice.source,
-        bookingPrice.amount
+        bookingPrice.amount,
+        public_token
       ]
-    );
+      );
+      return null;
+    });
+
+    if (slotTaken) {
+      console.warn(`[Create Booking] Lost the race for therapist ${therapistId} at ${startAt.toISOString()} to ${slotTaken}`);
+      return res.status(409).json({
+        error: 'This time slot was just taken. Please choose another slot.',
+        conflict: 'system',
+      });
+    }
 
     // Spend the wallet credit only now that the booking row exists, so a failed
     // insert above cannot burn the client's balance. The debit takes an advisory
@@ -12031,7 +12406,9 @@ app.post('/api/create-booking', async (req, res) => {
       console.error('[Create Booking] CRM new-booking webhook failed:', e);
     }
 
-    res.status(200).json({ success: true, booking_id, id: booking_id });
+    // public_token is what the confirmation page is reached by; booking_id stays
+    // in the response because the dashboard and the payment flow key on it.
+    res.status(200).json({ success: true, booking_id, id: booking_id, public_token });
 
   } catch (error) {
     console.error('❌ Error in create-booking endpoint:', error);
@@ -12044,8 +12421,9 @@ app.post('/api/create-booking', async (req, res) => {
 app.post('/api/create-pending-booking', async (req, res) => {
   try {
     const payload = req.body;
-    const booking_id = Math.floor(100000 + Math.random() * 900000).toString();
-    const invitee_id = Math.floor(100000 + Math.random() * 900000).toString();
+    const booking_id = newBookingId();
+    const invitee_id = newBookingId();
+    const public_token = newPublicToken();
 
     const maskInsertRes = await pool.query(
       `INSERT INTO masked_emails (real_email, created_at) VALUES ($1, CURRENT_TIMESTAMP)
@@ -12100,7 +12478,9 @@ app.post('/api/create-pending-booking', async (req, res) => {
     }
 
     const origin = req.get('origin') || 'http://localhost:3004';
-    const publicBookingCheckinUrl = `${origin}/booking-confirmation/${booking_id}`;
+    // Keyed on the token, not the id: this URL is emailed and pasted around, and
+    // it is the only thing standing between a stranger and this client's record.
+    const publicBookingCheckinUrl = `${origin}/booking-confirmation/${public_token}`;
 
     const resourceName = payload.isFreeConsultation
       ? (payload.therapyName || 'Free Consultation')
@@ -12130,9 +12510,9 @@ app.post('/api/create-pending-booking', async (req, res) => {
         razorpay_order_id, public_booking_checkin_url,
         booking_host_name, therapist_id, booking_mode, mask_id,
         booking_invitee_time, booking_host_time, invitee_question,
-        service_id, price_source, quoted_amount,
+        service_id, price_source, quoted_amount, public_token,
         invitee_created_at, booking_updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27, NOW(), NOW())`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28, NOW(), NOW())`,
       [
         booking_id, invitee_id, 'Direct Booking',
         payload.clientName || 'Unknown Client',
@@ -12150,7 +12530,7 @@ app.post('/api/create-pending-booking', async (req, res) => {
         maskId,
         '', '',
         payload.invitee_question || payload.notes || null,
-        price.serviceId, price.source, price.amount
+        price.serviceId, price.source, price.amount, public_token
       ]
     );
 
@@ -12179,7 +12559,7 @@ app.post('/api/create-pending-booking', async (req, res) => {
     // Keep this client's contact info up to date across their bookings (#8)
     await reconcileClientContact(payload.clientEmail, payload.clientWhatsApp);
 
-    res.json({ success: true, booking_id });
+    res.json({ success: true, booking_id, public_token });
   } catch (error: any) {
     console.error('Error creating pending booking:', error);
     res.status(500).json({ error: error.message || 'Failed to create pending booking' });
@@ -14024,6 +14404,7 @@ app.post('/api/admin/generate-payment-link', requireRole(['admin','superadmin','
     }
 
     const bookingId = randomUUID();
+    const publicToken = newPublicToken();
     const startObj = new Date(`${date} ${time} GMT+0530`);
     if (!date || !time || isNaN(startObj.getTime())) {
       return res.status(400).json({ error: `Invalid date or time provided. Received date="${date}", time="${time}". Please select a valid slot.` });
@@ -14105,14 +14486,14 @@ app.post('/api/admin/generate-payment-link', requireRole(['admin','superadmin','
         booking_start_at, booking_end_at, booking_status, payment_status, invitee_payment_amount,
         invitee_payment_currency, booking_resource_name, booking_mode, invitee_timezone,
         booking_invitee_time, booking_host_time, booking_host_name, mask_id,
-        service_id, price_source, quoted_amount, invitee_created_at, booking_updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW(), NOW())`,
+        service_id, price_source, quoted_amount, public_token, invitee_created_at, booking_updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'INR', $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NOW(), NOW())`,
       [
         bookingId, resolvedTherapistId, clientName, clientEmail, clientPhone,
         startObj.toISOString(), endObj.toISOString(), 'waiting_for_payment', 'Pending', amount,
         linkResourceName,
         bookingMode, clientTz, inviteeTime, hostTime, therapistName, maskId,
-        linkServiceId, 'admin_manual', amount
+        linkServiceId, 'admin_manual', amount, publicToken
       ]
     );
 
@@ -14924,8 +15305,12 @@ const IST_CREATED_AT = `to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS') || '+05:3
 app.get('/api/activity-logs', requireRole(LOG_VIEWER_ROLES), async (req: any, res) => {
   try {
     const source = String(req.query.source || 'activity');
-    const limit = Math.min(parseInt(String(req.query.limit || '100')), 500);
-    const offset = Math.max(parseInt(String(req.query.offset || '0')), 0);
+    // `|| default` before the clamp, because parseInt('abc') is NaN and NaN
+    // survives both Math.min and Math.max — it reached the SQL below as
+    // `LIMIT NaN OFFSET NaN`, which Postgres rejects with a 500. Not injectable
+    // (parseInt only ever yields a number or NaN), just a crash on bad input.
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '100'), 10) || 100, 1), 500);
+    const offset = Math.max(parseInt(String(req.query.offset ?? '0'), 10) || 0, 0);
     const { category, search, from, to } = req.query;
 
     const where: string[] = [];
@@ -15047,10 +15432,15 @@ app.get('/api/webhook-api-logs/stats', async (req, res) => {
   }
 });
 
-app.get('/api/webhook-api-logs', async (req, res) => {
+// Role-gated to match /api/activity-logs beside it. These carry request paths,
+// payloads and error text from every integration — the same class of data the
+// other log routes are guarded for, and this one was the odd route out.
+app.get('/api/webhook-api-logs', requireRole(LOG_VIEWER_ROLES), async (req, res) => {
   try {
-    const page = parseInt(req.query.page as string) || 1;
-    const limit = parseInt(req.query.limit as string) || 10;
+    // Clamped, not just defaulted: ?page=0 or ?page=-5 produced a negative
+    // OFFSET, which Postgres rejects.
+    const page = Math.max(parseInt(req.query.page as string, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 10, 1), 200);
     const { type, status } = req.query;
     const offset = (page - 1) * limit;
 

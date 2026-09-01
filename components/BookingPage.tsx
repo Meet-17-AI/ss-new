@@ -613,10 +613,13 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
           setBookedDetails(finalPayload);
           
           const returnedBookingId = responseData.booking_id || responseData.id || responseData.bookingId;
-          
+
           if (isPublic) {
-            // Store redirect url and display success animation
-            setRedirectUrl(`${window.location.origin}/booking-confirmation/${returnedBookingId}`);
+            // The confirmation page is reached by public_token, not booking_id.
+            // The id is a plain number and the page is unauthenticated, so keying
+            // the link on it let anyone walk the range and read every client's
+            // booking. The token is the credential.
+            setRedirectUrl(`${window.location.origin}/booking-confirmation/${responseData.public_token}`);
             setShowSuccessModal(true);
           } else {
             setShowSuccessModal(true);
@@ -707,7 +710,7 @@ export const BookingPage: React.FC<BookingPageProps> = ({ session, onBack, isPub
               const verifyData = await verifyRes.json();
               setBookedDetails(payload);
               if (isPublic) {
-                setRedirectUrl(`${window.location.origin}/booking-confirmation/${verifyData.booking_id}`);
+                setRedirectUrl(`${window.location.origin}/booking-confirmation/${verifyData.public_token}`);
               }
               setShowSuccessModal(true);
             } else {

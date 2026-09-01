@@ -647,7 +647,9 @@ export const PublicBooking: React.FC = () => {
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(d.error || 'Could not create the booking.');
-        return navigate(`/booking-confirmation/${d.booking_id || d.bookingId || ''}`);
+        // Keyed on public_token: the confirmation page is unauthenticated, so the
+        // token in this URL is the only thing gating the client's own record.
+        return navigate(`/booking-confirmation/${d.public_token || ''}`);
       }
 
       if (!(window as any).Razorpay || !paymentConfig) {
@@ -700,7 +702,7 @@ export const PublicBooking: React.FC = () => {
             });
             const vd = await vr.json();
             if (!vr.ok) throw new Error(vd.error || 'Payment verification failed.');
-            navigate(`/booking-confirmation/${vd.booking_id || pending.booking_id}`);
+            navigate(`/booking-confirmation/${vd.public_token || pending.public_token || ''}`);
           } catch (e: any) {
             setError(e.message || 'Payment could not be confirmed. Please contact support.');
           } finally {
