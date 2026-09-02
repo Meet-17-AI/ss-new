@@ -21,7 +21,7 @@
 --  LOCKING / DOWNTIME
 --    ALTER TABLE ... ADD COLUMN with a constant default is metadata-only from
 --    PG11 on, so it does not rewrite the table. The real cost is Section D,
---    which UPDATEs all 1221 booking rows and holds a ROW EXCLUSIVE lock on
+--    which UPDATEs every booking row (~1,226) and holds a ROW EXCLUSIVE lock on
 --    `bookings` for the duration. On a 4 MB table that is well under a second.
 --    Expect a brief write pause on bookings, not an outage.
 --
@@ -33,9 +33,11 @@
 --
 --  VERIFIED PRECONDITIONS (read-only probes against safestories_db_v2)
 --    * PostgreSQL 18.1 — gen_random_uuid() is built in, no pgcrypto needed.
---    * 1221 bookings, all 1221 carrying a check-in URL, all on the single
---      origin https://panel.safestories.in, all ending in their booking_id,
---      zero duplicates. Section D's rewrite is therefore total and unambiguous.
+--    * Every booking carries a check-in URL — 1,226 of 1,226 when last measured,
+--      all on the single origin https://panel.safestories.in, all ending in their
+--      own booking_id, zero duplicates. Section D's rewrite is therefore total and
+--      unambiguous. The count moves as production keeps trading; the property that
+--      matters (every row has one, none is shared) is what Section D re-checks.
 --    * users.id is integer and therapy_services.id is integer, so the two
 --      foreign keys below line up.
 --    * None of the nine new tables already exist in production.
@@ -43,11 +45,20 @@
 
 BEGIN;
 
--- Fail loudly rather than half-applying if the database is not the intended one.
+-- Fail loudly rather than half-applying if the database is not an intended one.
+--
+-- TWO names are accepted, and the second is the point of the rehearsal:
+--   safestories_prod_v2  — the byte-exact copy of production. Run here FIRST.
+--   safestories_db_v2    — production itself. Run here once the copy checks out.
+--
+-- The clone (ss_clone_db_v2) is deliberately absent: it already has every one of
+-- these objects, and re-running this against it would prove nothing.
 DO $$
 BEGIN
-  IF current_database() <> 'safestories_db_v2' THEN
-    RAISE EXCEPTION 'Refusing to run: expected safestories_db_v2, got %', current_database();
+  IF current_database() NOT IN ('safestories_db_v2', 'safestories_prod_v2') THEN
+    RAISE EXCEPTION
+      'Refusing to run: expected safestories_db_v2 or safestories_prod_v2, got %',
+      current_database();
   END IF;
 END $$;
 
@@ -381,7 +392,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_bookings_public_token ON bookings (public_t
 
 -- D2. Repoint the stored check-in URLs at the token.
 --
--- This is the step that must not be skipped. All 1221 production rows hold
+-- This is the step that must not be skipped. Every production row holds
 -- "https://panel.safestories.in/booking-confirmation/<booking_id>", and once the
 -- new code is live that URL 404s. The reschedule flow sends this exact string
 -- to clients over WhatsApp and email, so skipping this breaks the link in every

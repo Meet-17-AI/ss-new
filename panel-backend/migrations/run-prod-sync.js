@@ -33,6 +33,19 @@ const TARGET_DB = dbFlag !== -1 ? argv[dbFlag + 1] : 'safestories_db_v2';
 // The migration opens and closes its own transaction. For a dry run we need to
 // wrap it in an outer one we can roll back, so those markers are stripped and
 // the transaction is driven from here instead.
+/**
+ * Remove the file's own BEGIN/COMMIT so this script owns the transaction.
+ *
+ * Done in BOTH modes, not just dry-run. Leaving them in meant an outer BEGIN
+ * around the file's BEGIN and a trailing COMMIT after its COMMIT, so a perfectly
+ * successful run printed "there is already a transaction in progress" and then
+ * "there is no transaction in progress". Both were harmless and both looked
+ * exactly like something going wrong — which is the last thing wanted on the one
+ * night this gets run against production.
+ *
+ * The migration keeps its markers so it can still be pasted into psql or pgAdmin
+ * and behave correctly on its own.
+ */
 const stripOwnTransaction = (sql) =>
   sql.replace(/^\s*BEGIN\s*;\s*$/gim, '').replace(/^\s*COMMIT\s*;\s*$/gim, '');
 
@@ -42,17 +55,41 @@ const ask = (question) =>
     rl.question(question, (a) => { rl.close(); resolve(a.trim()); });
   });
 
-// Counts that make the before/after diff legible in the terminal.
-const SNAPSHOT = `
+/**
+ * Counts that make the before/after diff legible in the terminal.
+ *
+ * Split in two, and the reason is the whole point of taking a "before" reading:
+ * before the migration runs, bookings.public_token DOES NOT EXIST. A single query
+ * mentioning it fails to parse against exactly the database this script is for —
+ * which is what happened the first time, and it read as the migration failing
+ * rather than the instrumentation around it.
+ */
+const BASE_SNAPSHOT = `
   SELECT
     (SELECT count(*) FROM information_schema.tables
-      WHERE table_schema='public' AND table_type='BASE TABLE')                       AS tables,
-    (SELECT count(*) FROM bookings)                                                  AS bookings,
-    (SELECT count(*) FROM bookings WHERE public_token IS NOT NULL)                   AS with_token,
+      WHERE table_schema='public' AND table_type='BASE TABLE')  AS tables,
+    (SELECT count(*) FROM bookings)                             AS bookings,
+    (SELECT count(*) FROM information_schema.columns
+      WHERE table_schema='public' AND table_name='bookings'
+        AND column_name='public_token')                         AS has_token_column
+`;
+
+const TOKEN_SNAPSHOT = `
+  SELECT
+    (SELECT count(*) FROM bookings WHERE public_token IS NOT NULL) AS with_token,
     (SELECT count(*) FROM bookings
       WHERE public_booking_checkin_url LIKE '%/booking-confirmation/%'
-        AND public_booking_checkin_url NOT LIKE '%' || public_token)                 AS stale_urls
+        AND public_booking_checkin_url NOT LIKE '%' || public_token) AS stale_urls
 `;
+
+const snapshot = async (client) => {
+  const base = (await client.query(BASE_SNAPSHOT)).rows[0];
+  if (Number(base.has_token_column) === 0) {
+    return { tables: base.tables, bookings: base.bookings, with_token: '(column not added yet)', stale_urls: '—' };
+  }
+  const tok = (await client.query(TOKEN_SNAPSHOT)).rows[0];
+  return { tables: base.tables, bookings: base.bookings, ...tok };
+};
 
 async function main() {
   if (!fs.existsSync(SQL_FILE)) throw new Error(`Missing SQL file: ${SQL_FILE}`);
@@ -90,19 +127,23 @@ async function main() {
   client.on('notice', (n) => console.log(`  [pg] ${n.message}`));
 
   await client.connect();
+  // What was actually sent, so a reported error position maps to the right text.
+  // In dry-run that is not the file verbatim — the transaction markers are gone.
+  let executed = raw;
   try {
-    const before = (await client.query(SNAPSHOT)).rows[0];
+    const before = await snapshot(client);
     console.log('\nBefore:', before);
 
     console.log(`\nRunning ${path.basename(SQL_FILE)} ...`);
     const t0 = Date.now();
 
-    // One transaction either way. In dry-run the migration's own BEGIN/COMMIT is
-    // stripped so the rollback below actually reaches everything it did.
+    // One transaction, owned here, so the rollback below reaches everything the
+    // file did and a clean run prints no transaction warnings.
+    executed = stripOwnTransaction(raw);
     await client.query('BEGIN');
-    await client.query(DRY_RUN ? stripOwnTransaction(raw) : raw);
+    await client.query(executed);
 
-    const after = (await client.query(SNAPSHOT)).rows[0];
+    const after = await snapshot(client);
     console.log(`\nAfter :`, after);
     console.log(`Elapsed: ${Date.now() - t0} ms`);
 
@@ -111,9 +152,7 @@ async function main() {
       console.log('\nDRY RUN complete — every change above was rolled back.');
       console.log('The database is untouched. Re-run without --dry-run to apply.');
     } else {
-      // The file commits itself; this closes the wrapper for the already-
-      // committed case and is a no-op warning at worst.
-      await client.query('COMMIT').catch(() => {});
+      await client.query('COMMIT');
       console.log('\nMigration committed.');
       console.log('Deploy the new panel/CRM build now.');
     }
@@ -121,7 +160,21 @@ async function main() {
     await client.query('ROLLBACK').catch(() => {});
     console.error('\nFAILED — rolled back, database unchanged.');
     console.error(`  ${err.message}`);
+    if (err.detail) console.error(`  detail: ${err.detail}`);
     if (err.hint) console.error(`  hint: ${err.hint}`);
+    if (err.where) console.error(`  where: ${err.where}`);
+    // Postgres reports the byte offset of the failure within the whole batch.
+    // Turning it into a line number is the difference between "something in a
+    // 460-line file" and the statement to go and look at.
+    if (err.position) {
+      const upto = executed.slice(0, Number(err.position));
+      const line = upto.split('\n').length;
+      const lines = executed.split('\n');
+      console.error(`  at line ${line}:`);
+      for (let i = Math.max(0, line - 3); i < Math.min(lines.length, line + 2); i++) {
+        console.error(`    ${String(i + 1).padStart(4)} ${i + 1 === line ? '>' : ' '} ${lines[i]}`);
+      }
+    }
     process.exitCode = 1;
   } finally {
     await client.end();
