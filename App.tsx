@@ -25,6 +25,8 @@ if (window.location.hostname.includes('safestories-dashboard.vercel.app')) {
 
 import { useAuth } from './context/AuthContext';
 import { ProtectedRoute } from './context/ProtectedRoute';
+// TEMPORARY, remove with the migration — see components/MigrationGate.tsx.
+import { MigrationGate } from './components/MigrationGate';
 import { defaultPathForScopes, SCOPE_PATH } from './lib/permissions';
 
 const LoginPage = () => {
@@ -104,6 +106,8 @@ const App: React.FC = () => {
   }
 
   return (
+    // TEMPORARY, remove with the migration — see components/MigrationGate.tsx.
+    <MigrationGate>
     <Routes>
       {/* Public Routes */}
       <Route path="/login" element={<LoginPage />} />
@@ -170,6 +174,7 @@ const App: React.FC = () => {
       
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </MigrationGate>
   );
 };
 
