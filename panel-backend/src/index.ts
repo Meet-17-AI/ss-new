@@ -1438,7 +1438,24 @@ app.put('/api/admin/access-grants/:userId', requireAccessAdmin, async (req: any,
 
     res.json({
       success: true,
-      scopes: Array.from(new Set<Scope>([...(base ? [base] : []), ...toStore])),
+      // `base` is already an array — baseScopesForRole() returns Scope[]. The
+      // previous form wrapped it again, `base ? [base] : []`, so the reply
+      // carried a nested array where a scope should be:
+      //
+      //   [ ['therapist_dashboard'], 'admin_dashboard' ]
+      //
+      // The grid assigns this straight onto the row it just saved, and two
+      // things followed. `scopes.includes('therapist_dashboard')` was false
+      // against a nested array, so the locked-on base checkbox visibly
+      // UNTICKED itself the moment any other box was ticked. And the next
+      // change sent that nested array back, where validation compared it
+      // against the grantable list, found no match, and refused the whole
+      // request — which is why a second tick (CRM after admin) could not be
+      // saved at all.
+      //
+      // The ternary was also always-true: [] is truthy, so even a role with no
+      // base scopes produced [[]].
+      scopes: Array.from(new Set<Scope>([...base, ...toStore])),
     });
   } catch (error: any) {
     await client.query('ROLLBACK').catch(() => {});
