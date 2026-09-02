@@ -211,6 +211,39 @@ app.set('trust proxy', 1);
     console.log('[DB Migration Error]', err.message);
   }
 
+  // Per-person password reset invitations.
+  //
+  // A row is one personalised link, handed to one member of staff so they can
+  // set their own password without an admin ever choosing it for them.
+  //
+  // WHAT THE TOKEN IS AND IS NOT. It names WHO the link is for — nothing more.
+  // Opening it reveals an email address and lets the holder ASK for a code;
+  // the code still goes to that address, and the reset still requires it. So a
+  // leaked link cannot change a password on its own, which is what makes it
+  // safe to send one by email at all. The OTP remains the credential.
+  //
+  // Single use is enforced by used_at, stamped when a reset actually succeeds
+  // rather than when the link is opened — opening it and giving up must not
+  // burn it.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS password_reset_invites (
+        token      TEXT PRIMARY KEY,
+        user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        email      TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at    TIMESTAMPTZ,
+        created_by TEXT
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS reset_invite_user_idx ON password_reset_invites (user_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS reset_invite_email_idx ON password_reset_invites (LOWER(email))`);
+    console.log('[DB] password_reset_invites table ensured.');
+  } catch (err: any) {
+    console.log('[DB Migration Error]', err.message);
+  }
+
   // How many wrong codes have been offered against one reset request.
   //
   // This column is the actual fix for the reset-code brute force: throttling how
@@ -478,6 +511,11 @@ const PUBLIC_API_ROUTES: { methods: string[]; pattern: RegExp }[] = [
   { methods: ['POST'], pattern: /^\/api\/handoff\/redeem$/ },
   { methods: ['POST'], pattern: /^\/api\/verify-therapist-otp$/ },
   { methods: ['POST'], pattern: /^\/api\/forgot-password\/(send-otp|verify-otp|reset)$/ },
+  // Resolving a reset invitation. Public by necessity — the whole point is that
+  // someone who cannot sign in can open it. It reveals only the name and email
+  // the link was issued for, and grants nothing: the reset still needs the code
+  // sent to that address.
+  { methods: ['GET'],  pattern: /^\/api\/public\/reset-invite\/[^/]+$/ },
 
   // --- public booking flow (/book/*) ---
   { methods: ['GET'],  pattern: /^\/api\/public\/services\/[^/]+$/ },
@@ -3730,6 +3768,50 @@ function generateToken(): string {
 }
 
 // 1. Send OTP for password reset
+/**
+ * Resolve a password-reset invitation into the person it was issued for.
+ *
+ * Answers only "whose link is this, and is it still good?". The reset itself is
+ * unchanged and still turns on the one-time code emailed to that address, so
+ * this endpoint hands out no authority — which is why it can be public, and why
+ * a link that leaks is not a password reset waiting to happen.
+ *
+ * Distinguishes expired from already-used from never-existed, because a person
+ * staring at a dead link needs to know which of those it is. There is nothing
+ * to enumerate here: the token is 256 bits and the reply names an address the
+ * holder of the link already has.
+ */
+app.get('/api/public/reset-invite/:token', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT i.token, i.email, i.expires_at, i.used_at,
+              COALESCE(u.full_name, u.name, u.username) AS name, u.username
+         FROM password_reset_invites i
+         JOIN users u ON u.id = i.user_id
+        WHERE i.token = $1`,
+      [req.params.token]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, status: 'unknown',
+        error: 'This reset link is not valid. Please ask for a new one.' });
+    }
+    const inv = rows[0];
+    if (inv.used_at) {
+      return res.status(410).json({ success: false, status: 'used',
+        error: 'This reset link has already been used. Please ask for a new one.' });
+    }
+    if (new Date(inv.expires_at).getTime() <= Date.now()) {
+      return res.status(410).json({ success: false, status: 'expired',
+        error: 'This reset link has expired. Please ask for a new one.' });
+    }
+    res.json({ success: true, status: 'valid',
+      name: inv.name, username: inv.username, email: inv.email });
+  } catch (error: any) {
+    console.error('[reset-invite] lookup failed:', error?.message || error);
+    res.status(500).json({ success: false, error: 'Could not open this reset link.' });
+  }
+});
+
 app.post('/api/forgot-password/send-otp', async (req, res) => {
   try {
     const { email } = req.body;
@@ -3981,10 +4063,29 @@ app.post('/api/forgot-password/reset', async (req, res) => {
 
     // Invalidate all other reset tokens for this user
     await pool.query(
-      `UPDATE password_reset_tokens SET used = true 
+      `UPDATE password_reset_tokens SET used = true
        WHERE user_id = $1 AND id != $2 AND used = false`,
       [resetRecord.user_id, resetRecord.id]
     );
+
+    // Spend any outstanding invitation link for this account.
+    //
+    // Stamped HERE, on a completed reset, rather than when the link was opened:
+    // someone who follows their link and then abandons it must still be able to
+    // come back. Keyed on the user rather than on a token supplied by the
+    // caller, so a second link cannot survive a reset done through the first.
+    try {
+      await pool.query(
+        `UPDATE password_reset_invites SET used_at = now()
+          WHERE user_id = $1 AND used_at IS NULL`,
+        [resetRecord.user_id]
+      );
+    } catch (err: any) {
+      // A reset that worked must not be reported as failed because the
+      // bookkeeping did not. Worst case a spent link stays openable, and it
+      // still cannot reset anything without a fresh emailed code.
+      console.error('[reset-invite] could not mark invite used:', err?.message || err);
+    }
 
     res.json({
       success: true,

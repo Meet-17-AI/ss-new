@@ -8,6 +8,7 @@ import { Dashboard } from './components/Dashboard';
 import { TherapistDashboard } from './components/TherapistDashboard';
 import { PaymentCheckoutPage } from './components/PaymentCheckoutPage';
 import { MaintenancePage } from './components/MaintenancePage';
+import { ResetPasswordPage } from './components/ResetPasswordPage';
 import { SOSDocumentationView } from './components/SOSDocumentationView';
 import { PublicBookingContainer } from './components/PublicBookingContainer';
 import { BookingConfirmation } from './components/BookingConfirmation';
@@ -83,7 +84,7 @@ const App: React.FC = () => {
 
   // Public, customer-facing routes must work on mobile. Only the authenticated internal
   // dashboards (admin/therapist/crm/automation-logs) require desktop.
-  const publicPrefixes = ['/book', '/free-consultation', '/booking-confirmation', '/pay', '/session-notes', '/sos-view'];
+  const publicPrefixes = ['/book', '/free-consultation', '/booking-confirmation', '/pay', '/session-notes', '/sos-view', '/reset-password'];
   const isPublicRoute = publicPrefixes.some(p => location.pathname.startsWith(p));
 
   if (isMobile && !isPublicRoute) {
@@ -107,6 +108,9 @@ const App: React.FC = () => {
     <Routes>
       {/* Public Routes */}
       <Route path="/login" element={<LoginPage />} />
+      {/* Personalised password-reset link. Public: it exists for people who
+          cannot sign in, and it grants nothing without the emailed code. */}
+      <Route path="/reset-password/:token" element={<ResetPasswordPage />} />
       {/* Dynamic Route wrappers for public pages since react-router passes params differently */}
       <Route path="/sos-view/*" element={<SOSRouterWrapper />} />
       <Route path="/book/*" element={<BookRouterWrapper />} />
