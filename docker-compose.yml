@@ -106,6 +106,28 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
       - GMAIL_USER=${GMAIL_USER}
       - GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD}
+      # Compose only forwards what is listed here. A variable set in the VPS .env
+      # but absent from this block never reaches the container — it is simply
+      # ignored, with no warning. Everything below was in that position.
+      #
+      # ACCESS_ENFORCE defaults to "false" ON PURPOSE, and the default matters:
+      # the code treats anything that is not the literal string "false" as
+      # enforcing, INCLUDING an empty value. So `ACCESS_ENFORCE=` in .env would
+      # silently enforce. `:-false` guarantees a real "false" for the shadow
+      # period. Set it to true in .env once access_shadow_denials is quiet.
+      - ACCESS_ENFORCE=${ACCESS_ENFORCE:-false}
+      # Seeds the Fluidadmin account on first boot. If this is empty the code
+      # falls back to a password that is in git history, and that account holds
+      # the superadmin scope — it can grant anyone any dashboard. SET IT.
+      - FLUIDADMIN_PASSWORD=${FLUIDADMIN_PASSWORD}
+      # Who may manage access grants, on top of anyone holding 'superadmin'.
+      - ACCESS_ADMIN_USERS=${ACCESS_ADMIN_USERS:-aiteam@fluid.live,aiteam}
+      # Content-Security-Policy ships report-only until the browser console is
+      # clean; set true to switch from reporting to blocking.
+      - CSP_ENFORCE=${CSP_ENFORCE:-false}
+      # Escape hatch for a migration window where staff are all signing in at
+      # once and tripping the 10-failures-per-15-minutes login limit.
+      - RATE_LIMIT_DISABLED=${RATE_LIMIT_DISABLED:-false}
     restart: always
     deploy:
       update_config:
