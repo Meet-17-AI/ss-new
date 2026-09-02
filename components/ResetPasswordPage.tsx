@@ -21,6 +21,27 @@ import { Logo } from './Logo';
 
 type Stage = 'loading' | 'dead' | 'request' | 'code' | 'password' | 'done';
 
+/**
+ * Card the page sits in.
+ *
+ * Declared HERE, at module scope, and it has to stay here. It was originally
+ * defined inside ResetPasswordPage, which made a NEW component type on every
+ * render: React compares types by identity, saw a different one each keystroke,
+ * and threw away the whole subtree to mount it again. The focused input was
+ * destroyed mid-typing, focus fell back to the autoFocus field above, and the
+ * next character landed in "New password" instead of "Confirm new password".
+ *
+ * A component defined during render is never the same component twice.
+ */
+const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-teal-50 to-teal-100 p-6">
+    <div className="w-full max-w-md rounded-2xl bg-white px-8 py-10 shadow-2xl">
+      <div className="mb-7 flex justify-center"><Logo showTagline={false} /></div>
+      {children}
+    </div>
+  </div>
+);
+
 const RULES: { label: string; ok: (p: string) => boolean }[] = [
   { label: 'At least 8 characters', ok: (p) => p.length >= 8 },
   { label: 'One uppercase letter', ok: (p) => /[A-Z]/.test(p) },
@@ -107,15 +128,6 @@ export const ResetPasswordPage: React.FC = () => {
   };
 
   const allRulesPass = RULES.every((r) => r.ok(password));
-
-  const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-teal-50 to-teal-100 p-6">
-      <div className="w-full max-w-md rounded-2xl bg-white px-8 py-10 shadow-2xl">
-        <div className="mb-7 flex justify-center"><Logo showTagline={false} /></div>
-        {children}
-      </div>
-    </div>
-  );
 
   if (stage === 'loading') {
     return <Shell><div className="flex justify-center py-6">
