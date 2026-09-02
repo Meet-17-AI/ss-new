@@ -3191,11 +3191,28 @@ export const AllTherapists: React.FC<{ selectedClientProp?: any; onBack?: () => 
             <TherapistAvailabilityCalendar
               user={{}}
               isAdmin={true}
-              therapistsList={therapists.map(t => ({
-                therapist_id: t.therapist_id,
-                name: t.name,
-                schedule_id: t.scheduleId || null,
-              }))}
+              therapistsList={[
+                // The platform's own calendar, added here and ONLY here.
+                //
+                // Free consultations are hosted by the "SafeStories" row rather
+                // than by a person, and /api/therapists-admin filters it out on
+                // purpose — the therapist cards next door read as real staff and
+                // it has no profile, no login and no sessions of its own.
+                //
+                // Availability is the one thing it genuinely needs, though:
+                // without a row here there is no way to say when free
+                // consultations may be booked, and the hours were only editable
+                // by writing therapist_schedules by hand.
+                //
+                // Named for what it does, because "SafeStories" in a list of
+                // therapists reads like a person who is not one.
+                { therapist_id: 'SafeStories', name: 'Free Consultation (platform)', schedule_id: null },
+                ...therapists.map(t => ({
+                  therapist_id: t.therapist_id,
+                  name: t.name,
+                  schedule_id: t.scheduleId || null,
+                })),
+              ]}
             />
           </div>
         ) : (

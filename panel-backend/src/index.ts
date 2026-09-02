@@ -6212,7 +6212,29 @@ app.get('/api/therapist-schedule', requireTherapistScope(r => r.query.therapist_
       'SELECT MAX(schedule_id) as schedule_id FROM therapist_resources WHERE therapist_id = $1',
       [therapist_id]
     );
-    const scheduleId = result.rows[0]?.schedule_id ?? null;
+    let scheduleId = result.rows[0]?.schedule_id ?? null;
+
+    // Fall back to the schedule table itself.
+    //
+    // therapist_resources maps a PERSON to the bookable resources they host, and
+    // the platform's free-consultation calendar has no row there — it hosts no
+    // therapist. Its schedule nevertheless exists, keyed 'SafeStories', and is
+    // what /api/fetch-slots reads through platformScheduleId(). Without this the
+    // endpoint returned null for it and the availability screen had nothing to
+    // load or save, so the free-consultation hours could only be changed by
+    // editing therapist_schedules by hand.
+    //
+    // Only consulted when the primary lookup found nothing, so no therapist's
+    // resolution changes. Case-insensitive because the column holds
+    // 'SafeStories' while callers may send any casing.
+    if (scheduleId === null) {
+      const fallback = await pool.query(
+        `SELECT MAX(schedule_id) AS schedule_id FROM therapist_schedules
+          WHERE LOWER(therapist_id) = LOWER($1)`,
+        [therapist_id]
+      );
+      scheduleId = fallback.rows[0]?.schedule_id ?? null;
+    }
     console.log(`✅ [/api/therapist-schedule] therapist_id=${therapist_id} => scheduleId=${scheduleId}`);
     res.json({ success: true, scheduleId });
   } catch (error) {
