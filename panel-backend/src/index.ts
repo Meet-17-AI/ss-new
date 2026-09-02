@@ -9797,8 +9797,27 @@ app.post('/api/fetch-slots', async (req, res) => {
       }
 
       // Google Calendar Free/Busy Filter
+      //
+      // WHICH CALENDAR TO ASK. therapistId is null for the platform calendar:
+      // the branch above sets it only when the caller supplied one, and the
+      // callers that pick "SafeStories" send a NAME and no id. This lookup then
+      // ran as `WHERE therapist_id = NULL`, matched no row, and free/busy was
+      // skipped in silence — so a free consultation offered every slot the
+      // weekly schedule allowed, including hours already blocked in the very
+      // Google calendar someone had just connected.
+      //
+      // The platform has a real therapists row, keyed 'SafeStories', and that is
+      // where its token lives; fall back to it by name when there is no id.
+      // Compared case-insensitively because the column holds 'SafeStories' while
+      // isPlatformCalendar() works in lower case.
+      const calendarOwnerId = therapistId
+        || (isPlatformCalendar(String(therapistName || '')) ? 'SafeStories' : null);
       try {
-        const tRes = await pool.query('SELECT therapist_id, google_refresh_token, name FROM therapists WHERE therapist_id = $1', [therapistId]);
+        const tRes = calendarOwnerId
+          ? await pool.query(
+              `SELECT therapist_id, google_refresh_token, name FROM therapists
+                WHERE LOWER(therapist_id) = LOWER($1)`, [calendarOwnerId])
+          : { rows: [] as any[] };
         if (tRes.rows.length > 0 && tRes.rows[0].google_refresh_token) {
           const therapist = tRes.rows[0];
           // Since getAuthenticatedClient expects an object with google_refresh_token, we can pass therapist directly.
