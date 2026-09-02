@@ -275,10 +275,30 @@ export const requireSuperAdmin = async (req: any, res: any, next: any) => {
  * Yes when it is their own, or when they hold the admin dashboard. Anything else
  * is refused — including a therapist passing a colleague's id, which every one of
  * these endpoints accepted without asking before this existed.
+ *
+ * TWO identifiers are accepted, and the reason is not laziness.
+ *
+ * A therapist is named by two different keys in this schema: users.id (5, 6, 7…)
+ * and users.therapist_id (a five-digit code, 59507, 58769…). Routes disagree
+ * about which one their `therapist_id` parameter carries — /api/therapist-stats
+ * and /api/therapist-clients name the parameter therapist_id but immediately do
+ * `SELECT therapist_id FROM users WHERE id = $1`, so what arrives is a USER id;
+ * other callers pass the real therapist_id. Checking only the latter, as this
+ * did at first, matched neither: "59507" never equals "5", so every therapist
+ * was refused their own dashboard with a 403 and the only accounts that got in
+ * were ones holding an admin_dashboard grant, through the fallback below — which
+ * made the bug look like it only affected some people.
+ *
+ * Accepting either key costs nothing in strictness. Both are unique to one user,
+ * and both are read from the SESSION rather than the request, so a therapist
+ * still cannot pass a colleague's id under either naming. That was the point of
+ * the guard and it is intact.
  */
 export async function mayActAsTherapist(req: any, therapistId: any): Promise<boolean> {
   if (therapistId === null || therapistId === undefined || therapistId === '') return false;
-  if (req?.user?.therapist_id != null && String(req.user.therapist_id) === String(therapistId)) return true;
+  const wanted = String(therapistId);
+  if (req?.user?.id != null && String(req.user.id) === wanted) return true;
+  if (req?.user?.therapist_id != null && String(req.user.therapist_id) === wanted) return true;
   return (await loadScopes(req?.user)).has('admin_dashboard');
 }
 
