@@ -62,6 +62,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
+    # Pass the WHOLE .env, instead of relying on the list below being complete.
+    #
+    # It was not complete, and the failure mode is silent: a variable set on the
+    # server but absent from `environment:` is dropped with no warning. The panel
+    # reads 45 variables and this file named 24 of them, so 21 never arrived —
+    # among them GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET. Connecting a calendar
+    # therefore built an OAuth URL with an empty client_id and Google answered
+    # "Access blocked: Missing required parameter: client_id".
+    #
+    # It looked fine for as long as the frontend still routed /api/* to Render,
+    # which had the variables. Pointing traffic at this container is what exposed
+    # it. Also missing and worth knowing about: MINIO_BUCKET_NAME, MINIO_USE_SSL,
+    # the AISENSY_* campaign ids, ADMIN_OTP_*, and TICKET_NOTIFY_EMAILS.
+    #
+    # The CRM stack already worked this way. Entries under `environment:` still
+    # win over this file, which is what keeps the explicit PORT and NODE_ENV
+    # below authoritative.
+    env_file:
+      - .env
     healthcheck:
       test: ["CMD", "node", "-e", "const req = require('http').request({ host: '127.0.0.1', port: 3002, path: '/health', timeout: 2000 }, (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }); req.on('error', () => process.exit(1)); req.end();"]
       interval: 10s
