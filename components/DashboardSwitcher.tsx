@@ -30,6 +30,15 @@ export const DashboardSwitcher: React.FC<{ className?: string }> = ({ className 
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = useState(false);
+  // Declared up here with the others, NOT beside the handler that uses it.
+  //
+  // Everything below returns early when the user holds a single dashboard, and a
+  // hook after that point is only reached on some renders. Granting or revoking a
+  // dashboard changes the scope count live, so the very next render called a
+  // different number of hooks than the last and React threw #300, taking the
+  // whole page down with it. Hooks are positional: all of them run before any
+  // conditional return, or none of this is safe.
+  const [leaving, setLeaving] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -50,8 +59,6 @@ export const DashboardSwitcher: React.FC<{ className?: string }> = ({ className 
   if (held.length < 2) return null;
 
   const current = held.find((s) => location.pathname.startsWith(SCOPE_PATH[s]));
-
-  const [leaving, setLeaving] = useState(false);
 
   const go = async (scope: Scope) => {
     setOpen(false);
