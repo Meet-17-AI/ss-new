@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Loader2, ShieldCheck, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Loader2, ShieldCheck, AlertTriangle, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import { Logo } from './Logo';
 
 /**
@@ -33,6 +33,54 @@ type Stage = 'loading' | 'dead' | 'request' | 'code' | 'password' | 'done';
  *
  * A component defined during render is never the same component twice.
  */
+/**
+ * Password input with a reveal toggle.
+ *
+ * Module scope, for the same reason Shell is: a component declared during
+ * render is a new type every keystroke, and React remounts it — which is
+ * exactly the bug that sent characters into the wrong field here.
+ *
+ * The toggle is type="button" so it never submits, and it is skipped in the tab
+ * order: someone tabbing from the password field expects the next field, not a
+ * control they did not ask for. It stays reachable by mouse and by screen
+ * reader, which is who it is for.
+ */
+const PasswordField: React.FC<{
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  autoFocus?: boolean;
+  shown: boolean;
+  onToggle: () => void;
+}> = ({ label, value, onChange, autoFocus, shown, onToggle }) => (
+  <>
+    <label className="mt-4 block text-sm font-medium text-gray-700">{label}</label>
+    <div className="relative mt-1.5">
+      <input
+        type={shown ? 'text' : 'password'}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        autoFocus={autoFocus}
+        autoComplete="new-password"
+        // Room on the right so the text never runs under the button.
+        className="w-full rounded-lg border border-gray-300 py-2.5 pl-3 pr-11 text-sm
+                   focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+      />
+      <button
+        type="button"
+        onClick={onToggle}
+        tabIndex={-1}
+        aria-label={shown ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+        className="absolute inset-y-0 right-0 flex w-11 items-center justify-center
+                   text-gray-400 hover:text-teal-700 focus:outline-none
+                   focus-visible:ring-2 focus-visible:ring-teal-500 rounded-r-lg"
+      >
+        {shown ? <EyeOff size={17} /> : <Eye size={17} />}
+      </button>
+    </div>
+  </>
+);
+
 const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-teal-50 to-teal-100 p-6">
     <div className="w-full max-w-md rounded-2xl bg-white px-8 py-10 shadow-2xl">
@@ -62,6 +110,10 @@ export const ResetPasswordPage: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [resendIn, setResendIn] = useState(0);
+  // Independent per field: revealing what you are typing should not also reveal
+  // the one you already typed.
+  const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   // Who is this link for?
   useEffect(() => {
@@ -216,10 +268,9 @@ export const ResetPasswordPage: React.FC = () => {
 
       {stage === 'password' && (
         <>
-          <label className="mt-5 block text-sm font-medium text-gray-700">New password</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus
-            className="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
-                       focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500" />
+          <PasswordField
+            label="New password" value={password} onChange={setPassword} autoFocus
+            shown={showNew} onToggle={() => setShowNew((v) => !v)} />
 
           <ul className="mt-3 space-y-1">
             {RULES.map((r) => (
@@ -230,10 +281,14 @@ export const ResetPasswordPage: React.FC = () => {
             ))}
           </ul>
 
-          <label className="mt-4 block text-sm font-medium text-gray-700">Confirm new password</label>
-          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
-            className="mt-1.5 w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
-                       focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500" />
+          <PasswordField
+            label="Confirm new password" value={confirm} onChange={setConfirm}
+            shown={showConfirm} onToggle={() => setShowConfirm((v) => !v)} />
+
+          {/* Told at the point of typing rather than only on submit. */}
+          {confirm.length > 0 && confirm !== password && (
+            <p className="mt-1.5 text-xs text-rose-600">The two passwords do not match.</p>
+          )}
 
           <button onClick={submit} disabled={busy || !allRulesPass || !confirm}
             className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-teal-700 py-2.5
