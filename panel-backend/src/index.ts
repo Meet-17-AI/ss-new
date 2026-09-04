@@ -6093,23 +6093,23 @@ app.post('/api/webhook/aisensy/client-lookup', async (req, res) => {
       [digits]
     );
 
-    if (clients.length === 0 && bookings.length === 0) {
-      // 200, not 404. "Nobody on this number" is a normal branch for a WhatsApp
-      // flow, not a failure — a 404 would make AiSensy treat a NEW CLIENT, the
-      // most valuable person in the funnel, as a broken request.
-      const miss = {
-        success: true,
-        status: 'new',
-        phone: digits,
-        name: null, number: digits, email: null,
-        therapy: null, therapist: null, price: null, currency: 'INR',
-      };
+    // 200, not 404, in every case below. "Nobody on this number" is a normal
+    // branch for a WhatsApp flow, not a failure — a 404 would make AiSensy treat
+    // a NEW CLIENT, the most valuable person in the funnel, as a broken request.
+    const asNew = async () => {
+      // Deliberately ONE field. A new client has no name, therapy or price to
+      // report, and returning a shape full of nulls invites a flow to print
+      // "Hi null". There is nothing here to leak either, which is what makes it
+      // safe to answer for a number nobody recognises.
+      const miss = { status: 'new' };
       await logWebhookApi({
         log_type: 'webhook_incoming', name: 'AiSensy client lookup', endpoint,
         method: 'POST', status: 'success', request_payload: req.body, response_data: miss,
       }).catch(() => {});
       return res.json(miss);
-    }
+    };
+
+    if (clients.length === 0 && bookings.length === 0) return asNew();
 
     const CANCELLED = ['cancelled', 'canceled', 'payment_failed', 'no_show', 'no show'];
     const now = Date.now();
@@ -6118,8 +6118,27 @@ app.post('/api/webhook/aisensy/client-lookup', async (req, res) => {
       .filter((x) => x.ms !== null) as { b: any; ms: number }[];
     const live = dated.filter((x) => !CANCELLED.includes(String(x.b.booking_status || '').toLowerCase()));
 
-    const past = live.filter((x) => x.ms <= now).sort((p, q) => q.ms - p.ms);
-    const future = live.filter((x) => x.ms > now).sort((p, q) => p.ms - q.ms);
+    /**
+     * A free consultation does not make someone an existing client.
+     *
+     * It is the free first conversation — the person has not chosen a therapist,
+     * paid anything, or started therapy, so a flow greeting them as a returning
+     * client would be wrong, and there is no meaningful "their therapy" or
+     * "their price" to quote. They are still a prospect, and are reported as new.
+     *
+     * Matched on the resource NAME rather than on service_id or
+     * is_payment_enabled: 1,109 of 1,239 booking rows are paid therapies and the
+     * name is filled on all of them, while service_id is null on older rows and
+     * is_payment_enabled is set true on the free consultation service anyway.
+     */
+    const isFreeConsult = (b: any) => /free\s*consultation/i.test(String(b.booking_resource_name || ''));
+    const paid = live.filter((x) => !isFreeConsult(x.b));
+    if (paid.length === 0) return asNew();
+
+    // Paid sessions only, so a free consultation cannot decide which therapy or
+    // therapist this client is told about.
+    const past = paid.filter((x) => x.ms <= now).sort((p, q) => q.ms - p.ms);
+    const future = paid.filter((x) => x.ms > now).sort((p, q) => p.ms - q.ms);
     const describe = (x?: { b: any; ms: number }) => x ? {
       booking_id: x.b.booking_id,
       when_ist: convertToIST(x.b.booking_invitee_time),
@@ -6129,7 +6148,7 @@ app.post('/api/webhook/aisensy/client-lookup', async (req, res) => {
     } : null;
 
     const c = clients[0] || {};
-    const latest = bookings[0] || {};
+    const latest = paid[0]?.b || bookings[0] || {};
 
     // The therapy to quote: the one they are booked into next, else the one they
     // last had. A returning client asking "how much?" means their own therapy,
@@ -6163,6 +6182,55 @@ app.post('/api/webhook/aisensy/client-lookup', async (req, res) => {
       console.error('[AiSensy lookup] price resolution failed:', err?.message || err);
     }
 
+    /**
+     * A booking link for THIS client, prefilled with their details and their own
+     * therapy, so a WhatsApp reply can carry a link they can just tap.
+     *
+     * The prefill lives in the token, not the URL. A link reading
+     * ?name=…&phone=… hands the client's details to anyone the message is
+     * forwarded to; a token reveals nothing until it is redeemed. Same mechanism
+     * /api/admin/send-booking-link uses, and the same 30-day expiry.
+     *
+     * A live token is REUSED rather than replaced. This webhook fires on every
+     * message an AiSensy flow handles, and minting per call would write a row
+     * per message — thousands of tokens for one client, all valid at once.
+     */
+    let bookingLink: string | null = null;
+    try {
+      const svcId = current?.service_id ?? null;
+      const existing = await pool.query(
+        `SELECT token FROM booking_link_tokens
+          WHERE RIGHT(REGEXP_REPLACE(COALESCE(client_phone, ''), '[^0-9]', '', 'g'), 10) = $1
+            AND (expires_at IS NULL OR expires_at > NOW())
+            -- A link someone deliberately revoked must not come back.
+            AND revoked_at IS NULL
+            AND ($2::int IS NULL OR service_id IS NOT DISTINCT FROM $2::int)
+          ORDER BY created_at DESC LIMIT 1`,
+        [digits, svcId]
+      );
+      let bToken = existing.rows[0]?.token;
+      if (!bToken) {
+        bToken = crypto.randomBytes(16).toString('base64url');
+        await pool.query(
+          `INSERT INTO booking_link_tokens
+             (token, client_name, client_email, client_phone, service_id, created_by, expires_at)
+           VALUES ($1, $2, $3, $4, $5, $6, NOW() + INTERVAL '30 days')`,
+          [bToken, c.client_name || latest.invitee_name || null,
+           c.email_id || latest.invitee_email || null,
+           c.phone_number || latest.invitee_phone || digits,
+           svcId, 'aisensy-webhook']
+        );
+      }
+      // frontendBaseUrl() rather than the raw env var: FRONTEND_URL still points
+      // at a dead host in some deploy configs, and a booking link is the one
+      // thing that must never reach a client pointing nowhere.
+      bookingLink = `${frontendBaseUrl()}/book?t=${bToken}`;
+    } catch (err: any) {
+      // A link we could not mint is reported as null, not as a failed lookup —
+      // the name, therapist and price are still worth returning.
+      console.error('[AiSensy lookup] booking link failed:', err?.message || err);
+    }
+
     const payload = {
       success: true,
       // The field the AiSensy flow branches on.
@@ -6180,6 +6248,7 @@ app.post('/api/webhook/aisensy/client-lookup', async (req, res) => {
       therapist: c.assigned_therapist || current?.booking_host_name || null,
       price,
       currency,
+      booking_link: bookingLink,
 
       details: {
         client_id: c.client_id ?? null,
