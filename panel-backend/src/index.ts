@@ -572,6 +572,12 @@ const PUBLIC_API_ROUTES: { methods: string[]; pattern: RegExp }[] = [
   { methods: ['POST'], pattern: /^\/api\/razorpay\/webhook$/ },
   { methods: ['POST'], pattern: /^\/api\/paperform-webhook\/(free-consultation|therapy-documentation)$/ },
   { methods: ['POST'], pattern: /^\/api\/webhook\/feedback$/ },
+  // AiSensy asks who a WhatsApp number belongs to. On the allowlist because
+  // AiSensy holds no panel session — but UNLIKE the other entries here it is not
+  // actually open: it returns a client's name, email and session history, so it
+  // demands a shared secret of its own and refuses to run without one. See the
+  // handler for why that is not optional.
+  { methods: ['POST'], pattern: /^\/api\/webhook\/aisensy\/client-lookup$/ },
   { methods: ['POST'], pattern: /^\/api\/cron\/verify-pending-payments$/ },
   { methods: ['GET'],  pattern: /^\/api\/auth\/google\/callback$/ },
 ];
@@ -5994,6 +6000,212 @@ app.post('/api/webhook/feedback', async (req, res) => {
   } catch (error: any) {
     console.error('Error saving feedback rating:', error);
     res.status(500).json({ error: 'Failed to save rating' });
+  }
+});
+
+/**
+ * Who does this WhatsApp number belong to?
+ *
+ * AiSensy posts a phone number; this answers with that client's details so a
+ * flow can greet them by name, name their therapist, or route the conversation.
+ *
+ * ── WHY THIS ONE IS AUTHENTICATED AND ITS NEIGHBOUR IS NOT ──────────────────
+ * /api/webhook/feedback takes a rating and writes it. This RETURNS a therapy
+ * client's name, email, assigned therapist and session history. Left open, it
+ * would be a lookup oracle: anyone could walk phone numbers and harvest who is
+ * in therapy here and with whom. That is the single most sensitive fact this
+ * business holds, so the endpoint requires a shared secret and REFUSES TO RUN
+ * when none is configured — failing closed, because an unset variable must not
+ * silently publish client records.
+ *
+ * Set AISENSY_WEBHOOK_SECRET, and have AiSensy send it as either
+ *   X-Webhook-Secret: <secret>        or        Authorization: Bearer <secret>
+ *
+ * Compared with timingSafeEqual so a wrong secret cannot be recovered by
+ * measuring how long the comparison took.
+ *
+ * ── MATCHING ───────────────────────────────────────────────────────────────
+ * Numbers are stored in whatever shape they arrived in — "+91 9764328147",
+ * "+919876543210", "+1(224) 294-4390" — so both sides are reduced to their last
+ * ten digits before comparing, the same identity rule the pricing engine uses.
+ *
+ * Session times come from booking_invitee_time via getBookingStartMs, never
+ * from booking_start_at: that column disagrees with the truth by ±5:30 on about
+ * a third of rows, which would put "last session" on the wrong day.
+ */
+app.post('/api/webhook/aisensy/client-lookup', async (req, res) => {
+  const endpoint = '/api/webhook/aisensy/client-lookup';
+  const fail = async (status: number, error: string, logAs?: string) => {
+    await logWebhookApi({
+      log_type: 'webhook_incoming', name: 'AiSensy client lookup', endpoint,
+      method: 'POST', status: 'failed', request_payload: req.body,
+      error_message: logAs || error,
+    }).catch(() => {});
+    return res.status(status).json({ success: false, error });
+  };
+
+  try {
+    // 1. Shared secret — fail closed when unset.
+    const expected = process.env.AISENSY_WEBHOOK_SECRET;
+    if (!expected) {
+      console.error('[AiSensy lookup] AISENSY_WEBHOOK_SECRET is not set; refusing to answer.');
+      return fail(503, 'This endpoint is not configured.', 'secret not configured');
+    }
+    const header = String(req.headers['x-webhook-secret'] || '')
+      || String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    const a = Buffer.from(header);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return fail(401, 'Unauthorized.', 'bad or missing shared secret');
+    }
+
+    // 2. The number, under whichever key AiSensy is configured to send.
+    const body = req.body || {};
+    const raw = body.phone ?? body.mobile ?? body.whatsapp_number ?? body.whatsappNumber
+             ?? body.userMobile ?? body.source ?? body.from ?? body.number ?? null;
+    const digits = normalizePhoneDigits(raw == null ? null : String(raw));
+    if (!digits) {
+      return fail(400, 'A phone number with at least 10 digits is required. Send it as "phone".',
+        `unusable phone: ${JSON.stringify(raw)}`);
+    }
+
+    // 3. The client record, matched on the last ten digits.
+    const { rows: clients } = await pool.query(
+      `SELECT client_id, client_name, phone_number, email_id, no_of_sessions,
+              therapist_id, assigned_therapist, client_type
+         FROM all_clients_table
+        WHERE RIGHT(REGEXP_REPLACE(COALESCE(phone_number, ''), '[^0-9]', '', 'g'), 10) = $1
+        LIMIT 1`,
+      [digits]
+    );
+
+    // 4. Their bookings. Fetched rather than aggregated in SQL because the true
+    //    start instant is only derivable in JS — see the note above.
+    const { rows: bookings } = await pool.query(
+      `SELECT b.booking_id, b.booking_status, b.booking_invitee_time,
+              b.invitee_name, b.invitee_email, b.invitee_phone,
+              b.booking_resource_name, b.booking_host_name,
+              b.service_id, b.public_token
+         FROM bookings b
+        WHERE RIGHT(REGEXP_REPLACE(COALESCE(b.invitee_phone, ''), '[^0-9]', '', 'g'), 10) = $1
+        ORDER BY b.invitee_created_at DESC NULLS LAST
+        LIMIT 200`,
+      [digits]
+    );
+
+    if (clients.length === 0 && bookings.length === 0) {
+      // 200, not 404. "Nobody on this number" is a normal branch for a WhatsApp
+      // flow, not a failure — a 404 would make AiSensy treat a NEW CLIENT, the
+      // most valuable person in the funnel, as a broken request.
+      const miss = {
+        success: true,
+        status: 'new',
+        phone: digits,
+        name: null, number: digits, email: null,
+        therapy: null, therapist: null, price: null, currency: 'INR',
+      };
+      await logWebhookApi({
+        log_type: 'webhook_incoming', name: 'AiSensy client lookup', endpoint,
+        method: 'POST', status: 'success', request_payload: req.body, response_data: miss,
+      }).catch(() => {});
+      return res.json(miss);
+    }
+
+    const CANCELLED = ['cancelled', 'canceled', 'payment_failed', 'no_show', 'no show'];
+    const now = Date.now();
+    const dated = bookings
+      .map((b: any) => ({ b, ms: getBookingStartMs(b.booking_invitee_time) }))
+      .filter((x) => x.ms !== null) as { b: any; ms: number }[];
+    const live = dated.filter((x) => !CANCELLED.includes(String(x.b.booking_status || '').toLowerCase()));
+
+    const past = live.filter((x) => x.ms <= now).sort((p, q) => q.ms - p.ms);
+    const future = live.filter((x) => x.ms > now).sort((p, q) => p.ms - q.ms);
+    const describe = (x?: { b: any; ms: number }) => x ? {
+      booking_id: x.b.booking_id,
+      when_ist: convertToIST(x.b.booking_invitee_time),
+      therapy: x.b.booking_resource_name || null,
+      therapist: x.b.booking_host_name || null,
+      status: x.b.booking_status || null,
+    } : null;
+
+    const c = clients[0] || {};
+    const latest = bookings[0] || {};
+
+    // The therapy to quote: the one they are booked into next, else the one they
+    // last had. A returning client asking "how much?" means their own therapy,
+    // not a price list.
+    const current = future[0]?.b || past[0]?.b || latest;
+
+    // Price through the engine rather than therapy_services.charges, because the
+    // engine is the only thing that knows THIS client's rate — a grandfathered
+    // lock from before a rise, or a hand-set override. Quoting list price to a
+    // client holding an older rate would be quoting the wrong number.
+    let price: number | null = null;
+    let currency = 'INR';
+    let priceSource: string | null = null;
+    let grandfathered = false;
+    try {
+      const svcId = current?.service_id ?? null;
+      if (svcId) {
+        const p = await resolvePrice(pool, {
+          serviceId: Number(svcId),
+          clientEmail: c.email_id || latest.invitee_email || null,
+          clientPhone: digits,
+        });
+        price = p.amount;
+        currency = p.currency || 'INR';
+        priceSource = p.source;
+        grandfathered = p.isGrandfathered;
+      }
+    } catch (err: any) {
+      // A price we cannot resolve is reported as null, not as a failed lookup:
+      // the name and therapist are still worth returning to the flow.
+      console.error('[AiSensy lookup] price resolution failed:', err?.message || err);
+    }
+
+    const payload = {
+      success: true,
+      // The field the AiSensy flow branches on.
+      status: 'existing',
+      phone: digits,
+
+      // Flat, because AiSensy templates read {{name}} far more easily than they
+      // reach into a nested object.
+      // all_clients_table is the curated record; a booking is the fallback for
+      // someone who booked but was never added to it.
+      name: c.client_name || latest.invitee_name || null,
+      number: c.phone_number || latest.invitee_phone || digits,
+      email: c.email_id || latest.invitee_email || null,
+      therapy: current?.booking_resource_name || null,
+      therapist: c.assigned_therapist || current?.booking_host_name || null,
+      price,
+      currency,
+
+      details: {
+        client_id: c.client_id ?? null,
+        client_type: c.client_type || null,
+        price_source: priceSource,
+        is_grandfathered: grandfathered,
+        // Counted bookings, not the stored counter — that column is
+        // denormalised and nothing keeps it current.
+        sessions_booked: live.length,
+        sessions_completed: past.length,
+        sessions_recorded: c.no_of_sessions ?? null,
+        in_client_list: clients.length > 0,
+        last_session: describe(past[0]),
+        next_session: describe(future[0]),
+      },
+    };
+
+    await logWebhookApi({
+      log_type: 'webhook_incoming', name: 'AiSensy client lookup', endpoint,
+      method: 'POST', status: 'success', request_payload: req.body, response_data: payload,
+    }).catch(() => {});
+
+    res.json(payload);
+  } catch (error: any) {
+    console.error('[AiSensy lookup] failed:', error?.message || error);
+    return fail(500, 'Lookup failed.', error?.message || 'unknown error');
   }
 });
 
